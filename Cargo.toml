@@ -1,5 +1,5 @@
 [workspace]
-members = ["user", "ebpf", "core", "agent"]
+members = ["user", "ebpf", "core", "agent", "api"]
 resolver = "2"
 
 [workspace.package]
@@ -13,7 +13,7 @@ aya = "0.13.1"
 aya-log = "0.2"
 aya-ebpf = "0.1"
 network-types = "0.1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -22,6 +22,7 @@ tracing-subscriber = "0.3"
 libc = "0.2"
 fslock = "0.2"
 aria-core = { path = "core" }
+aria-api = { path = "api" }
 rtnetlink = "0.14"
 netlink-packet-route = "0.19"
 netlink-packet-core = "0.7"
@@ -29,6 +30,9 @@ netlink-sys = "0.8"
 futures = "0.3"
 regex = "1"
 toml = "0.8"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.dev]
 panic = "abort"

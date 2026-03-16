@@ -578,7 +578,8 @@ pub fn replay_state(bpf: &mut aya::Ebpf, state_path: &str) {
                         rate_bps: qr.rate_bps,
                         burst_bytes: qr.burst_bytes,
                         priority: qr.priority,
-                        pad: [0; 7],
+                        mode: qr.mode,
+                        pad: [0; 6],
                     };
                     if let Err(e) = map.insert(&key, &config, 0) {
                         errors.push(format!("QOS_CONFIG group={}: {:?}", qr.group_name, e));
@@ -597,7 +598,8 @@ pub fn replay_state(bpf: &mut aya::Ebpf, state_path: &str) {
             conntrack_enabled: if state.conntrack_enabled { 1 } else { 0 },
             monitoring_enabled: if state.monitoring_enabled { 1 } else { 0 },
             num_cpus,
-            pad: [0; 4],
+            qos_enabled: if state.qos_rules.is_empty() { 0 } else { 1 },
+            pad: [0; 3],
         };
         match bpf.map_mut("FIREWALL_CONFIG")
             .ok_or_else(|| "FIREWALL_CONFIG not found".to_string())
@@ -686,8 +688,9 @@ pub fn show_stats(pin_path: &str, state_path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Setup TC egress: add clsact qdisc and attach the classifier program
-pub fn attach_tc_egress(bpf: &mut aya::Ebpf, iface: &str) -> Result<(), String> {
+/// Setup TC egress: add clsact qdisc and attach the classifier program.
+/// The TC link is pinned to `{pin_path}/tc_egress_link` to prevent detach on drop.
+pub fn attach_tc_egress(bpf: &mut aya::Ebpf, iface: &str, pin_path: &str) -> Result<(), String> {
     // Add clsact qdisc using aya's API
     if let Err(e) = aya::programs::tc::qdisc_add_clsact(iface) {
         let err_str = format!("{:?}", e);
@@ -707,10 +710,19 @@ pub fn attach_tc_egress(bpf: &mut aya::Ebpf, iface: &str) -> Result<(), String> 
 
     tc.load().map_err(|e| format!("tc.load error: {:?}", e))?;
 
-    tc.attach(iface, aya::programs::tc::TcAttachType::Egress)
+    let link_id = tc.attach(iface, aya::programs::tc::TcAttachType::Egress)
         .map_err(|e| format!("tc attach error: {:?}", e))?;
 
-    println!("TC egress attached to {}", iface);
+    // Pin the TC link so it survives for the lifetime of the process
+    let tc_link = tc.take_link(link_id)
+        .map_err(|e| format!("tc take_link error: {:?}", e))?;
+    let fd_link: aya::programs::links::FdLink = tc_link.try_into()
+        .map_err(|e: aya::programs::links::LinkError| format!("tc convert to FdLink error: {:?}", e))?;
+    let tc_link_pin = format!("{}/tc_egress_link", pin_path);
+    let _pinned = fd_link.pin(&tc_link_pin)
+        .map_err(|e| format!("tc pin link error: {:?}", e))?;
+
+    println!("TC egress attached to {} (link pinned)", iface);
     Ok(())
 }
 
@@ -770,7 +782,8 @@ pub fn update_firewall_config(
         conntrack_enabled: ct,
         monitoring_enabled: mon,
         num_cpus: num_cpus_val,
-        pad: [0; 4],
+        qos_enabled: current.as_ref().map(|c| c.qos_enabled).unwrap_or(0),
+        pad: [0; 3],
     };
     map.insert(&0u32, &cfg, 0)
         .map_err(|e| format!("FIREWALL_CONFIG insert: {:?}", e))?;

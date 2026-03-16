@@ -55,6 +55,7 @@ unsafe fn try_xdp_firewall(ctx: XdpContext) -> u32 {
     };
 
     let now = bpf_ktime_get_ns();
+    let qos_on = qos::qos_enabled();
 
     if info.is_ipv6 {
         let ct_key = CtKey6 {
@@ -68,13 +69,16 @@ unsafe fn try_xdp_firewall(ctx: XdpContext) -> u32 {
 
         match conntrack::ct_lookup_v6(&ct_key, now, pkt_len) {
             CtLookupResult::Established(matched) | CtLookupResult::SeenReply(matched) => {
-                let src_id = lookup_ipv6(&SRC_IPV6_TRIE, info.src_ip_v6).unwrap_or(0);
-                let dst_id = lookup_ipv6(&DST_IPV6_TRIE, info.dst_ip_v6).unwrap_or(0);
-                if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
-                    return XDP_DROP;
-                }
+                // Stats first — count all packets regardless of QoS outcome
                 stats::update_rule_stats(&matched.to_policy_key(), pkt_len);
                 stats::update_flow_stats_v6(&ct_key, pkt_len, now);
+                if qos_on {
+                    let src_id = lookup_ipv6(&SRC_IPV6_TRIE, info.src_ip_v6).unwrap_or(0);
+                    let dst_id = lookup_ipv6(&DST_IPV6_TRIE, info.dst_ip_v6).unwrap_or(0);
+                    if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
+                        return XDP_DROP;
+                    }
+                }
                 return XDP_PASS;
             }
             CtLookupResult::NotFound => {}
@@ -85,11 +89,12 @@ unsafe fn try_xdp_firewall(ctx: XdpContext) -> u32 {
         let (result, matched) = policy::evaluate_policy(src_id, dst_id, info.proto, DIR_INGRESS, info.dst_port, pkt_len);
 
         if result == XDP_PASS {
-            if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
+            // Stats before QoS — dropped packets are still counted
+            stats::update_flow_stats_v6(&ct_key, pkt_len, now);
+            if qos_on && !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
                 return XDP_DROP;
             }
             conntrack::ct_create_v6(&ct_key, now, pkt_len, &matched);
-            stats::update_flow_stats_v6(&ct_key, pkt_len, now);
         }
 
         result
@@ -105,13 +110,15 @@ unsafe fn try_xdp_firewall(ctx: XdpContext) -> u32 {
 
         match conntrack::ct_lookup_v4(&ct_key, now, pkt_len) {
             CtLookupResult::Established(matched) | CtLookupResult::SeenReply(matched) => {
-                let src_id = lookup_ipv4(&SRC_IPV4_TRIE, info.src_ip).unwrap_or(0);
-                let dst_id = lookup_ipv4(&DST_IPV4_TRIE, info.dst_ip).unwrap_or(0);
-                if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
-                    return XDP_DROP;
-                }
                 stats::update_rule_stats(&matched.to_policy_key(), pkt_len);
                 stats::update_flow_stats_v4(&ct_key, pkt_len, now);
+                if qos_on {
+                    let src_id = lookup_ipv4(&SRC_IPV4_TRIE, info.src_ip).unwrap_or(0);
+                    let dst_id = lookup_ipv4(&DST_IPV4_TRIE, info.dst_ip).unwrap_or(0);
+                    if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
+                        return XDP_DROP;
+                    }
+                }
                 return XDP_PASS;
             }
             CtLookupResult::NotFound => {}
@@ -122,11 +129,11 @@ unsafe fn try_xdp_firewall(ctx: XdpContext) -> u32 {
         let (result, matched) = policy::evaluate_policy(src_id, dst_id, info.proto, DIR_INGRESS, info.dst_port, pkt_len);
 
         if result == XDP_PASS {
-            if !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
+            stats::update_flow_stats_v4(&ct_key, pkt_len, now);
+            if qos_on && !qos::apply_qos_ingress(src_id, dst_id, pkt_len, now) {
                 return XDP_DROP;
             }
             conntrack::ct_create_v4(&ct_key, now, pkt_len, &matched);
-            stats::update_flow_stats_v4(&ct_key, pkt_len, now);
         }
 
         result
@@ -154,6 +161,7 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
     };
 
     let now = bpf_ktime_get_ns();
+    let qos_on = qos::qos_enabled();
 
     if info.is_ipv6 {
         let ct_key = CtKey6 {
@@ -167,13 +175,15 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
 
         match conntrack::ct_lookup_v6(&ct_key, now, pkt_len) {
             CtLookupResult::Established(matched) | CtLookupResult::SeenReply(matched) => {
-                let dst_id = lookup_ipv6(&DST_IPV6_TRIE, info.dst_ip_v6).unwrap_or(0);
-                let src_id = lookup_ipv6(&SRC_IPV6_TRIE, info.src_ip_v6).unwrap_or(0);
-                if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
-                    return action;
-                }
                 stats::update_rule_stats(&matched.to_policy_key(), pkt_len);
                 stats::update_flow_stats_v6(&ct_key, pkt_len, now);
+                if qos_on {
+                    let dst_id = lookup_ipv6(&DST_IPV6_TRIE, info.dst_ip_v6).unwrap_or(0);
+                    let src_id = lookup_ipv6(&SRC_IPV6_TRIE, info.src_ip_v6).unwrap_or(0);
+                    if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
+                        return action;
+                    }
+                }
                 return TC_ACT_OK;
             }
             CtLookupResult::NotFound => {}
@@ -186,11 +196,13 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
         );
 
         if result == TC_ACT_OK {
-            if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
-                return action;
+            stats::update_flow_stats_v6(&ct_key, pkt_len, now);
+            if qos_on {
+                if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
+                    return action;
+                }
             }
             conntrack::ct_create_v6(&ct_key, now, pkt_len, &matched);
-            stats::update_flow_stats_v6(&ct_key, pkt_len, now);
         }
 
         result
@@ -206,13 +218,15 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
 
         match conntrack::ct_lookup_v4(&ct_key, now, pkt_len) {
             CtLookupResult::Established(matched) | CtLookupResult::SeenReply(matched) => {
-                let dst_id = lookup_ipv4(&DST_IPV4_TRIE, info.dst_ip).unwrap_or(0);
-                let src_id = lookup_ipv4(&SRC_IPV4_TRIE, info.src_ip).unwrap_or(0);
-                if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
-                    return action;
-                }
                 stats::update_rule_stats(&matched.to_policy_key(), pkt_len);
                 stats::update_flow_stats_v4(&ct_key, pkt_len, now);
+                if qos_on {
+                    let dst_id = lookup_ipv4(&DST_IPV4_TRIE, info.dst_ip).unwrap_or(0);
+                    let src_id = lookup_ipv4(&SRC_IPV4_TRIE, info.src_ip).unwrap_or(0);
+                    if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
+                        return action;
+                    }
+                }
                 return TC_ACT_OK;
             }
             CtLookupResult::NotFound => {}
@@ -225,11 +239,13 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
         );
 
         if result == TC_ACT_OK {
-            if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
-                return action;
+            stats::update_flow_stats_v4(&ct_key, pkt_len, now);
+            if qos_on {
+                if let Some(action) = apply_egress_qos(&ctx, src_id, dst_id, pkt_len, now) {
+                    return action;
+                }
             }
             conntrack::ct_create_v4(&ct_key, now, pkt_len, &matched);
-            stats::update_flow_stats_v4(&ct_key, pkt_len, now);
         }
 
         result
@@ -238,8 +254,6 @@ unsafe fn try_tc_egress(ctx: TcContext) -> i32 {
 
 // --- Helpers ---
 
-/// Apply egress QoS and write EDT/priority to skb.
-/// Returns Some(TC_ACT_SHOT) if the packet should be dropped, None otherwise.
 #[inline(always)]
 unsafe fn apply_egress_qos(ctx: &TcContext, src_id: u32, dst_id: u32, pkt_len: u32, now: u64) -> Option<i32> {
     let (edt, prio) = qos::apply_qos_egress(src_id, dst_id, pkt_len, now);

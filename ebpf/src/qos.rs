@@ -1,18 +1,36 @@
 use crate::common::{QosKey, TokenBucket, DIR_EGRESS, DIR_INGRESS};
 use crate::maps::{QOS_CONFIG, QOS_TOKEN_BUCKET, FIREWALL_CONFIG};
 
+/// QoS mode constants
+const QOS_MODE_POLICING: u8 = 0;
+const QOS_MODE_SHAPING: u8 = 1;
+
+/// Check if QoS is globally enabled. When no QoS rules are configured,
+/// the control plane sets this to 0, allowing fast-path to skip LPM lookups entirely.
 #[inline(always)]
-fn get_num_cpus() -> u32 {
+pub fn qos_enabled() -> bool {
     let key: u32 = 0;
     if let Some(cfg) = unsafe { FIREWALL_CONFIG.get(&key) } {
-        if cfg.num_cpus > 0 { cfg.num_cpus as u32 } else { 1 }
+        cfg.qos_enabled != 0
+    } else {
+        false
+    }
+}
+
+/// Read num_cpus from FIREWALL_CONFIG (fallback to 1).
+#[inline(always)]
+fn get_num_cpus() -> u64 {
+    let key: u32 = 0;
+    if let Some(cfg) = unsafe { FIREWALL_CONFIG.get(&key) } {
+        let n = cfg.num_cpus as u64;
+        if n > 0 { n } else { 1 }
     } else {
         1
     }
 }
 
 /// Compute token refill without 128-bit multiplication.
-/// refill = rate_per_cpu * elapsed_ns / 1_000_000_000
+/// refill = rate * elapsed_ns / 1_000_000_000
 ///
 /// Split elapsed into whole seconds + fractional nanoseconds so each
 /// intermediate product stays within u64 for rates up to ~18 GB/s.
@@ -20,13 +38,11 @@ fn get_num_cpus() -> u32 {
 fn compute_refill(rate: u64, elapsed_ns: u64) -> u64 {
     let secs = elapsed_ns / 1_000_000_000;
     let frac_ns = elapsed_ns % 1_000_000_000;
-    // rate * secs: safe for practical rates (<18 GB/s) and elapsed (<~580 years)
-    // rate * frac_ns: frac_ns < 1e9, so product < rate * 1e9, fits u64 for rate < ~18 GB/s
     rate * secs + rate * frac_ns / 1_000_000_000
 }
 
 /// Compute EDT delay in nanoseconds without 128-bit multiplication.
-/// delay_ns = deficit_bytes * 1_000_000_000 / rate_per_cpu
+/// delay_ns = deficit_bytes * 1_000_000_000 / rate
 ///
 /// deficit is at most one packet (~64 KB), so deficit * 1e9 < 6.5e13, well within u64.
 #[inline(always)]
@@ -37,6 +53,8 @@ fn compute_delay_ns(deficit: u64, rate: u64) -> u64 {
 /// Apply QoS rate limiting for egress. Returns (EDT timestamp, priority).
 /// EDT=0 means no delay needed. EDT=u64::MAX means packet should be dropped.
 /// No QoS config → pass through (0, 0).
+///
+/// Uses PerCpuHashMap so each CPU has its own token bucket with rate/num_cpus quota.
 #[inline(always)]
 pub unsafe fn apply_qos_egress(
     _src_id: u32,
@@ -60,47 +78,67 @@ pub unsafe fn apply_qos_egress(
                 continue;
             }
 
-            let rate_per_cpu = config.rate_bps / num_cpus as u64;
+            // Divide rate and burst by num_cpus for per-CPU fairness
+            let rate = config.rate_bps / num_cpus;
+            let burst = config.burst_bytes / num_cpus;
+            let priority = config.priority;
+            let mode = config.mode;
 
-            if rate_per_cpu == 0 {
-                continue;
-            }
-
-            let burst = if config.burst_bytes > 0 {
-                config.burst_bytes
-            } else {
-                rate_per_cpu / 100
-            };
+            // Ensure per-CPU rate is at least 1 to avoid division by zero
+            let rate = if rate > 0 { rate } else { 1 };
+            let burst = if burst > 0 { burst } else { rate };
 
             if let Some(bucket) = QOS_TOKEN_BUCKET.get_ptr_mut(&qos_key) {
                 let elapsed = now_ns.wrapping_sub((*bucket).last_refill_ns);
-                let refill = compute_refill(rate_per_cpu, elapsed);
+                let refill = compute_refill(rate, elapsed);
                 let new_tokens = (*bucket).tokens + refill;
                 let tokens = if new_tokens > burst { burst } else { new_tokens };
 
-                let (tstamp, final_tokens) = if tokens >= pkt_len as u64 {
-                    (0u64, tokens - pkt_len as u64)
+                let result;
+                if mode == QOS_MODE_SHAPING {
+                    if tokens >= pkt_len as u64 {
+                        (*bucket).tokens = tokens - pkt_len as u64;
+                        // Reset last_edt when not queueing — no backlog
+                        if (*bucket).last_edt < now_ns {
+                            (*bucket).last_edt = 0;
+                        }
+                        result = (0u64, priority);
+                    } else {
+                        let deficit = pkt_len as u64 - tokens;
+                        let delay_ns = compute_delay_ns(deficit, rate);
+                        (*bucket).tokens = 0;
+                        // Stagger from the later of now or last scheduled packet
+                        let base = if (*bucket).last_edt > now_ns { (*bucket).last_edt } else { now_ns };
+                        let edt = base + delay_ns;
+                        (*bucket).last_edt = edt;
+                        result = (edt, priority);
+                    }
                 } else {
-                    let deficit = pkt_len as u64 - tokens;
-                    let delay_ns = compute_delay_ns(deficit, rate_per_cpu);
-                    (now_ns + delay_ns, 0u64)
-                };
+                    // Policing mode
+                    if tokens >= pkt_len as u64 {
+                        (*bucket).tokens = tokens - pkt_len as u64;
+                        result = (0u64, priority);
+                    } else {
+                        // Drop: write back refilled tokens (don't deduct pkt_len)
+                        // Packet was dropped so no bandwidth was consumed,
+                        // but the refill MUST be persisted or it's lost.
+                        (*bucket).tokens = tokens;
+                        result = (u64::MAX, priority);
+                    }
+                }
 
-                (*bucket).tokens = final_tokens;
                 (*bucket).last_refill_ns = now_ns;
-                return (tstamp, config.priority);
+
+                return result;
             } else {
-                let tokens = if burst >= pkt_len as u64 {
-                    burst - pkt_len as u64
-                } else {
-                    0
-                };
+                // First packet: initialize bucket
                 let new_bucket = TokenBucket {
-                    tokens,
+                    tokens: if burst >= pkt_len as u64 { burst - pkt_len as u64 } else { 0 },
                     last_refill_ns: now_ns,
+                    last_edt: 0,
                 };
                 let _ = QOS_TOKEN_BUCKET.insert(&qos_key, &new_bucket, 0);
-                return (0, config.priority);
+                return (0, priority);
             }
         }
     }
@@ -133,42 +171,35 @@ pub unsafe fn apply_qos_ingress(
                 continue;
             }
 
-            let rate_per_cpu = config.rate_bps / num_cpus as u64;
+            let rate = config.rate_bps / num_cpus;
+            let burst = config.burst_bytes / num_cpus;
 
-            if rate_per_cpu == 0 {
-                continue;
-            }
-
-            let burst = if config.burst_bytes > 0 {
-                config.burst_bytes
-            } else {
-                rate_per_cpu / 100
-            };
+            let rate = if rate > 0 { rate } else { 1 };
+            let burst = if burst > 0 { burst } else { rate };
 
             if let Some(bucket) = QOS_TOKEN_BUCKET.get_ptr_mut(&qos_key) {
                 let elapsed = now_ns.wrapping_sub((*bucket).last_refill_ns);
-                let refill = compute_refill(rate_per_cpu, elapsed);
+                let refill = compute_refill(rate, elapsed);
                 let new_tokens = (*bucket).tokens + refill;
                 let tokens = if new_tokens > burst { burst } else { new_tokens };
 
+                let pass;
                 if tokens >= pkt_len as u64 {
                     (*bucket).tokens = tokens - pkt_len as u64;
-                    (*bucket).last_refill_ns = now_ns;
-                    return true;
+                    pass = true;
                 } else {
-                    (*bucket).tokens = 0;
-                    (*bucket).last_refill_ns = now_ns;
-                    return false;
+                    // Drop: write back refilled tokens (don't deduct pkt_len)
+                    (*bucket).tokens = tokens;
+                    pass = false;
                 }
+
+                (*bucket).last_refill_ns = now_ns;
+                return pass;
             } else {
-                let tokens = if burst >= pkt_len as u64 {
-                    burst - pkt_len as u64
-                } else {
-                    0
-                };
                 let new_bucket = TokenBucket {
-                    tokens,
+                    tokens: if burst >= pkt_len as u64 { burst - pkt_len as u64 } else { 0 },
                     last_refill_ns: now_ns,
+                    last_edt: 0,
                 };
                 let _ = QOS_TOKEN_BUCKET.insert(&qos_key, &new_bucket, 0);
                 return true;

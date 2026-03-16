@@ -1,5 +1,38 @@
 use aya::maps::{HashMap, MapData};
-use crate::common::{QosKey, QosConfig};
+use crate::common::{QosKey, QosConfig, FirewallConfig};
+
+/// Update the qos_enabled flag in FIREWALL_CONFIG map.
+/// Called after every add/delete of a QoS rule to keep the flag in sync.
+fn sync_qos_enabled(pin_path: &str, enabled: bool) -> Result<(), String> {
+    let map_path = format!("{}/FIREWALL_CONFIG", pin_path);
+    let map_data = MapData::from_pin(&map_path)
+        .map_err(|e| format!("open FIREWALL_CONFIG: {:?}", e))?;
+    let mut map = HashMap::<_, u32, FirewallConfig>::try_from(
+        aya::maps::Map::HashMap(map_data)
+    ).map_err(|e| format!("convert FIREWALL_CONFIG: {:?}", e))?;
+
+    let mut cfg = map.get(&0u32, 0).unwrap_or(FirewallConfig {
+        conntrack_enabled: 1,
+        monitoring_enabled: 1,
+        num_cpus: 1,
+        qos_enabled: 0,
+        pad: [0; 3],
+    });
+    cfg.qos_enabled = if enabled { 1 } else { 0 };
+    map.insert(&0u32, &cfg, 0)
+        .map_err(|e| format!("FIREWALL_CONFIG update qos_enabled: {:?}", e))?;
+    Ok(())
+}
+
+/// Check if any QoS rules remain in the QOS_CONFIG map.
+fn has_qos_rules(pin_path: &str) -> bool {
+    let map_path = format!("{}/QOS_CONFIG", pin_path);
+    let Ok(map_data) = MapData::from_pin(&map_path) else { return false };
+    let Ok(map) = HashMap::<_, QosKey, QosConfig>::try_from(
+        aya::maps::Map::HashMap(map_data)
+    ) else { return false };
+    map.iter().next().is_some()
+}
 
 pub fn add_qos_rule(
     group_id: u32,
@@ -7,6 +40,7 @@ pub fn add_qos_rule(
     rate_bps: u64,
     burst_bytes: u64,
     priority: u8,
+    mode: u8,
     pin_path: &str,
 ) -> Result<(), String> {
     let map_path = format!("{}/QOS_CONFIG", pin_path);
@@ -25,11 +59,15 @@ pub fn add_qos_rule(
         rate_bps,
         burst_bytes,
         priority,
-        pad: [0; 7],
+        mode,
+        pad: [0; 6],
     };
 
     map.insert(&key, &config, 0)
         .map_err(|e| format!("QOS_CONFIG insert: {:?}", e))?;
+
+    // After adding a rule, QoS is definitely active
+    sync_qos_enabled(pin_path, true)?;
 
     Ok(())
 }
@@ -55,6 +93,9 @@ pub fn delete_qos_rule(
     map.remove(&key)
         .map_err(|e| format!("QOS_CONFIG remove: {:?}", e))?;
 
+    // After deleting, check if any rules remain
+    sync_qos_enabled(pin_path, has_qos_rules(pin_path))?;
+
     Ok(())
 }
 
@@ -76,7 +117,7 @@ pub fn list_qos_rules(pin_path: &str) -> Result<Vec<(QosKey, QosConfig)>, String
     Ok(entries)
 }
 
-pub fn replay_qos_rules(bpf: &mut aya::Ebpf, rules: &[(u32, u8, u64, u64, u8)]) -> Vec<String> {
+pub fn replay_qos_rules(bpf: &mut aya::Ebpf, rules: &[(u32, u8, u64, u64, u8, u8)]) -> Vec<String> {
     let mut errors = Vec::new();
 
     match bpf.map_mut("QOS_CONFIG")
@@ -84,7 +125,7 @@ pub fn replay_qos_rules(bpf: &mut aya::Ebpf, rules: &[(u32, u8, u64, u64, u8)]) 
         .and_then(|m| HashMap::<_, QosKey, QosConfig>::try_from(m).map_err(|e| format!("{:?}", e)))
     {
         Ok(mut map) => {
-            for &(group_id, direction, rate_bps, burst_bytes, priority) in rules {
+            for &(group_id, direction, rate_bps, burst_bytes, priority, mode) in rules {
                 let key = QosKey {
                     group_id,
                     direction,
@@ -94,7 +135,8 @@ pub fn replay_qos_rules(bpf: &mut aya::Ebpf, rules: &[(u32, u8, u64, u64, u8)]) 
                     rate_bps,
                     burst_bytes,
                     priority,
-                    pad: [0; 7],
+                    mode,
+                    pad: [0; 6],
                 };
                 if let Err(e) = map.insert(&key, &config, 0) {
                     errors.push(format!("QOS_CONFIG group_id={} dir={}: {:?}", group_id, direction, e));
@@ -107,40 +149,69 @@ pub fn replay_qos_rules(bpf: &mut aya::Ebpf, rules: &[(u32, u8, u64, u64, u8)]) 
     errors
 }
 
+/// Compute a sensible default burst size based on rate (bytes/sec).
+///
+/// Different rate tiers use different burst ratios:
+/// - < 25 MB/s  (200 Mbps): rate/5 (200ms) — TCP needs headroom at low rates
+/// - < 125 MB/s   (1 Gbps): rate/8 (125ms) — standard for mid-range rates
+/// - ≥ 125 MB/s   (1 Gbps): rate/10 (100ms) — high rates have large absolute burst
+///
+/// Minimum burst is always 64 KB to handle at least one jumbo frame.
+pub fn compute_default_burst(rate_bps: u64) -> u64 {
+    let burst = if rate_bps < 25_000_000 {
+        // < 200 Mbps: generous burst for TCP recovery
+        rate_bps / 5
+    } else if rate_bps < 125_000_000 {
+        // 200 Mbps ~ 1 Gbps
+        rate_bps / 8
+    } else {
+        // ≥ 1 Gbps
+        rate_bps / 10
+    };
+    if burst > 65536 { burst } else { 65536 }
+}
+
 pub fn parse_rate(rate_str: &str) -> Result<u64, String> {
     let s = rate_str.trim().to_lowercase();
-    if let Some(num) = s.strip_suffix("gbps") {
+    let bytes_per_sec = if let Some(num) = s.strip_suffix("gbps") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid rate: {}", rate_str))?;
-        Ok((n * 1_000_000_000.0 / 8.0) as u64)
+        n * 1_000_000_000.0 / 8.0
     } else if let Some(num) = s.strip_suffix("mbps") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid rate: {}", rate_str))?;
-        Ok((n * 1_000_000.0 / 8.0) as u64)
+        n * 1_000_000.0 / 8.0
     } else if let Some(num) = s.strip_suffix("kbps") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid rate: {}", rate_str))?;
-        Ok((n * 1_000.0 / 8.0) as u64)
+        n * 1_000.0 / 8.0
     } else if let Some(num) = s.strip_suffix("bps") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid rate: {}", rate_str))?;
-        Ok((n / 8.0) as u64)
+        n / 8.0
     } else {
-        // Assume bytes per second
-        s.parse::<u64>().map_err(|_| format!("Invalid rate: {}. Use format like 100mbps, 1gbps", rate_str))
+        return s.parse::<u64>().map_err(|_| format!("Invalid rate: {}. Use format like 100mbps, 1gbps", rate_str));
+    };
+    if bytes_per_sec < 0.0 {
+        return Err(format!("Rate must be positive: {}", rate_str));
     }
+    Ok(bytes_per_sec as u64)
 }
 
 pub fn parse_burst(burst_str: &str) -> Result<u64, String> {
     let s = burst_str.trim().to_lowercase();
-    if let Some(num) = s.strip_suffix("gb") {
+    let bytes = if let Some(num) = s.strip_suffix("gb") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid burst: {}", burst_str))?;
-        Ok((n * 1_073_741_824.0) as u64)
+        n * 1_073_741_824.0
     } else if let Some(num) = s.strip_suffix("mb") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid burst: {}", burst_str))?;
-        Ok((n * 1_048_576.0) as u64)
+        n * 1_048_576.0
     } else if let Some(num) = s.strip_suffix("kb") {
         let n: f64 = num.trim().parse().map_err(|_| format!("Invalid burst: {}", burst_str))?;
-        Ok((n * 1024.0) as u64)
+        n * 1024.0
     } else {
-        s.parse::<u64>().map_err(|_| format!("Invalid burst: {}. Use format like 1mb, 512kb", burst_str))
+        return s.parse::<u64>().map_err(|_| format!("Invalid burst: {}. Use format like 1mb, 512kb", burst_str));
+    };
+    if bytes < 0.0 {
+        return Err(format!("Burst must be positive: {}", burst_str));
     }
+    Ok(bytes as u64)
 }
 
 #[cfg(test)]
@@ -178,5 +249,28 @@ mod tests {
     fn parse_burst_rejects_invalid() {
         assert!(parse_burst("xyz").is_err());
         assert!(parse_burst("10mbps").is_err());
+    }
+
+    #[test]
+    fn compute_default_burst_tiers() {
+        // Low rate (10 Mbps = 1.25 MB/s): rate/5
+        let b = compute_default_burst(1_250_000);
+        assert_eq!(b, 250_000); // 200ms burst
+
+        // Still low rate (100 Mbps = 12.5 MB/s): rate/5
+        let b = compute_default_burst(12_500_000);
+        assert_eq!(b, 2_500_000);
+
+        // Mid rate (500 Mbps = 62.5 MB/s): rate/8
+        let b = compute_default_burst(62_500_000);
+        assert_eq!(b, 7_812_500); // 125ms burst
+
+        // High rate (10 Gbps = 1.25 GB/s): rate/10
+        let b = compute_default_burst(1_250_000_000);
+        assert_eq!(b, 125_000_000); // 100ms burst
+
+        // Very low rate: minimum 64KB
+        let b = compute_default_burst(1000);
+        assert_eq!(b, 65536);
     }
 }

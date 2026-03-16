@@ -119,14 +119,19 @@ pub struct QosConfig {
     pub rate_bps: u64,
     pub burst_bytes: u64,
     pub priority: u8,
-    pub pad: [u8; 7],
+    pub mode: u8,            // 0=policing, 1=shaping
+    pub pad: [u8; 6],
 }
 
+/// Per-CPU token bucket for QoS rate limiting.
+/// Each CPU maintains its own bucket with rate/num_cpus quota.
+/// Layout: tokens(8) + last_refill_ns(8) + last_edt(8) = 24 bytes.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct TokenBucket {
     pub tokens: u64,
     pub last_refill_ns: u64,
+    pub last_edt: u64,
 }
 
 // --- Global firewall config (feature switches) ---
@@ -137,5 +142,6 @@ pub struct FirewallConfig {
     pub conntrack_enabled: u8,
     pub monitoring_enabled: u8,
     pub num_cpus: u16,
-    pub pad: [u8; 4],
+    pub qos_enabled: u8,
+    pub pad: [u8; 3],
 }

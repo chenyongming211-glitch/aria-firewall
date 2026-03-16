@@ -117,7 +117,8 @@ pub struct QosConfig {
     pub rate_bps: u64,
     pub burst_bytes: u64,
     pub priority: u8,
-    pub pad: [u8; 7],
+    pub mode: u8,            // 0=policing, 1=shaping
+    pub pad: [u8; 6],
 }
 unsafe impl Pod for QosConfig {}
 
@@ -126,6 +127,7 @@ unsafe impl Pod for QosConfig {}
 pub struct TokenBucket {
     pub tokens: u64,
     pub last_refill_ns: u64,
+    pub last_edt: u64,
 }
 unsafe impl Pod for TokenBucket {}
 
@@ -135,7 +137,8 @@ pub struct FirewallConfig {
     pub conntrack_enabled: u8,
     pub monitoring_enabled: u8,
     pub num_cpus: u16,
-    pub pad: [u8; 4],
+    pub qos_enabled: u8,
+    pub pad: [u8; 3],
 }
 unsafe impl Pod for FirewallConfig {}
 
