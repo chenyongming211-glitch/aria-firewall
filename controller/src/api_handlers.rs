@@ -1,16 +1,17 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use aria_api::{
     ControllerHealthResponse, CreateNetworkRequest, CreateNodeRequest, CreatePortRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateTenantRequest, MessageResponse,
     NetworkListQuery, NetworkListResponse, NetworkResource, NetworkSpec, NetworkStatus,
-    NodeListQuery, NodeListResponse, NodeResource, NodeStatus, PlatformApiError, PortListQuery,
-    PortListResponse, PortResource, PortSpec, PortStatus, ResourceCreateMetadata, ResourceMetadata,
-    ResourceUpdateMetadata, RouteTableListQuery, RouteTableListResponse, RouteTableResource,
-    RouteTableSpec, RouteTableStatus, SecurityGroupListQuery, SecurityGroupListResponse,
-    SecurityGroupResource, SecurityGroupSpec, SecurityGroupStatus, TenantListQuery,
-    TenantListResponse, TenantResource, TenantStatus, UpdateNetworkRequest, UpdateNodeRequest,
-    UpdatePortRequest, UpdateRouteTableRequest, UpdateSecurityGroupRequest, UpdateTenantRequest,
+    NodeCapability, NodeListQuery, NodeListResponse, NodeResource, NodeStatus, PlatformApiError,
+    PortListQuery, PortListResponse, PortResource, PortSpec, PortStatus, ResourceCreateMetadata,
+    ResourceMetadata, ResourceUpdateMetadata, RouteTableListQuery, RouteTableListResponse,
+    RouteTableResource, RouteTableSpec, RouteTableStatus, SecurityGroupListQuery,
+    SecurityGroupListResponse, SecurityGroupResource, SecurityGroupSpec, SecurityGroupStatus,
+    SouthboundNodeStatusResponse, TenantListQuery, TenantListResponse, TenantResource,
+    TenantStatus, UpdateNetworkRequest, UpdateNodeRequest, UpdatePortRequest,
+    UpdateRouteTableRequest, UpdateSecurityGroupRequest, UpdateTenantRequest,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -327,6 +328,12 @@ fn node_status() -> NodeStatus {
         agent_version: None,
         kernel_version: None,
         capabilities: Vec::new(),
+        desired_generation: None,
+        last_applied_generation: None,
+        last_seen_at: None,
+        last_reconcile_at: None,
+        last_error: None,
+        sync_status: None,
     }
 }
 
@@ -354,6 +361,70 @@ fn route_table_status() -> RouteTableStatus {
     RouteTableStatus {
         phase: "ready".to_string(),
     }
+}
+
+fn node_capabilities_from_report(capability: &NodeCapability) -> Vec<String> {
+    let mut capabilities = BTreeSet::new();
+    capabilities.extend(capability.supported_hooks.iter().cloned());
+
+    if capability.supports_socket_lb {
+        capabilities.insert("socket_lb".to_string());
+    }
+    if capability.supports_trace_ringbuf {
+        capabilities.insert("trace_ringbuf".to_string());
+    }
+    if capability.supports_nat {
+        capabilities.insert("nat".to_string());
+    }
+    if capability.supports_lb {
+        capabilities.insert("lb".to_string());
+    }
+    if capability.supports_encap {
+        capabilities.insert("encap".to_string());
+    }
+    if capability.supports_qos_shaping {
+        capabilities.insert("qos_shaping".to_string());
+    }
+
+    capabilities.into_iter().collect()
+}
+
+fn apply_southbound_node_status(status: &mut NodeStatus, southbound: SouthboundNodeStatusResponse) {
+    status.desired_generation = Some(southbound.desired_generation);
+    status.last_applied_generation = southbound.last_applied_generation;
+    status.last_seen_at = southbound.last_seen_at;
+    status.sync_status = Some(southbound.sync_status);
+
+    if let Some(registration) = southbound.registration {
+        status.agent_version = Some(registration.info.agent_version);
+        status.kernel_version = Some(registration.info.kernel_version);
+        status.capabilities = node_capabilities_from_report(&registration.capability);
+    }
+
+    if let Some(health) = southbound.last_health {
+        status.last_reconcile_at = health.last_reconcile_at;
+        status.last_error = health.last_error;
+    }
+}
+
+async fn enrich_node_resource(
+    store: &AppState,
+    mut resource: NodeResource,
+) -> Result<NodeResource, ControllerError> {
+    let southbound = store.southbound_status(&resource.metadata.id).await?;
+    apply_southbound_node_status(&mut resource.status, southbound);
+    Ok(resource)
+}
+
+async fn enrich_node_resources(
+    store: &AppState,
+    resources: Vec<NodeResource>,
+) -> Result<Vec<NodeResource>, ControllerError> {
+    let mut enriched = Vec::with_capacity(resources.len());
+    for resource in resources {
+        enriched.push(enrich_node_resource(store, resource).await?);
+    }
+    Ok(enriched)
 }
 
 async fn ensure_tenant_exists(
@@ -814,6 +885,7 @@ pub async fn list_nodes(
         .collect::<Vec<_>>();
     let (items, next_page_token, total_count) =
         paginate(items, query.limit, query.page_token.as_deref())?;
+    let items = enrich_node_resources(&store, items).await?;
     Ok(Json(NodeListResponse {
         items,
         next_page_token,
@@ -842,7 +914,7 @@ pub async fn create_node(
         spec: request.spec,
         status: node_status(),
     };
-    let created = store.create_node(resource).await?;
+    let created = enrich_node_resource(&store, store.create_node(resource).await?).await?;
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -865,6 +937,7 @@ pub async fn get_node(
         resource: "node",
         id,
     })?;
+    let resource = enrich_node_resource(&store, resource).await?;
     Ok(Json(resource))
 }
 
@@ -895,7 +968,7 @@ pub async fn update_node(
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.update_node(&id, resource).await?;
+    let updated = enrich_node_resource(&store, store.update_node(&id, resource).await?).await?;
     Ok(Json(updated))
 }
 

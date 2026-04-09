@@ -315,6 +315,7 @@ Northbound API v1 的验收标准：
 - 已提供第一版列表查询骨架：`limit / page_token / label_selector`，并按资源补充 `tenant_id / network_id / node_id / status` 等基础过滤字段
 - 已提供 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 与响应头一致
 - 已提供第一版平台关系校验与删除保护：northbound 写入会校验一阶引用，破坏依赖关系的删除会返回 `409 dependency_conflict`
+- `Node.status` 已开始镜像 southbound 的关键运行态，直接返回 `desired_generation / last_applied_generation / last_seen_at / last_reconcile_at / last_error / sync_status`
 - 当前 `page_token` 仍是简单 offset 语义，`label_selector` 仅支持精确匹配的 `key=value[,key=value...]`
 
 当前仍未实现：

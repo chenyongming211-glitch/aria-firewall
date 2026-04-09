@@ -46,6 +46,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`
 - southbound 已开始记录 per-node desired-state publish 摘要，可作为后续 apply/reconcile 的控制面对照基线
 - southbound `status` 已开始派生 node 级 `sync_status`，为后续 reconcile / rollout 判断提供统一状态面
+- northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / sync_status`
 - controller 已通过 store trait 隔离存储边界，并新增可选的文件快照 backend；默认实现仍为内存版
 
 当前实现仍不包含：

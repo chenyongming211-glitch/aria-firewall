@@ -358,6 +358,7 @@ southbound 协议 v1 的验收标准：
 - `status` 响应中的 `last_seen_at` 仅在节点产生过 southbound 观察记录后才返回，避免伪造时间戳
 - controller 已开始记录 per-node desired-state publish 摘要，包含 `generation / issued_at / full_sync / object_counts`，并在同 generation 重复拉取时复用已有发布时间
 - `status` 响应已开始派生 `sync_status`，综合 `desired_generation / last_applied_generation / apply-status / health` 反映节点是否追平、失败或降级
+- northbound `Node.status` 已开始镜像 southbound 关键运行态，直接暴露 `desired_generation / last_applied_generation / last_seen_at / sync_status`
 
 当前仍未实现：
 

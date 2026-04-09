@@ -44,6 +44,7 @@
 - 已新增第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`，作为 `RFC-003` 的过渡实现。
 - southbound 现已记录每个 node 最近一次已发布的 desired-state 摘要，包含 `generation / issued_at / full_sync / object_counts`；相同 generation 的重复拉取会复用同一发布时间。
 - southbound `status` 现已提供派生的 `sync_status`，会综合 `desired_generation / last_applied_generation / apply-status / health` 判断节点是否 `pending / out_of_sync / in_sync / failed / degraded`。
+- northbound `Node.status` 现已开始镜像 southbound 的关键运行态，返回 `desired_generation / last_applied_generation / last_seen_at / last_reconcile_at / last_error / sync_status`，并补齐 agent 版本、内核版本和能力摘要。
 - controller 当前已经通过可替换的 store trait 隔离存储边界，并新增了可选的文件快照 backend；未配置 `ARIA_CONTROLLER_STATE_PATH` 时仍默认走内存版。
 - 当前还没有接入持久化、鉴权审计、southbound 编译或 datapath 联动；这些能力仍按 RFC 路线后续实现。
 

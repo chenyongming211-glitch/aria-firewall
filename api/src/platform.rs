@@ -3,6 +3,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::southbound::SouthboundSyncStatus;
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "code": "resource_not_found",
@@ -338,14 +340,24 @@ pub struct NodeSpec {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
-    "phase": "ready",
+    "phase": "registered",
     "agent_version": "0.9.0",
     "kernel_version": "6.8.0-71-generic",
-    "capabilities": ["xdp", "tc", "kernel_drops"]
+    "capabilities": ["encap", "nat", "qos_shaping", "socket_lb", "tc", "trace_ringbuf", "xdp"],
+    "desired_generation": "7",
+    "last_applied_generation": "7",
+    "last_seen_at": "1712649915",
+    "last_reconcile_at": "1712649915",
+    "last_error": null,
+    "sync_status": {
+        "state": "in_sync",
+        "reconcile_required": false,
+        "reasons": []
+    }
 }))]
 pub struct NodeStatus {
     /// Lifecycle phase as reported by the platform.
-    #[schema(example = "ready")]
+    #[schema(example = "registered")]
     pub phase: String,
     /// Currently observed agent version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +370,29 @@ pub struct NodeStatus {
     /// Datapath capabilities surfaced by the node.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Latest controller desired-state generation visible in the node view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "7")]
+    pub desired_generation: Option<String>,
+    /// Most recently applied generation reported by the node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "7")]
+    pub last_applied_generation: Option<String>,
+    /// Last southbound observation timestamp for this node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "1712649915")]
+    pub last_seen_at: Option<String>,
+    /// Last reconcile timestamp reported by the agent health heartbeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "1712649915")]
+    pub last_reconcile_at: Option<String>,
+    /// Sticky runtime error, if any, surfaced by the node health report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "wal_replay_failed")]
+    pub last_error: Option<String>,
+    /// Derived controller-side sync summary mirrored from the southbound status plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_status: Option<SouthboundSyncStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -375,10 +410,18 @@ pub struct NodeStatus {
         "az": "cn-east-1a"
     },
     "status": {
-        "phase": "ready",
+        "phase": "registered",
         "agent_version": "0.9.0",
         "kernel_version": "6.8.0-71-generic",
-        "capabilities": ["xdp", "tc"]
+        "capabilities": ["nat", "tc", "xdp"],
+        "desired_generation": "7",
+        "last_applied_generation": "7",
+        "last_seen_at": "1712649915",
+        "sync_status": {
+            "state": "in_sync",
+            "reconcile_required": false,
+            "reasons": []
+        }
     }
 }))]
 pub struct NodeResource {

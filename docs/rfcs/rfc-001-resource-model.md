@@ -516,6 +516,8 @@ AddressSet 是当前 `group` 的长期演进目标，用于聚合 IP/CIDR 集合
 
 这些对象已经进入共享 `aria-api` schema，并通过实验性的 `controller` crate 暴露为 northbound API。
 
+其中 `Node.status` 已开始承载第一版运行态摘要：在平台对象状态外层保留稳定对象语义，同时镜像 southbound 的 `desired_generation / last_applied_generation / last_seen_at / sync_status` 等关键信息，作为后续 rollout / reconcile / UI 拓扑的基础状态面。
+
 当前仍未落代码的对象包括但不限于：
 
 - `Segment`

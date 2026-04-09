@@ -153,6 +153,12 @@ mod tests {
             .is_some());
         assert!(doc.pointer("/components/schemas/TenantResource").is_some());
         assert!(doc.pointer("/components/schemas/NodeResource").is_some());
+        assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/desired_generation")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/sync_status")
+            .is_some());
         assert!(doc.pointer("/components/schemas/NetworkResource").is_some());
         assert!(doc.pointer("/components/schemas/PortResource").is_some());
         assert!(doc
