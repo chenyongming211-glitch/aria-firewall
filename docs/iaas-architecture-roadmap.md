@@ -51,7 +51,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - southbound `status` 已开始派生 node 级 `sync_status`，为后续 reconcile / rollout 判断提供统一状态面
 - southbound `status` 已开始提供轻量差异摘要 `pending_object_counts`，按对象类型展示当前 generation 仍待 reconcile 的数量
 - southbound `status` 已开始提供 `changed_kinds / has_deletes`，用于轻量表达当前仍待 reconcile 的资源种类和是否包含删除
-- northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / pending_object_counts / changed_kinds / has_deletes / sync_status`
+- northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / last_publish_summary / pending_object_counts / changed_kinds / has_deletes / sync_status`
 - controller 已通过 store trait 隔离存储边界，并新增可选的文件快照 backend；默认实现仍为内存版
 
 当前实现仍不包含：

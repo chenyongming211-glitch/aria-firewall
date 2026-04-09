@@ -360,7 +360,7 @@ southbound 协议 v1 的验收标准：
 - `status` 响应已开始派生 `sync_status`，综合 `desired_generation / last_applied_generation / apply-status / health` 反映节点是否追平、失败或降级
 - `status` 响应已开始补充 `pending_object_counts`，按对象类型给出当前 generation 仍待 reconcile 的数量，作为后续 incremental update 前的轻量差异摘要
 - `status` 响应已开始补充 `changed_kinds / has_deletes`，用轻量摘要表达当前仍待 reconcile 的资源种类，以及当前 generation 是否包含删除
-- northbound `Node.status` 已开始镜像 southbound 关键运行态，直接暴露 `desired_generation / last_applied_generation / last_seen_at / pending_object_counts / changed_kinds / has_deletes / sync_status`
+- northbound `Node.status` 已开始镜像 southbound 关键运行态，直接暴露 `desired_generation / last_applied_generation / last_seen_at / last_publish_summary / pending_object_counts / changed_kinds / has_deletes / sync_status`
 
 当前仍未实现：
 

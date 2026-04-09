@@ -3,7 +3,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::southbound::SouthboundSyncStatus;
+use crate::{DesiredStatePublishRecord, SouthboundSyncStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
@@ -352,6 +352,19 @@ pub struct NodeSpec {
     "last_seen_at": "1712649915",
     "last_reconcile_at": "1712649915",
     "last_error": null,
+    "last_publish_summary": {
+        "generation": "7",
+        "issued_at": "1712649900",
+        "full_sync": true,
+        "object_counts": {
+            "tenants": 1,
+            "networks": 1,
+            "ports": 2,
+            "security_groups": 1,
+            "route_tables": 1,
+            "deletes": 0
+        }
+    },
     "pending_object_counts": {},
     "changed_kinds": [],
     "has_deletes": false,
@@ -396,6 +409,9 @@ pub struct NodeStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "wal_replay_failed")]
     pub last_error: Option<String>,
+    /// Latest lightweight publish summary mirrored from the southbound state plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_publish_summary: Option<DesiredStatePublishRecord>,
     /// Lightweight per-kind object counts that still need reconcile for the current desired generation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pending_object_counts: BTreeMap<String, usize>,
@@ -432,6 +448,19 @@ pub struct NodeStatus {
         "desired_generation": "7",
         "last_applied_generation": "7",
         "last_seen_at": "1712649915",
+        "last_publish_summary": {
+            "generation": "7",
+            "issued_at": "1712649900",
+            "full_sync": true,
+            "object_counts": {
+                "tenants": 1,
+                "networks": 1,
+                "ports": 2,
+                "security_groups": 1,
+                "route_tables": 1,
+                "deletes": 0
+            }
+        },
         "pending_object_counts": {},
         "changed_kinds": [],
         "has_deletes": false,

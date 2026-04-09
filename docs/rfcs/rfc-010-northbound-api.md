@@ -316,8 +316,8 @@ Northbound API v1 的验收标准：
 - `Node` 列表已开始支持 `sync_state` 过滤，可直接筛选 `pending / out_of_sync / in_sync / failed / degraded` 节点
 - 已提供 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 与响应头一致
 - 已提供第一版平台关系校验与删除保护：northbound 写入会校验一阶引用，破坏依赖关系的删除会返回 `409 dependency_conflict`
-- `Node.status` 已开始镜像 southbound 的关键运行态，直接返回 `desired_generation / last_applied_generation / last_seen_at / last_reconcile_at / last_error / pending_object_counts / changed_kinds / has_deletes / sync_status`
-- `Node.status` 已开始镜像 `pending_object_counts / changed_kinds / has_deletes`，用轻量聚合的方式展示当前 generation 仍待 reconcile 的对象数量、变更种类和是否包含删除
+- `Node.status` 已开始镜像 southbound 的关键运行态，直接返回 `desired_generation / last_applied_generation / last_seen_at / last_reconcile_at / last_error / last_publish_summary / pending_object_counts / changed_kinds / has_deletes / sync_status`
+- `Node.status` 已开始镜像 `last_publish_summary / pending_object_counts / changed_kinds / has_deletes`，用轻量聚合的方式展示最近一次下发轮廓、当前 generation 仍待 reconcile 的对象数量、变更种类和是否包含删除
 - 当前 `page_token` 仍是简单 offset 语义，`label_selector` 仅支持精确匹配的 `key=value[,key=value...]`
 
 当前仍未实现：

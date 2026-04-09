@@ -333,6 +333,7 @@ fn node_status() -> NodeStatus {
         last_seen_at: None,
         last_reconcile_at: None,
         last_error: None,
+        last_publish_summary: None,
         pending_object_counts: BTreeMap::new(),
         changed_kinds: Vec::new(),
         has_deletes: false,
@@ -396,6 +397,7 @@ fn apply_southbound_node_status(status: &mut NodeStatus, southbound: SouthboundN
     status.desired_generation = Some(southbound.desired_generation);
     status.last_applied_generation = southbound.last_applied_generation;
     status.last_seen_at = southbound.last_seen_at;
+    status.last_publish_summary = southbound.last_desired_state;
     status.pending_object_counts = southbound.pending_object_counts;
     status.changed_kinds = southbound.changed_kinds;
     status.has_deletes = southbound.has_deletes;

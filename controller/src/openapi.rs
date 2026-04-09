@@ -157,6 +157,9 @@ mod tests {
             .pointer("/components/schemas/NodeStatus/properties/desired_generation")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/last_publish_summary")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/NodeStatus/properties/pending_object_counts")
             .is_some());
         assert!(doc
