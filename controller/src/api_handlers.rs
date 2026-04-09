@@ -3,16 +3,17 @@ use std::collections::BTreeMap;
 use aria_api::{
     ControllerHealthResponse, CreateNetworkRequest, CreateNodeRequest, CreatePortRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateTenantRequest, MessageResponse,
-    NetworkListResponse, NetworkResource, NetworkStatus, NodeListResponse, NodeResource,
-    NodeStatus, PlatformApiError, PortListResponse, PortResource, PortStatus,
-    ResourceCreateMetadata, ResourceMetadata, ResourceUpdateMetadata, RouteTableListResponse,
-    RouteTableResource, RouteTableStatus, SecurityGroupListResponse, SecurityGroupResource,
-    SecurityGroupStatus, TenantListResponse, TenantResource, TenantStatus, UpdateNetworkRequest,
+    NetworkListQuery, NetworkListResponse, NetworkResource, NetworkStatus, NodeListQuery,
+    NodeListResponse, NodeResource, NodeStatus, PlatformApiError, PortListQuery, PortListResponse,
+    PortResource, PortStatus, ResourceCreateMetadata, ResourceMetadata, ResourceUpdateMetadata,
+    RouteTableListQuery, RouteTableListResponse, RouteTableResource, RouteTableStatus,
+    SecurityGroupListQuery, SecurityGroupListResponse, SecurityGroupResource, SecurityGroupStatus,
+    TenantListQuery, TenantListResponse, TenantResource, TenantStatus, UpdateNetworkRequest,
     UpdateNodeRequest, UpdatePortRequest, UpdateRouteTableRequest, UpdateSecurityGroupRequest,
     UpdateTenantRequest,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -127,6 +128,102 @@ fn deleted_message(resource: &str, id: &str) -> MessageResponse {
     }
 }
 
+const DEFAULT_PAGE_LIMIT: usize = 50;
+const MAX_PAGE_LIMIT: usize = 200;
+
+fn parse_limit(limit: Option<usize>) -> Result<usize, ControllerError> {
+    match limit {
+        Some(0) => Err(ControllerError::BadRequest(
+            "limit must be between 1 and 200".to_string(),
+        )),
+        Some(value) if value > MAX_PAGE_LIMIT => Err(ControllerError::BadRequest(format!(
+            "limit must be between 1 and {MAX_PAGE_LIMIT}"
+        ))),
+        Some(value) => Ok(value),
+        None => Ok(DEFAULT_PAGE_LIMIT),
+    }
+}
+
+fn parse_page_token(page_token: Option<&str>) -> Result<usize, ControllerError> {
+    match page_token {
+        Some(token) if token.trim().is_empty() => Err(ControllerError::BadRequest(
+            "page_token must be a non-negative integer offset".to_string(),
+        )),
+        Some(token) => token.parse::<usize>().map_err(|_| {
+            ControllerError::BadRequest(
+                "page_token must be a non-negative integer offset".to_string(),
+            )
+        }),
+        None => Ok(0),
+    }
+}
+
+fn parse_label_selector(
+    selector: Option<&str>,
+) -> Result<BTreeMap<String, String>, ControllerError> {
+    let Some(selector) = selector.map(str::trim) else {
+        return Ok(BTreeMap::new());
+    };
+    if selector.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut labels = BTreeMap::new();
+    for clause in selector.split(',') {
+        let clause = clause.trim();
+        let Some((key, value)) = clause.split_once('=') else {
+            return Err(ControllerError::BadRequest(format!(
+                "label_selector clause '{clause}' must use key=value syntax"
+            )));
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            return Err(ControllerError::BadRequest(
+                "label_selector requires non-empty key and value".to_string(),
+            ));
+        }
+        labels.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(labels)
+}
+
+fn labels_match(labels: &BTreeMap<String, String>, selector: &BTreeMap<String, String>) -> bool {
+    selector
+        .iter()
+        .all(|(key, value)| labels.get(key) == Some(value))
+}
+
+fn optional_eq(filter: Option<&str>, value: &str) -> bool {
+    match filter {
+        Some(filter) => filter == value,
+        None => true,
+    }
+}
+
+fn paginate<T>(
+    items: Vec<T>,
+    limit: Option<usize>,
+    page_token: Option<&str>,
+) -> Result<(Vec<T>, Option<String>, usize), ControllerError> {
+    let limit = parse_limit(limit)?;
+    let offset = parse_page_token(page_token)?;
+    let total_count = items.len();
+    if offset >= total_count {
+        return Ok((Vec::new(), None, total_count));
+    }
+
+    let page_items = items
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let next_offset = offset + page_items.len();
+    let next_page_token = (next_offset < total_count).then(|| next_offset.to_string());
+    Ok((page_items, next_page_token, total_count))
+}
+
 fn tenant_status() -> TenantStatus {
     TenantStatus {
         phase: "ready".to_string(),
@@ -189,15 +286,33 @@ pub async fn health(State(store): State<AppState>) -> Json<ControllerHealthRespo
     path = "/api/v1/tenants",
     operation_id = "listTenants",
     tag = "tenants",
-    responses((status = 200, description = "List tenants", body = TenantListResponse))
+    params(TenantListQuery),
+    responses(
+        (status = 200, description = "List tenants", body = TenantListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
-pub async fn list_tenants(State(store): State<AppState>) -> Json<TenantListResponse> {
-    let items = store.list_tenants().await;
-    Json(TenantListResponse {
-        total_count: items.len(),
+pub async fn list_tenants(
+    State(store): State<AppState>,
+    Query(query): Query<TenantListQuery>,
+) -> Result<Json<TenantListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_tenants()
+        .await
+        .into_iter()
+        .filter(|tenant| {
+            labels_match(&tenant.metadata.labels, &selector)
+                && optional_eq(query.status.as_deref(), &tenant.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(TenantListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(
@@ -309,15 +424,33 @@ pub async fn delete_tenant(
     path = "/api/v1/nodes",
     operation_id = "listNodes",
     tag = "nodes",
-    responses((status = 200, description = "List nodes", body = NodeListResponse))
+    params(NodeListQuery),
+    responses(
+        (status = 200, description = "List nodes", body = NodeListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
-pub async fn list_nodes(State(store): State<AppState>) -> Json<NodeListResponse> {
-    let items = store.list_nodes().await;
-    Json(NodeListResponse {
-        total_count: items.len(),
+pub async fn list_nodes(
+    State(store): State<AppState>,
+    Query(query): Query<NodeListQuery>,
+) -> Result<Json<NodeListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_nodes()
+        .await
+        .into_iter()
+        .filter(|node| {
+            labels_match(&node.metadata.labels, &selector)
+                && optional_eq(query.status.as_deref(), &node.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(NodeListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(
@@ -423,15 +556,34 @@ pub async fn delete_node(
     path = "/api/v1/networks",
     operation_id = "listNetworks",
     tag = "networks",
-    responses((status = 200, description = "List networks", body = NetworkListResponse))
+    params(NetworkListQuery),
+    responses(
+        (status = 200, description = "List networks", body = NetworkListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
-pub async fn list_networks(State(store): State<AppState>) -> Json<NetworkListResponse> {
-    let items = store.list_networks().await;
-    Json(NetworkListResponse {
-        total_count: items.len(),
+pub async fn list_networks(
+    State(store): State<AppState>,
+    Query(query): Query<NetworkListQuery>,
+) -> Result<Json<NetworkListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_networks()
+        .await
+        .into_iter()
+        .filter(|network| {
+            labels_match(&network.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &network.spec.tenant_id)
+                && optional_eq(query.status.as_deref(), &network.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(NetworkListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(
@@ -543,15 +695,39 @@ pub async fn delete_network(
     path = "/api/v1/ports",
     operation_id = "listPorts",
     tag = "ports",
-    responses((status = 200, description = "List ports", body = PortListResponse))
+    params(PortListQuery),
+    responses(
+        (status = 200, description = "List ports", body = PortListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
-pub async fn list_ports(State(store): State<AppState>) -> Json<PortListResponse> {
-    let items = store.list_ports().await;
-    Json(PortListResponse {
-        total_count: items.len(),
+pub async fn list_ports(
+    State(store): State<AppState>,
+    Query(query): Query<PortListQuery>,
+) -> Result<Json<PortListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_ports()
+        .await
+        .into_iter()
+        .filter(|port| {
+            labels_match(&port.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &port.spec.tenant_id)
+                && optional_eq(query.network_id.as_deref(), &port.spec.network_id)
+                && optional_eq(
+                    query.node_id.as_deref(),
+                    port.spec.node_id.as_deref().unwrap_or(""),
+                )
+                && optional_eq(query.status.as_deref(), &port.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(PortListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(
@@ -657,17 +833,34 @@ pub async fn delete_port(
     path = "/api/v1/security-groups",
     operation_id = "listSecurityGroups",
     tag = "security-groups",
-    responses((status = 200, description = "List security groups", body = SecurityGroupListResponse))
+    params(SecurityGroupListQuery),
+    responses(
+        (status = 200, description = "List security groups", body = SecurityGroupListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
 pub async fn list_security_groups(
     State(store): State<AppState>,
-) -> Json<SecurityGroupListResponse> {
-    let items = store.list_security_groups().await;
-    Json(SecurityGroupListResponse {
-        total_count: items.len(),
+    Query(query): Query<SecurityGroupListQuery>,
+) -> Result<Json<SecurityGroupListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_security_groups()
+        .await
+        .into_iter()
+        .filter(|security_group| {
+            labels_match(&security_group.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &security_group.spec.tenant_id)
+                && optional_eq(query.status.as_deref(), &security_group.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(SecurityGroupListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(
@@ -784,15 +977,34 @@ pub async fn delete_security_group(
     path = "/api/v1/route-tables",
     operation_id = "listRouteTables",
     tag = "route-tables",
-    responses((status = 200, description = "List route tables", body = RouteTableListResponse))
+    params(RouteTableListQuery),
+    responses(
+        (status = 200, description = "List route tables", body = RouteTableListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
 )]
-pub async fn list_route_tables(State(store): State<AppState>) -> Json<RouteTableListResponse> {
-    let items = store.list_route_tables().await;
-    Json(RouteTableListResponse {
-        total_count: items.len(),
+pub async fn list_route_tables(
+    State(store): State<AppState>,
+    Query(query): Query<RouteTableListQuery>,
+) -> Result<Json<RouteTableListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_route_tables()
+        .await
+        .into_iter()
+        .filter(|route_table| {
+            labels_match(&route_table.metadata.labels, &selector)
+                && optional_eq(query.network_id.as_deref(), &route_table.spec.network_id)
+                && optional_eq(query.status.as_deref(), &route_table.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(RouteTableListResponse {
         items,
-        next_page_token: None,
-    })
+        next_page_token,
+        total_count,
+    }))
 }
 
 #[utoipa::path(

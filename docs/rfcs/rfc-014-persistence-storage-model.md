@@ -297,6 +297,8 @@ Persistence model v1 的验收标准：
 - 默认实现仍为内存态 backend
 - northbound / southbound handler 已只依赖抽象边界，不再直接依赖具体内存实现
 - northbound 对象写入当前以“store 内部 mutation + generation bump”为 durability 边界，再写入文件快照
+- 当前 file-backed backend 仍是 Phase 0 形态：写路径经 `mutation_lock` 串行，但读路径尚未绑定同一快照边界；文件写失败回滚时，并发读者可能短暂观察到未持久化中间态
+- `node` 资源方法在 store 内部保留手工展开实现，因为 `delete_node` 需要额外清理 southbound runtime，不适合完全复用通用 CRUD 宏
 
 当前仍未实现：
 

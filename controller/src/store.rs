@@ -876,6 +876,8 @@ impl ControllerStore for InMemoryControllerStore {
         route_tables
     );
 
+    // `node` keeps a hand-written delete path because removing a node must
+    // also purge any cached southbound runtime state keyed by the same ID.
     async fn list_nodes(&self) -> Vec<NodeResource> {
         self.list_resource(&self.nodes).await
     }

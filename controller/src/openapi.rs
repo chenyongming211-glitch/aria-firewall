@@ -50,24 +50,28 @@ use utoipa::OpenApi;
             aria_api::TenantSpec,
             aria_api::TenantStatus,
             aria_api::TenantResource,
+            aria_api::TenantListQuery,
             aria_api::CreateTenantRequest,
             aria_api::UpdateTenantRequest,
             aria_api::TenantListResponse,
             aria_api::NodeSpec,
             aria_api::NodeStatus,
             aria_api::NodeResource,
+            aria_api::NodeListQuery,
             aria_api::CreateNodeRequest,
             aria_api::UpdateNodeRequest,
             aria_api::NodeListResponse,
             aria_api::NetworkSpec,
             aria_api::NetworkStatus,
             aria_api::NetworkResource,
+            aria_api::NetworkListQuery,
             aria_api::CreateNetworkRequest,
             aria_api::UpdateNetworkRequest,
             aria_api::NetworkListResponse,
             aria_api::PortSpec,
             aria_api::PortStatus,
             aria_api::PortResource,
+            aria_api::PortListQuery,
             aria_api::CreatePortRequest,
             aria_api::UpdatePortRequest,
             aria_api::PortListResponse,
@@ -75,6 +79,7 @@ use utoipa::OpenApi;
             aria_api::SecurityGroupSpec,
             aria_api::SecurityGroupStatus,
             aria_api::SecurityGroupResource,
+            aria_api::SecurityGroupListQuery,
             aria_api::CreateSecurityGroupRequest,
             aria_api::UpdateSecurityGroupRequest,
             aria_api::SecurityGroupListResponse,
@@ -82,6 +87,7 @@ use utoipa::OpenApi;
             aria_api::RouteTableSpec,
             aria_api::RouteTableStatus,
             aria_api::RouteTableResource,
+            aria_api::RouteTableListQuery,
             aria_api::CreateRouteTableRequest,
             aria_api::UpdateRouteTableRequest,
             aria_api::RouteTableListResponse,
@@ -183,5 +189,27 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("registerSouthboundNode")
         );
+
+        let tenant_params = doc
+            .pointer("/paths/~1api~1v1~1tenants/get/parameters")
+            .and_then(|value| value.as_array())
+            .expect("tenant list parameters should exist");
+        assert!(tenant_params
+            .iter()
+            .any(|param| { param.get("name").and_then(|value| value.as_str()) == Some("limit") }));
+        assert!(tenant_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("label_selector")
+        }));
+
+        let port_params = doc
+            .pointer("/paths/~1api~1v1~1ports/get/parameters")
+            .and_then(|value| value.as_array())
+            .expect("port list parameters should exist");
+        assert!(port_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("network_id")
+        }));
+        assert!(port_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("node_id")
+        }));
     }
 }

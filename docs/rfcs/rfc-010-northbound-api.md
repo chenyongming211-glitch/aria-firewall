@@ -312,10 +312,13 @@ Northbound API v1 的验收标准：
 - 已覆盖首批资源：`Tenant / Node / Network / Port / SecurityGroup / RouteTable`
 - 已提供统一 `metadata / spec / status` 外层
 - 已提供内存态 CRUD 存储和 `/openapi.json` / `/docs`
+- 已提供第一版列表查询骨架：`limit / page_token / label_selector`，并按资源补充 `tenant_id / network_id / node_id / status` 等基础过滤字段
+- 当前 `page_token` 仍是简单 offset 语义，`label_selector` 仅支持精确匹配的 `key=value[,key=value...]`
 
 当前仍未实现：
 
 - 持久化与恢复
 - 认证、授权与审计
 - 异步 operation 模型
-- 过滤、分页和 Observe / Diagnose 北向能力
+- 稳定 cursor / 高级过滤表达式 / 排序
+- Observe / Diagnose 北向能力
