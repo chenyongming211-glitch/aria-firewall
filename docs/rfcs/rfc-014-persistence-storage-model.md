@@ -293,11 +293,13 @@ Persistence model v1 的验收标准：
 当前仓库已经落下持久化模型的第一步代码骨架：
 
 - `controller` 已通过 store trait 隔离存储边界
-- 已新增可选的文件快照 backend，允许通过 `ARIA_CONTROLLER_STATE_PATH` 持久化平台对象、generation 和 southbound runtime 摘要
+- 已新增可选的文件快照 backend，允许通过 `ARIA_CONTROLLER_STATE_PATH` 持久化平台对象、generation 和 per-node publish 摘要
+- southbound runtime（`registration / apply-status / heartbeat / health`）现已明确作为内存态运行状态处理，不再跟随每次心跳重写整份 controller 快照
 - southbound 已开始持久化 per-node desired-state publish 摘要，作为 `per-node desired generation / publish records` 的第一阶段雏形
 - 默认实现仍为内存态 backend
 - northbound / southbound handler 已只依赖抽象边界，不再直接依赖具体内存实现
 - northbound 对象写入当前以“store 内部 mutation + generation bump”为 durability 边界，再写入文件快照
+- northbound 的一阶引用完整性校验和依赖删除保护已下沉到 store mutation 边界内，避免 handler 层校验与写入之间的 TOCTOU 窗口
 - 当前 file-backed backend 仍是 Phase 0 形态：写路径经 `mutation_lock` 串行，但读路径尚未绑定同一快照边界；文件写失败回滚时，并发读者可能短暂观察到未持久化中间态
 - `node` 资源方法在 store 内部保留手工展开实现，因为 `delete_node` 需要额外清理 southbound runtime，不适合完全复用通用 CRUD 宏
 

@@ -50,8 +50,27 @@ impl_stored_resource!(RouteTableResource);
 
 #[derive(Debug, Clone)]
 pub enum StoreError {
-    AlreadyExists { resource: &'static str, id: String },
-    NotFound { resource: &'static str, id: String },
+    AlreadyExists {
+        resource: &'static str,
+        id: String,
+    },
+    BadRequest(String),
+    DependencyConflict {
+        resource: &'static str,
+        id: String,
+        dependent_resource: &'static str,
+        dependent_id: String,
+    },
+    InvalidReference {
+        resource: &'static str,
+        field: &'static str,
+        value: String,
+        referenced_resource: &'static str,
+    },
+    NotFound {
+        resource: &'static str,
+        id: String,
+    },
     Internal(String),
 }
 
@@ -61,6 +80,25 @@ impl std::fmt::Display for StoreError {
             Self::AlreadyExists { resource, id } => {
                 write!(f, "{resource} '{id}' already exists")
             }
+            Self::BadRequest(message) => f.write_str(message),
+            Self::DependencyConflict {
+                resource,
+                id,
+                dependent_resource,
+                dependent_id,
+            } => write!(
+                f,
+                "{resource} '{id}' is still referenced by {dependent_resource} '{dependent_id}'"
+            ),
+            Self::InvalidReference {
+                resource,
+                field,
+                value,
+                referenced_resource,
+            } => write!(
+                f,
+                "{resource} field '{field}' references missing {referenced_resource} '{value}'"
+            ),
             Self::NotFound { resource, id } => write!(f, "{resource} '{id}' was not found"),
             Self::Internal(message) => f.write_str(message),
         }
@@ -93,7 +131,6 @@ struct PersistedControllerState {
     security_groups: PersistedResourceStore<SecurityGroupResource>,
     route_tables: PersistedResourceStore<RouteTableResource>,
     generation: u64,
-    southbound_nodes: BTreeMap<String, SouthboundNodeRuntime>,
     #[serde(default)]
     southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
 }
@@ -316,8 +353,11 @@ pub struct InMemoryControllerStore {
     pub security_groups: ResourceStore<SecurityGroupResource>,
     pub route_tables: ResourceStore<RouteTableResource>,
     generation: AtomicU64,
+    // High-frequency southbound runtime stays in memory so heartbeat/status
+    // updates do not rewrite the controller snapshot on every report.
     southbound_nodes: RwLock<BTreeMap<String, SouthboundNodeRuntime>>,
     southbound_publishes: RwLock<BTreeMap<String, DesiredStatePublishRecord>>,
+    mutation_lock: Mutex<()>,
 }
 
 impl InMemoryControllerStore {
@@ -332,6 +372,7 @@ impl InMemoryControllerStore {
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
             southbound_publishes: RwLock::new(BTreeMap::new()),
+            mutation_lock: Mutex::new(()),
         }
     }
 
@@ -397,6 +438,294 @@ impl InMemoryControllerStore {
         let deleted = store.delete(id).await?;
         self.bump_generation_inner();
         Ok(deleted)
+    }
+
+    async fn run_mutation<T, F, Fut>(&self, op: F) -> Result<T, StoreError>
+    where
+        F: FnOnce(&InMemoryControllerStore) -> Fut,
+        Fut: std::future::Future<Output = Result<T, StoreError>>,
+    {
+        let _guard = self.mutation_lock.lock().await;
+        op(self).await
+    }
+
+    async fn ensure_tenant_exists_inner(
+        &self,
+        tenant_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<TenantResource, StoreError> {
+        self.tenants
+            .get(tenant_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: tenant_id.to_string(),
+                referenced_resource: "tenant",
+            })
+    }
+
+    async fn ensure_network_exists_inner(
+        &self,
+        network_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<NetworkResource, StoreError> {
+        self.networks
+            .get(network_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: network_id.to_string(),
+                referenced_resource: "network",
+            })
+    }
+
+    async fn ensure_node_exists_inner(
+        &self,
+        node_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<NodeResource, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: node_id.to_string(),
+                referenced_resource: "node",
+            })
+    }
+
+    async fn ensure_security_group_exists_inner(
+        &self,
+        security_group_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<SecurityGroupResource, StoreError> {
+        self.security_groups
+            .get(security_group_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: security_group_id.to_string(),
+                referenced_resource: "security_group",
+            })
+    }
+
+    async fn validate_network_resource_inner(
+        &self,
+        resource: &NetworkResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "network", "tenant_id")
+            .await?;
+        Ok(())
+    }
+
+    async fn validate_security_group_resource_inner(
+        &self,
+        resource: &SecurityGroupResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "security_group", "tenant_id")
+            .await?;
+        Ok(())
+    }
+
+    async fn validate_route_table_resource_inner(
+        &self,
+        resource: &RouteTableResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_network_exists_inner(&resource.spec.network_id, "route_table", "network_id")
+            .await?;
+        Ok(())
+    }
+
+    async fn validate_port_resource_inner(
+        &self,
+        resource: &PortResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "port", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "port", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::BadRequest(format!(
+                "port tenant_id '{}' must match network '{}' tenant '{}'",
+                resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+            )));
+        }
+
+        if let Some(node_id) = resource.spec.node_id.as_deref() {
+            self.ensure_node_exists_inner(node_id, "port", "node_id")
+                .await?;
+        }
+
+        for security_group_id in &resource.spec.security_group_ids {
+            let security_group = self
+                .ensure_security_group_exists_inner(security_group_id, "port", "security_group_ids")
+                .await?;
+            if security_group.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "port security_group '{}' belongs to tenant '{}' but port belongs to tenant '{}'",
+                    security_group.metadata.id, security_group.spec.tenant_id, resource.spec.tenant_id
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_tenant_delete_allowed_inner(&self, tenant_id: &str) -> Result<(), StoreError> {
+        if let Some(network) = self
+            .networks
+            .list()
+            .await
+            .into_iter()
+            .find(|network| network.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "network",
+                dependent_id: network.metadata.id,
+            });
+        }
+
+        if let Some(port) = self
+            .ports
+            .list()
+            .await
+            .into_iter()
+            .find(|port| port.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "port",
+                dependent_id: port.metadata.id,
+            });
+        }
+
+        if let Some(security_group) = self
+            .security_groups
+            .list()
+            .await
+            .into_iter()
+            .find(|security_group| security_group.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "security_group",
+                dependent_id: security_group.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_node_delete_allowed_inner(&self, node_id: &str) -> Result<(), StoreError> {
+        if let Some(port) = self
+            .ports
+            .list()
+            .await
+            .into_iter()
+            .find(|port| port.spec.node_id.as_deref() == Some(node_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "node",
+                id: node_id.to_string(),
+                dependent_resource: "port",
+                dependent_id: port.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_network_delete_allowed_inner(
+        &self,
+        network_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(port) = self
+            .ports
+            .list()
+            .await
+            .into_iter()
+            .find(|port| port.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "port",
+                dependent_id: port.metadata.id,
+            });
+        }
+
+        if let Some(route_table) = self
+            .route_tables
+            .list()
+            .await
+            .into_iter()
+            .find(|route_table| route_table.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "route_table",
+                dependent_id: route_table.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_network_tenant_change_allowed_inner(
+        &self,
+        network_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(port) = self
+            .ports
+            .list()
+            .await
+            .into_iter()
+            .find(|port| port.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "port",
+                dependent_id: port.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_security_group_delete_allowed_inner(
+        &self,
+        security_group_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(port) = self.ports.list().await.into_iter().find(|port| {
+            port.spec
+                .security_group_ids
+                .iter()
+                .any(|id| id == security_group_id)
+        }) {
+            return Err(StoreError::DependencyConflict {
+                resource: "security_group",
+                id: security_group_id.to_string(),
+                dependent_resource: "port",
+                dependent_id: port.metadata.id,
+            });
+        }
+
+        Ok(())
     }
 
     fn current_generation_inner(&self) -> String {
@@ -547,12 +876,14 @@ impl InMemoryControllerStore {
         last_desired_state: Option<&DesiredStatePublishRecord>,
         last_apply_status: Option<&ApplyStatusReport>,
     ) -> BTreeMap<String, usize> {
-        let Some(last_desired_state) = last_desired_state else {
+        let Some(last_desired_state) =
+            last_desired_state.filter(|state| state.generation == desired_generation)
+        else {
             return BTreeMap::new();
         };
 
-        let Some(last_apply_status) =
-            last_apply_status.filter(|report| report.generation == desired_generation)
+        let Some(last_apply_status) = last_apply_status
+            .filter(|report| report.generation == desired_generation && report.status == "applied")
         else {
             return last_desired_state
                 .object_counts
@@ -574,6 +905,7 @@ impl InMemoryControllerStore {
     }
 
     fn change_summary(
+        desired_generation: &str,
         last_desired_state: Option<&DesiredStatePublishRecord>,
         pending_object_counts: &BTreeMap<String, usize>,
     ) -> (Vec<String>, bool) {
@@ -583,6 +915,7 @@ impl InMemoryControllerStore {
             .cloned()
             .collect::<Vec<_>>();
         let has_deletes = last_desired_state
+            .filter(|state| state.generation == desired_generation)
             .and_then(|state| state.object_counts.get("deletes"))
             .copied()
             .unwrap_or(0)
@@ -613,8 +946,11 @@ impl InMemoryControllerStore {
             last_desired_state.as_ref(),
             last_apply_status.as_ref(),
         );
-        let (changed_kinds, has_deletes) =
-            Self::change_summary(last_desired_state.as_ref(), &pending_object_counts);
+        let (changed_kinds, has_deletes) = Self::change_summary(
+            &desired_generation,
+            last_desired_state.as_ref(),
+            &pending_object_counts,
+        );
 
         SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
@@ -641,7 +977,6 @@ impl InMemoryControllerStore {
             security_groups: self.security_groups.snapshot().await,
             route_tables: self.route_tables.snapshot().await,
             generation: self.generation.load(Ordering::Relaxed),
-            southbound_nodes: self.southbound_nodes.read().await.clone(),
             southbound_publishes: self.southbound_publishes.read().await.clone(),
         }
     }
@@ -655,7 +990,6 @@ impl InMemoryControllerStore {
         self.route_tables.restore(snapshot.route_tables).await;
         self.generation
             .store(snapshot.generation, Ordering::Relaxed);
-        *self.southbound_nodes.write().await = snapshot.southbound_nodes;
         *self.southbound_publishes.write().await = snapshot.southbound_publishes;
     }
 
@@ -1116,51 +1450,237 @@ impl ControllerStore for InMemoryControllerStore {
         self.current_generation_inner()
     }
 
-    impl_resource_methods!(
-        list_tenants,
-        get_tenant,
-        create_tenant,
-        update_tenant,
-        delete_tenant,
-        TenantResource,
-        tenants
-    );
-    impl_resource_methods!(
-        list_networks,
-        get_network,
-        create_network,
-        update_network,
-        delete_network,
-        NetworkResource,
-        networks
-    );
-    impl_resource_methods!(
-        list_ports,
-        get_port,
-        create_port,
-        update_port,
-        delete_port,
-        PortResource,
-        ports
-    );
-    impl_resource_methods!(
-        list_security_groups,
-        get_security_group,
-        create_security_group,
-        update_security_group,
-        delete_security_group,
-        SecurityGroupResource,
-        security_groups
-    );
-    impl_resource_methods!(
-        list_route_tables,
-        get_route_table,
-        create_route_table,
-        update_route_table,
-        delete_route_table,
-        RouteTableResource,
-        route_tables
-    );
+    async fn list_tenants(&self) -> Vec<TenantResource> {
+        self.list_resource(&self.tenants).await
+    }
+
+    async fn get_tenant(&self, id: &str) -> Option<TenantResource> {
+        self.get_resource(&self.tenants, id).await
+    }
+
+    async fn create_tenant(&self, resource: TenantResource) -> Result<TenantResource, StoreError> {
+        self.run_mutation(
+            |inner| async move { inner.create_resource(&inner.tenants, resource).await },
+        )
+        .await
+    }
+
+    async fn update_tenant(
+        &self,
+        id: &str,
+        resource: TenantResource,
+    ) -> Result<TenantResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.update_resource(&inner.tenants, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_tenant(&self, id: &str) -> Result<TenantResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_tenant_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.tenants, id).await
+        })
+        .await
+    }
+
+    async fn list_networks(&self) -> Vec<NetworkResource> {
+        self.list_resource(&self.networks).await
+    }
+
+    async fn get_network(&self, id: &str) -> Option<NetworkResource> {
+        self.get_resource(&self.networks, id).await
+    }
+
+    async fn create_network(
+        &self,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_network_resource_inner(&resource).await?;
+            inner.create_resource(&inner.networks, resource).await
+        })
+        .await
+    }
+
+    async fn update_network(
+        &self,
+        id: &str,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            let existing = inner
+                .networks
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "network",
+                    id: id.to_string(),
+                })?;
+            inner.validate_network_resource_inner(&resource).await?;
+            if existing.spec.tenant_id != resource.spec.tenant_id {
+                inner.ensure_network_tenant_change_allowed_inner(id).await?;
+            }
+            inner.update_resource(&inner.networks, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_network(&self, id: &str) -> Result<NetworkResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_network_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.networks, id).await
+        })
+        .await
+    }
+
+    async fn list_ports(&self) -> Vec<PortResource> {
+        self.list_resource(&self.ports).await
+    }
+
+    async fn get_port(&self, id: &str) -> Option<PortResource> {
+        self.get_resource(&self.ports, id).await
+    }
+
+    async fn create_port(&self, resource: PortResource) -> Result<PortResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_port_resource_inner(&resource).await?;
+            inner.create_resource(&inner.ports, resource).await
+        })
+        .await
+    }
+
+    async fn update_port(
+        &self,
+        id: &str,
+        resource: PortResource,
+    ) -> Result<PortResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .ports
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "port",
+                    id: id.to_string(),
+                })?;
+            inner.validate_port_resource_inner(&resource).await?;
+            inner.update_resource(&inner.ports, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_port(&self, id: &str) -> Result<PortResource, StoreError> {
+        self.run_mutation(|inner| async move { inner.delete_resource(&inner.ports, id).await })
+            .await
+    }
+
+    async fn list_security_groups(&self) -> Vec<SecurityGroupResource> {
+        self.list_resource(&self.security_groups).await
+    }
+
+    async fn get_security_group(&self, id: &str) -> Option<SecurityGroupResource> {
+        self.get_resource(&self.security_groups, id).await
+    }
+
+    async fn create_security_group(
+        &self,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .validate_security_group_resource_inner(&resource)
+                .await?;
+            inner
+                .create_resource(&inner.security_groups, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn update_security_group(
+        &self,
+        id: &str,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            let existing =
+                inner
+                    .security_groups
+                    .get(id)
+                    .await
+                    .ok_or_else(|| StoreError::NotFound {
+                        resource: "security_group",
+                        id: id.to_string(),
+                    })?;
+            inner
+                .validate_security_group_resource_inner(&resource)
+                .await?;
+            if existing.spec.tenant_id != resource.spec.tenant_id {
+                inner.ensure_security_group_delete_allowed_inner(id).await?;
+            }
+            inner
+                .update_resource(&inner.security_groups, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_security_group(&self, id: &str) -> Result<SecurityGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_security_group_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.security_groups, id).await
+        })
+        .await
+    }
+
+    async fn list_route_tables(&self) -> Vec<RouteTableResource> {
+        self.list_resource(&self.route_tables).await
+    }
+
+    async fn get_route_table(&self, id: &str) -> Option<RouteTableResource> {
+        self.get_resource(&self.route_tables, id).await
+    }
+
+    async fn create_route_table(
+        &self,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_route_table_resource_inner(&resource).await?;
+            inner.create_resource(&inner.route_tables, resource).await
+        })
+        .await
+    }
+
+    async fn update_route_table(
+        &self,
+        id: &str,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .route_tables
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "route_table",
+                    id: id.to_string(),
+                })?;
+            inner.validate_route_table_resource_inner(&resource).await?;
+            inner
+                .update_resource(&inner.route_tables, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
+        self.run_mutation(
+            |inner| async move { inner.delete_resource(&inner.route_tables, id).await },
+        )
+        .await
+    }
 
     // `node` keeps a hand-written delete path because removing a node must
     // also purge any cached southbound runtime state keyed by the same ID.
@@ -1185,11 +1705,15 @@ impl ControllerStore for InMemoryControllerStore {
     }
 
     async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
-        let deleted = self.nodes.delete(id).await?;
-        self.clear_southbound_runtime_inner(id).await;
-        self.clear_southbound_publish_inner(id).await;
-        self.bump_generation_inner();
-        Ok(deleted)
+        self.run_mutation(|inner| async move {
+            inner.ensure_node_delete_allowed_inner(id).await?;
+            let deleted = inner.nodes.delete(id).await?;
+            inner.clear_southbound_runtime_inner(id).await;
+            inner.clear_southbound_publish_inner(id).await;
+            inner.bump_generation_inner();
+            Ok(deleted)
+        })
+        .await
     }
 
     async fn record_registration(
@@ -1249,54 +1773,172 @@ impl ControllerStore for FileBackedControllerStore {
         self.inner.current_generation()
     }
 
-    impl_file_backed_resource_methods!(
-        list_tenants,
-        get_tenant,
-        create_tenant,
-        update_tenant,
-        delete_tenant,
-        TenantResource
-    );
-    impl_file_backed_resource_methods!(
-        list_nodes,
-        get_node,
-        create_node,
-        update_node,
-        delete_node,
-        NodeResource
-    );
-    impl_file_backed_resource_methods!(
-        list_networks,
-        get_network,
-        create_network,
-        update_network,
-        delete_network,
-        NetworkResource
-    );
-    impl_file_backed_resource_methods!(
-        list_ports,
-        get_port,
-        create_port,
-        update_port,
-        delete_port,
-        PortResource
-    );
-    impl_file_backed_resource_methods!(
-        list_security_groups,
-        get_security_group,
-        create_security_group,
-        update_security_group,
-        delete_security_group,
-        SecurityGroupResource
-    );
-    impl_file_backed_resource_methods!(
-        list_route_tables,
-        get_route_table,
-        create_route_table,
-        update_route_table,
-        delete_route_table,
-        RouteTableResource
-    );
+    async fn list_tenants(&self) -> Vec<TenantResource> {
+        self.inner.list_tenants().await
+    }
+
+    async fn get_tenant(&self, id: &str) -> Option<TenantResource> {
+        self.inner.get_tenant(id).await
+    }
+
+    async fn create_tenant(&self, resource: TenantResource) -> Result<TenantResource, StoreError> {
+        self.run_persisted(|inner| inner.create_tenant(resource))
+            .await
+    }
+
+    async fn update_tenant(
+        &self,
+        id: &str,
+        resource: TenantResource,
+    ) -> Result<TenantResource, StoreError> {
+        self.run_persisted(|inner| inner.update_tenant(id, resource))
+            .await
+    }
+
+    async fn delete_tenant(&self, id: &str) -> Result<TenantResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_tenant(id)).await
+    }
+
+    async fn list_nodes(&self) -> Vec<NodeResource> {
+        self.inner.list_nodes().await
+    }
+
+    async fn get_node(&self, id: &str) -> Option<NodeResource> {
+        self.inner.get_node(id).await
+    }
+
+    async fn create_node(&self, resource: NodeResource) -> Result<NodeResource, StoreError> {
+        self.run_persisted(|inner| inner.create_node(resource))
+            .await
+    }
+
+    async fn update_node(
+        &self,
+        id: &str,
+        resource: NodeResource,
+    ) -> Result<NodeResource, StoreError> {
+        self.run_persisted(|inner| inner.update_node(id, resource))
+            .await
+    }
+
+    async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_node(id)).await
+    }
+
+    async fn list_networks(&self) -> Vec<NetworkResource> {
+        self.inner.list_networks().await
+    }
+
+    async fn get_network(&self, id: &str) -> Option<NetworkResource> {
+        self.inner.get_network(id).await
+    }
+
+    async fn create_network(
+        &self,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError> {
+        self.run_persisted(|inner| inner.create_network(resource))
+            .await
+    }
+
+    async fn update_network(
+        &self,
+        id: &str,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError> {
+        self.run_persisted(|inner| inner.update_network(id, resource))
+            .await
+    }
+
+    async fn delete_network(&self, id: &str) -> Result<NetworkResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_network(id)).await
+    }
+
+    async fn list_ports(&self) -> Vec<PortResource> {
+        self.inner.list_ports().await
+    }
+
+    async fn get_port(&self, id: &str) -> Option<PortResource> {
+        self.inner.get_port(id).await
+    }
+
+    async fn create_port(&self, resource: PortResource) -> Result<PortResource, StoreError> {
+        self.run_persisted(|inner| inner.create_port(resource))
+            .await
+    }
+
+    async fn update_port(
+        &self,
+        id: &str,
+        resource: PortResource,
+    ) -> Result<PortResource, StoreError> {
+        self.run_persisted(|inner| inner.update_port(id, resource))
+            .await
+    }
+
+    async fn delete_port(&self, id: &str) -> Result<PortResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_port(id)).await
+    }
+
+    async fn list_security_groups(&self) -> Vec<SecurityGroupResource> {
+        self.inner.list_security_groups().await
+    }
+
+    async fn get_security_group(&self, id: &str) -> Option<SecurityGroupResource> {
+        self.inner.get_security_group(id).await
+    }
+
+    async fn create_security_group(
+        &self,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.create_security_group(resource))
+            .await
+    }
+
+    async fn update_security_group(
+        &self,
+        id: &str,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.update_security_group(id, resource))
+            .await
+    }
+
+    async fn delete_security_group(&self, id: &str) -> Result<SecurityGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_security_group(id))
+            .await
+    }
+
+    async fn list_route_tables(&self) -> Vec<RouteTableResource> {
+        self.inner.list_route_tables().await
+    }
+
+    async fn get_route_table(&self, id: &str) -> Option<RouteTableResource> {
+        self.inner.get_route_table(id).await
+    }
+
+    async fn create_route_table(
+        &self,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError> {
+        self.run_persisted(|inner| inner.create_route_table(resource))
+            .await
+    }
+
+    async fn update_route_table(
+        &self,
+        id: &str,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError> {
+        self.run_persisted(|inner| inner.update_route_table(id, resource))
+            .await
+    }
+
+    async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_route_table(id))
+            .await
+    }
 
     async fn record_registration(
         &self,
@@ -1304,7 +1946,8 @@ impl ControllerStore for FileBackedControllerStore {
         info: NodeInfo,
         capability: NodeCapability,
     ) -> Result<SouthboundNodeStatusResponse, StoreError> {
-        self.run_persisted(|inner| inner.record_registration(node_id, info, capability))
+        self.inner
+            .record_registration(node_id, info, capability)
             .await
     }
 
@@ -1313,8 +1956,7 @@ impl ControllerStore for FileBackedControllerStore {
         node_id: &str,
         report: ApplyStatusReport,
     ) -> Result<SouthboundNodeStatusResponse, StoreError> {
-        self.run_persisted(|inner| inner.record_apply_status(node_id, report))
-            .await
+        self.inner.record_apply_status(node_id, report).await
     }
 
     async fn record_health(
@@ -1322,8 +1964,7 @@ impl ControllerStore for FileBackedControllerStore {
         node_id: &str,
         report: NodeHealthReport,
     ) -> Result<SouthboundNodeStatusResponse, StoreError> {
-        self.run_persisted(|inner| inner.record_health(node_id, report))
-            .await
+        self.inner.record_health(node_id, report).await
     }
 
     async fn southbound_status(
@@ -1334,11 +1975,7 @@ impl ControllerStore for FileBackedControllerStore {
     }
 
     async fn clear_southbound_runtime(&self, node_id: &str) -> Result<(), StoreError> {
-        self.run_persisted(|inner| async move {
-            inner.clear_southbound_runtime(node_id).await?;
-            Ok(())
-        })
-        .await
+        self.inner.clear_southbound_runtime(node_id).await
     }
 
     async fn desired_state_for_node(

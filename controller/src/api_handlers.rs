@@ -3,14 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use aria_api::{
     ControllerHealthResponse, CreateNetworkRequest, CreateNodeRequest, CreatePortRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateTenantRequest, MessageResponse,
-    NetworkListQuery, NetworkListResponse, NetworkResource, NetworkSpec, NetworkStatus,
-    NodeCapability, NodeListQuery, NodeListResponse, NodeResource, NodeStatus, PlatformApiError,
-    PortListQuery, PortListResponse, PortResource, PortSpec, PortStatus, ResourceCreateMetadata,
-    ResourceMetadata, ResourceUpdateMetadata, RouteTableListQuery, RouteTableListResponse,
-    RouteTableResource, RouteTableSpec, RouteTableStatus, SecurityGroupListQuery,
-    SecurityGroupListResponse, SecurityGroupResource, SecurityGroupSpec, SecurityGroupStatus,
-    SouthboundNodeStatusResponse, TenantListQuery, TenantListResponse, TenantResource,
-    TenantStatus, UpdateNetworkRequest, UpdateNodeRequest, UpdatePortRequest,
+    NetworkListQuery, NetworkListResponse, NetworkResource, NetworkStatus, NodeCapability,
+    NodeListQuery, NodeListResponse, NodeResource, NodeStatus, PlatformApiError, PortListQuery,
+    PortListResponse, PortResource, PortStatus, ResourceCreateMetadata, ResourceMetadata,
+    ResourceUpdateMetadata, RouteTableListQuery, RouteTableListResponse, RouteTableResource,
+    RouteTableStatus, SecurityGroupListQuery, SecurityGroupListResponse, SecurityGroupResource,
+    SecurityGroupStatus, SouthboundNodeStatusResponse, TenantListQuery, TenantListResponse,
+    TenantResource, TenantStatus, UpdateNetworkRequest, UpdateNodeRequest, UpdatePortRequest,
     UpdateRouteTableRequest, UpdateSecurityGroupRequest, UpdateTenantRequest,
 };
 use axum::{
@@ -57,7 +56,30 @@ impl From<StoreError> for ControllerError {
     fn from(value: StoreError) -> Self {
         match value {
             StoreError::AlreadyExists { resource, id } => Self::Conflict { resource, id },
+            StoreError::BadRequest(message) => Self::BadRequest(message),
+            StoreError::DependencyConflict {
+                resource,
+                id,
+                dependent_resource,
+                dependent_id,
+            } => Self::DependencyConflict {
+                resource,
+                id,
+                dependent_resource,
+                dependent_id,
+            },
             StoreError::Internal(message) => Self::Internal(message),
+            StoreError::InvalidReference {
+                resource,
+                field,
+                value,
+                referenced_resource,
+            } => Self::InvalidReference {
+                resource,
+                field,
+                value,
+                referenced_resource,
+            },
             StoreError::NotFound { resource, id } => Self::NotFound { resource, id },
         }
     }
@@ -435,274 +457,6 @@ async fn enrich_node_resources(
     Ok(enriched)
 }
 
-async fn ensure_tenant_exists(
-    store: &AppState,
-    tenant_id: &str,
-    resource: &'static str,
-    field: &'static str,
-) -> Result<TenantResource, ControllerError> {
-    store
-        .get_tenant(tenant_id)
-        .await
-        .ok_or(ControllerError::InvalidReference {
-            resource,
-            field,
-            value: tenant_id.to_string(),
-            referenced_resource: "tenant",
-        })
-}
-
-async fn ensure_network_exists(
-    store: &AppState,
-    network_id: &str,
-    resource: &'static str,
-    field: &'static str,
-) -> Result<NetworkResource, ControllerError> {
-    store
-        .get_network(network_id)
-        .await
-        .ok_or(ControllerError::InvalidReference {
-            resource,
-            field,
-            value: network_id.to_string(),
-            referenced_resource: "network",
-        })
-}
-
-async fn ensure_node_exists(
-    store: &AppState,
-    node_id: &str,
-    resource: &'static str,
-    field: &'static str,
-) -> Result<NodeResource, ControllerError> {
-    store
-        .get_node(node_id)
-        .await
-        .ok_or(ControllerError::InvalidReference {
-            resource,
-            field,
-            value: node_id.to_string(),
-            referenced_resource: "node",
-        })
-}
-
-async fn ensure_security_group_exists(
-    store: &AppState,
-    security_group_id: &str,
-    resource: &'static str,
-    field: &'static str,
-) -> Result<SecurityGroupResource, ControllerError> {
-    store
-        .get_security_group(security_group_id)
-        .await
-        .ok_or(ControllerError::InvalidReference {
-            resource,
-            field,
-            value: security_group_id.to_string(),
-            referenced_resource: "security_group",
-        })
-}
-
-async fn validate_network_spec(
-    store: &AppState,
-    spec: &NetworkSpec,
-) -> Result<(), ControllerError> {
-    ensure_tenant_exists(store, &spec.tenant_id, "network", "tenant_id").await?;
-    Ok(())
-}
-
-async fn validate_security_group_spec(
-    store: &AppState,
-    spec: &SecurityGroupSpec,
-) -> Result<(), ControllerError> {
-    ensure_tenant_exists(store, &spec.tenant_id, "security_group", "tenant_id").await?;
-    Ok(())
-}
-
-async fn validate_route_table_spec(
-    store: &AppState,
-    spec: &RouteTableSpec,
-) -> Result<(), ControllerError> {
-    ensure_network_exists(store, &spec.network_id, "route_table", "network_id").await?;
-    Ok(())
-}
-
-async fn validate_port_spec(store: &AppState, spec: &PortSpec) -> Result<(), ControllerError> {
-    ensure_tenant_exists(store, &spec.tenant_id, "port", "tenant_id").await?;
-    let network = ensure_network_exists(store, &spec.network_id, "port", "network_id").await?;
-    if network.spec.tenant_id != spec.tenant_id {
-        return Err(ControllerError::BadRequest(format!(
-            "port tenant_id '{}' must match network '{}' tenant '{}'",
-            spec.tenant_id, network.metadata.id, network.spec.tenant_id
-        )));
-    }
-
-    if let Some(node_id) = spec.node_id.as_deref() {
-        ensure_node_exists(store, node_id, "port", "node_id").await?;
-    }
-
-    for security_group_id in &spec.security_group_ids {
-        let security_group =
-            ensure_security_group_exists(store, security_group_id, "port", "security_group_ids")
-                .await?;
-        if security_group.spec.tenant_id != spec.tenant_id {
-            return Err(ControllerError::BadRequest(format!(
-                "port security_group '{}' belongs to tenant '{}' but port belongs to tenant '{}'",
-                security_group.metadata.id, security_group.spec.tenant_id, spec.tenant_id
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-async fn ensure_tenant_delete_allowed(
-    store: &AppState,
-    tenant_id: &str,
-) -> Result<(), ControllerError> {
-    if let Some(network) = store
-        .list_networks()
-        .await
-        .into_iter()
-        .find(|network| network.spec.tenant_id == tenant_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "tenant",
-            id: tenant_id.to_string(),
-            dependent_resource: "network",
-            dependent_id: network.metadata.id,
-        });
-    }
-
-    if let Some(port) = store
-        .list_ports()
-        .await
-        .into_iter()
-        .find(|port| port.spec.tenant_id == tenant_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "tenant",
-            id: tenant_id.to_string(),
-            dependent_resource: "port",
-            dependent_id: port.metadata.id,
-        });
-    }
-
-    if let Some(security_group) = store
-        .list_security_groups()
-        .await
-        .into_iter()
-        .find(|security_group| security_group.spec.tenant_id == tenant_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "tenant",
-            id: tenant_id.to_string(),
-            dependent_resource: "security_group",
-            dependent_id: security_group.metadata.id,
-        });
-    }
-
-    Ok(())
-}
-
-async fn ensure_node_delete_allowed(
-    store: &AppState,
-    node_id: &str,
-) -> Result<(), ControllerError> {
-    if let Some(port) = store
-        .list_ports()
-        .await
-        .into_iter()
-        .find(|port| port.spec.node_id.as_deref() == Some(node_id))
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "node",
-            id: node_id.to_string(),
-            dependent_resource: "port",
-            dependent_id: port.metadata.id,
-        });
-    }
-
-    Ok(())
-}
-
-async fn ensure_network_delete_allowed(
-    store: &AppState,
-    network_id: &str,
-) -> Result<(), ControllerError> {
-    if let Some(port) = store
-        .list_ports()
-        .await
-        .into_iter()
-        .find(|port| port.spec.network_id == network_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "network",
-            id: network_id.to_string(),
-            dependent_resource: "port",
-            dependent_id: port.metadata.id,
-        });
-    }
-
-    if let Some(route_table) = store
-        .list_route_tables()
-        .await
-        .into_iter()
-        .find(|route_table| route_table.spec.network_id == network_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "network",
-            id: network_id.to_string(),
-            dependent_resource: "route_table",
-            dependent_id: route_table.metadata.id,
-        });
-    }
-
-    Ok(())
-}
-
-async fn ensure_network_tenant_change_allowed(
-    store: &AppState,
-    network_id: &str,
-) -> Result<(), ControllerError> {
-    if let Some(port) = store
-        .list_ports()
-        .await
-        .into_iter()
-        .find(|port| port.spec.network_id == network_id)
-    {
-        return Err(ControllerError::DependencyConflict {
-            resource: "network",
-            id: network_id.to_string(),
-            dependent_resource: "port",
-            dependent_id: port.metadata.id,
-        });
-    }
-
-    Ok(())
-}
-
-async fn ensure_security_group_delete_allowed(
-    store: &AppState,
-    security_group_id: &str,
-) -> Result<(), ControllerError> {
-    if let Some(port) = store.list_ports().await.into_iter().find(|port| {
-        port.spec
-            .security_group_ids
-            .iter()
-            .any(|id| id == security_group_id)
-    }) {
-        return Err(ControllerError::DependencyConflict {
-            resource: "security_group",
-            id: security_group_id.to_string(),
-            dependent_resource: "port",
-            dependent_id: port.metadata.id,
-        });
-    }
-
-    Ok(())
-}
-
 #[utoipa::path(
     get,
     path = "/api/v1/health",
@@ -861,7 +615,6 @@ pub async fn delete_tenant(
             resource: "tenant",
             id: id.clone(),
         })?;
-    ensure_tenant_delete_allowed(&store, &id).await?;
     store.delete_tenant(&id).await?;
     Ok(Json(deleted_message("tenant", &id)))
 }
@@ -1014,7 +767,6 @@ pub async fn delete_node(
         resource: "node",
         id: id.clone(),
     })?;
-    ensure_node_delete_allowed(&store, &id).await?;
     store.delete_node(&id).await?;
     Ok(Json(deleted_message("node", &id)))
 }
@@ -1071,7 +823,6 @@ pub async fn create_network(
     State(store): State<AppState>,
     Json(request): Json<CreateNetworkRequest>,
 ) -> Result<(StatusCode, Json<NetworkResource>), ControllerError> {
-    validate_network_spec(&store, &request.spec).await?;
     let resource = NetworkResource {
         metadata: metadata_from_create(request.metadata),
         spec: request.spec,
@@ -1132,10 +883,6 @@ pub async fn update_network(
             resource: "network",
             id: id.clone(),
         })?;
-    validate_network_spec(&store, &request.spec).await?;
-    if existing.spec.tenant_id != request.spec.tenant_id {
-        ensure_network_tenant_change_allowed(&store, &id).await?;
-    }
     let resource = NetworkResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
         spec: request.spec,
@@ -1169,7 +916,6 @@ pub async fn delete_network(
             resource: "network",
             id: id.clone(),
         })?;
-    ensure_network_delete_allowed(&store, &id).await?;
     store.delete_network(&id).await?;
     Ok(Json(deleted_message("network", &id)))
 }
@@ -1231,7 +977,6 @@ pub async fn create_port(
     State(store): State<AppState>,
     Json(request): Json<CreatePortRequest>,
 ) -> Result<(StatusCode, Json<PortResource>), ControllerError> {
-    validate_port_spec(&store, &request.spec).await?;
     let resource = PortResource {
         metadata: metadata_from_create(request.metadata),
         spec: request.spec,
@@ -1286,7 +1031,6 @@ pub async fn update_port(
         resource: "port",
         id: id.clone(),
     })?;
-    validate_port_spec(&store, &request.spec).await?;
     let resource = PortResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
         spec: request.spec,
@@ -1368,7 +1112,6 @@ pub async fn create_security_group(
     State(store): State<AppState>,
     Json(request): Json<CreateSecurityGroupRequest>,
 ) -> Result<(StatusCode, Json<SecurityGroupResource>), ControllerError> {
-    validate_security_group_spec(&store, &request.spec).await?;
     let rule_count = request.spec.rules.len();
     let resource = SecurityGroupResource {
         metadata: metadata_from_create(request.metadata),
@@ -1430,10 +1173,6 @@ pub async fn update_security_group(
             resource: "security_group",
             id: id.clone(),
         })?;
-    validate_security_group_spec(&store, &request.spec).await?;
-    if existing.spec.tenant_id != request.spec.tenant_id {
-        ensure_security_group_delete_allowed(&store, &id).await?;
-    }
     let rule_count = request.spec.rules.len();
     let resource = SecurityGroupResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
@@ -1471,7 +1210,6 @@ pub async fn delete_security_group(
             resource: "security_group",
             id: id.clone(),
         })?;
-    ensure_security_group_delete_allowed(&store, &id).await?;
     store.delete_security_group(&id).await?;
     Ok(Json(deleted_message("security_group", &id)))
 }
@@ -1528,7 +1266,6 @@ pub async fn create_route_table(
     State(store): State<AppState>,
     Json(request): Json<CreateRouteTableRequest>,
 ) -> Result<(StatusCode, Json<RouteTableResource>), ControllerError> {
-    validate_route_table_spec(&store, &request.spec).await?;
     let resource = RouteTableResource {
         metadata: metadata_from_create(request.metadata),
         spec: request.spec,
@@ -1589,7 +1326,6 @@ pub async fn update_route_table(
             resource: "route_table",
             id: id.clone(),
         })?;
-    validate_route_table_spec(&store, &request.spec).await?;
     let resource = RouteTableResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
         spec: request.spec,

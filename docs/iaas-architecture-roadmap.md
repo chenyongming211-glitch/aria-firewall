@@ -46,6 +46,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - `Node` 列表已开始支持按 `sync_state` 过滤，可直接筛选 `pending / out_of_sync / in_sync / failed / degraded` 节点
 - northbound 已提供 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 与响应头对齐
 - controller 已提供第一版对象关系校验与删除保护：校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`
+- 一阶引用校验与删除保护现已收进 store mutation 边界内，避免 northbound handler 先校验、再写入的 TOCTOU 窗口
 - 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`
 - southbound 已开始记录 per-node desired-state publish 摘要，可作为后续 apply/reconcile 的控制面对照基线
 - southbound `status` 已开始派生 node 级 `sync_status`，为后续 reconcile / rollout 判断提供统一状态面
@@ -53,6 +54,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - southbound `status` 已开始提供 `changed_kinds / has_deletes`，用于轻量表达当前仍待 reconcile 的资源种类和是否包含删除
 - northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / last_publish_summary / pending_object_counts / changed_kinds / has_deletes / sync_status`
 - controller 已通过 store trait 隔离存储边界，并新增可选的文件快照 backend；默认实现仍为内存版
+- file-backed controller 已把 `registration / apply-status / heartbeat / health` 明确为内存态运行状态，不再在每次心跳时重写整份 controller 快照
 
 当前实现仍不包含：
 
