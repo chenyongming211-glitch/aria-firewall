@@ -71,9 +71,29 @@ struct CompiledNodeState {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReconcileAction {
+    domain: String,
+    operation: String,
+    object_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReconcilePlan {
+    generation: String,
+    previous_generation: Option<String>,
+    compiled_at: String,
+    full_reconcile: bool,
+    changed_kinds: Vec<String>,
+    actions: Vec<ReconcileAction>,
+    warnings: Vec<String>,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
+    reconcile_plan: ReconcilePlan,
     apply_report: ApplyStatusReport,
 }
 
@@ -82,6 +102,7 @@ struct CompilerContext<'a> {
     node_id: &'a str,
     desired: &'a DesiredStateEnvelope,
     capability: &'a NodeCapability,
+    previous_compiled_state: Option<&'a CompiledNodeState>,
 }
 
 struct SouthboundClient {
@@ -131,6 +152,7 @@ impl PlatformAgent {
         let mut last_register_response: Option<NodeRegisterResponse> = None;
         let mut desired_cache = self.state_store.load_desired_state().await;
         let mut compiled_state = self.state_store.load_compiled_state().await;
+        let mut reconcile_plan = self.state_store.load_reconcile_plan().await;
         loop {
             interval.tick().await;
 
@@ -220,6 +242,7 @@ impl PlatformAgent {
                     node_id: &self.config.node_id,
                     desired: &desired_state,
                     capability: &self.capability,
+                    previous_compiled_state: compiled_state.as_ref(),
                 });
                 attached_ports = outcome.compiled_state.port_bindings.len();
                 last_reconcile_at = Some(outcome.compiled_state.compiled_at.clone());
@@ -233,6 +256,24 @@ impl PlatformAgent {
                     heartbeat_error = Some(error);
                 } else {
                     compiled_state = Some(outcome.compiled_state.clone());
+                }
+
+                if let Err(error) = self
+                    .state_store
+                    .save_reconcile_plan(&outcome.reconcile_plan)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist reconcile plan");
+                    heartbeat_error = Some(error);
+                } else {
+                    reconcile_plan = Some(outcome.reconcile_plan.clone());
+                    info!(
+                        generation = %outcome.reconcile_plan.generation,
+                        full_reconcile = outcome.reconcile_plan.full_reconcile,
+                        actions = outcome.reconcile_plan.actions.len(),
+                        changed_kinds = outcome.reconcile_plan.changed_kinds.len(),
+                        "persisted shadow reconcile plan"
+                    );
                 }
 
                 if let Err(error) = self
@@ -251,6 +292,10 @@ impl PlatformAgent {
                         "reported southbound compile/apply status"
                     );
                 }
+            }
+
+            if !needs_compile {
+                last_reconcile_at = reconcile_plan.as_ref().map(|plan| plan.compiled_at.clone());
             }
 
             if let Err(error) = self
@@ -441,12 +486,24 @@ impl LocalPlatformStateStore {
         self.save_json(self.compiled_state_path(), state).await
     }
 
+    async fn load_reconcile_plan(&self) -> Option<ReconcilePlan> {
+        self.load_json(self.reconcile_plan_path()).await
+    }
+
+    async fn save_reconcile_plan(&self, plan: &ReconcilePlan) -> Result<(), String> {
+        self.save_json(self.reconcile_plan_path(), plan).await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
 
     fn compiled_state_path(&self) -> PathBuf {
         self.root.join("compiled-node-state.json")
+    }
+
+    fn reconcile_plan_path(&self) -> PathBuf {
+        self.root.join("reconcile-plan.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -696,6 +753,11 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         compiled_at: compiled_at.clone(),
         shadow_apply_only: true,
     };
+    let reconcile_plan = build_reconcile_plan(
+        context.previous_compiled_state,
+        &compiled_state,
+        warnings.clone(),
+    );
 
     let status = if failed_objects.is_empty() {
         "partial".to_string()
@@ -707,6 +769,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
 
     CompileOutcome {
         compiled_state,
+        reconcile_plan,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -716,6 +779,156 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             warnings,
             degraded_reasons,
         },
+    }
+}
+
+fn build_reconcile_plan(
+    previous_state: Option<&CompiledNodeState>,
+    next_state: &CompiledNodeState,
+    warnings: Vec<String>,
+) -> ReconcilePlan {
+    let previous_port_ids = previous_state
+        .map(|state| {
+            state
+                .port_bindings
+                .iter()
+                .map(|binding| binding.port_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_port_ids = next_state
+        .port_bindings
+        .iter()
+        .map(|binding| binding.port_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let previous_route_table_ids = previous_state
+        .map(|state| {
+            state
+                .route_tables
+                .iter()
+                .map(|route_table| route_table.route_table_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_route_table_ids = next_state
+        .route_tables
+        .iter()
+        .map(|route_table| route_table.route_table_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let ports_removed = previous_port_ids.difference(&next_port_ids).count();
+    let route_tables_removed = previous_route_table_ids
+        .difference(&next_route_table_ids)
+        .count();
+
+    let previous_generation = previous_state.map(|state| state.generation.clone());
+    let full_reconcile = previous_state
+        .map(|state| {
+            state.generation != next_state.generation
+                || state.capability_profile != next_state.capability_profile
+                || state.full_sync
+                || next_state.full_sync
+        })
+        .unwrap_or(true);
+
+    let mut changed_kinds = Vec::new();
+    if previous_state.is_none()
+        || next_state.port_bindings.len()
+            != previous_state
+                .map(|state| state.port_bindings.len())
+                .unwrap_or(0)
+        || ports_removed > 0
+    {
+        changed_kinds.push("ports".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.route_tables.len()
+            != previous_state
+                .map(|state| state.route_tables.len())
+                .unwrap_or(0)
+        || route_tables_removed > 0
+    {
+        changed_kinds.push("route_tables".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.security_group_ids
+            != previous_state
+                .map(|state| state.security_group_ids.clone())
+                .unwrap_or_default()
+    {
+        changed_kinds.push("security_groups".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.network_ids
+            != previous_state
+                .map(|state| state.network_ids.clone())
+                .unwrap_or_default()
+    {
+        changed_kinds.push("networks".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.tenant_ids
+            != previous_state
+                .map(|state| state.tenant_ids.clone())
+                .unwrap_or_default()
+    {
+        changed_kinds.push("tenants".to_string());
+    }
+
+    let mut actions = Vec::new();
+    if full_reconcile {
+        actions.push(ReconcileAction {
+            domain: "core".to_string(),
+            operation: "full_shadow_reconcile".to_string(),
+            object_count: next_state.port_bindings.len() + next_state.route_tables.len(),
+        });
+    }
+    if !next_state.port_bindings.is_empty() {
+        actions.push(ReconcileAction {
+            domain: "ports".to_string(),
+            operation: "refresh_shadow_bindings".to_string(),
+            object_count: next_state.port_bindings.len(),
+        });
+    }
+    if ports_removed > 0 {
+        actions.push(ReconcileAction {
+            domain: "ports".to_string(),
+            operation: "cleanup_shadow_bindings".to_string(),
+            object_count: ports_removed,
+        });
+    }
+    if !next_state.route_tables.is_empty() {
+        actions.push(ReconcileAction {
+            domain: "routes".to_string(),
+            operation: "refresh_shadow_routes".to_string(),
+            object_count: next_state.route_tables.len(),
+        });
+    }
+    if route_tables_removed > 0 {
+        actions.push(ReconcileAction {
+            domain: "routes".to_string(),
+            operation: "cleanup_shadow_routes".to_string(),
+            object_count: route_tables_removed,
+        });
+    }
+    if !next_state.security_group_ids.is_empty() {
+        actions.push(ReconcileAction {
+            domain: "security".to_string(),
+            operation: "refresh_shadow_security".to_string(),
+            object_count: next_state.security_group_ids.len(),
+        });
+    }
+
+    ReconcilePlan {
+        generation: next_state.generation.clone(),
+        previous_generation,
+        compiled_at: next_state.compiled_at.clone(),
+        full_reconcile,
+        changed_kinds,
+        actions,
+        warnings,
+        shadow_apply_only: true,
     }
 }
 
