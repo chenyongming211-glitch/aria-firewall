@@ -66,6 +66,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow 骨架，为后续节点内转发与跨节点转发的 L4 service datapath 提供稳定局部输入，但当前仍只保留在本地 shadow state 中
 - `services` 域的 `RuntimePlan / RuntimeInventory` 现已开始把 runtime map family 细化为 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection`，为后续节点内转发与跨节点转发的 L4 runtime materialization 预留更稳定的规划边界
 - agent 本地的 `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分节点内与跨节点转发方向，作为后续 rollout、diagnose 与 runtime apply 的前置视图
+- L4 LB 的下一阶段实现路线现已冻结为：`ServiceFrontendMap -> BackendMemberMap -> RevNat/Affinity/Maglev 预留 -> node-local socket LB -> tc packet LB -> cross-node handoff`；`routing / NAT / FIP` 仍然只作为不阻塞 service 主路径的协同能力
 
 当前实现仍不包含：
 

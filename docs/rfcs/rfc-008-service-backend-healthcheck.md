@@ -284,7 +284,238 @@ Service 模型 v1 的验收标准：
 - `RFC-008B` health check execution
 - `RFC-008C` session affinity model
 
-## 16. 当前实现状态
+## 16. 参考实现研究（Cilium）
+
+为避免在 L4 LB 上重复踩坑，Aria 的 service datapath 设计应显式借鉴 Cilium 已验证的分层模式。
+
+参考入口：
+
+- [Cilium kube-proxy-free 文档](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/)
+- [Cilium eBPF map 文档](https://docs.cilium.io/en/latest/network/ebpf/maps/)
+- [bpf/lib/lb.h](https://github.com/cilium/cilium/blob/main/bpf/lib/lb.h)
+- [bpf/bpf_sock.c](https://github.com/cilium/cilium/blob/main/bpf/bpf_sock.c)
+- [pkg/loadbalancer/maps/lbmaps.go](https://github.com/cilium/cilium/blob/main/pkg/loadbalancer/maps/lbmaps.go)
+- [pkg/loadbalancer/service.go](https://github.com/cilium/cilium/blob/main/pkg/loadbalancer/service.go)
+- [pkg/loadbalancer/loadbalancer.go](https://github.com/cilium/cilium/blob/main/pkg/loadbalancer/loadbalancer.go)
+
+从这些实现中，Aria 当前最值得直接借鉴的点有 7 个：
+
+1. Service datapath 不是“一个大 map”，而是一组职责明确的 map / state family：
+   - frontend/service map
+   - backend/member map
+   - reverse NAT map
+   - affinity map
+   - affinity match map
+   - Maglev lookup table
+   - socket reverse NAT map
+2. 前端匹配与后端选择分离。frontend key 先表达 VIP/port/proto/scope，再通过 backend slot 或 backend id 找后端。
+3. 会话保持不是直接绑在 service key 上，而是围绕 `rev_nat_id + client identity` 建立 affinity state。
+4. Maglev 不替代 backend map，而是单独维护 lookup table；backend 变化和算法表变化可以分开更新。
+5. Socket LB 与 packet LB 分层：
+   - socket path 解决本机 connect/sendmsg/recvmsg 的低开销转译
+   - packet path 解决非 socket 场景、外部流量、NodePort/LoadBalancer/跨节点 handoff
+6. 跨节点转发不是另一套 Service 模型，而是“backend 选中后，根据 forwarding mode 决定 node-local 还是 cross-node handoff”。
+7. 健康检查与后端可用性分离。健康检查产出的是 backend 可用视图，而不是直接写死在 frontend 逻辑里。
+
+## 17. Aria 的可落地实现方案
+
+基于上面的参考实现，Aria 的 L4 LB 建议拆成以下 8 个稳定部件。后续代码必须围绕这些部件推进，而不是把 service 功能继续堆进一个泛化的 runtime map。
+
+### 17.1 ServiceFrontendMap
+
+职责：
+
+- 用 `vip + port + proto + scope` 定位一个 service frontend
+- 承载 `lb_policy / session_affinity / forwarding_mode / backend_set_id / rev_nat_id`
+- 不直接保存健康后端列表
+
+Aria 对应：
+
+- 来源于 `ServiceIR.frontend`
+- 当前 `service_catalog + service_frontend_catalog` 是其 shadow 骨架
+
+### 17.2 BackendMemberMap
+
+职责：
+
+- 保存 backend member 的稳定 ID、地址、port、weight、node_id、locality
+- 不与 frontend key 混写
+
+Aria 对应：
+
+- 来源于 `BackendSetIR.backends`
+- 当前 `backend_member_catalog` 是其 shadow 骨架
+
+### 17.3 ReverseNatMap
+
+职责：
+
+- 记录 service frontend 到后端后的 revnat 索引
+- 为 packet path 的返回流恢复 service 语义
+
+Aria 建议：
+
+- 先做 `service_revnat_map` shadow 预留
+- 在真正 packet datapath materialization 阶段接入
+
+### 17.4 AffinityMap / AffinityMatchMap
+
+职责：
+
+- `AffinityMap` 记录 `client -> backend` 的粘滞关系
+- `AffinityMatchMap` 记录 backend 是否仍属于当前 service 的合法成员
+
+Aria 建议：
+
+- 第一版先只支持 `none` 和 `client_ip`
+- 第二版再补 `5tuple`
+- 在没有 packet datapath 前，可以先只在 shadow state 中保留结构和预算
+
+### 17.5 MaglevMap
+
+职责：
+
+- 作为独立查表结构维护一致性哈希
+- 与 frontend/member map 分离，方便增量重建
+
+Aria 建议：
+
+- 第一版 L4 LB 算法只实现：
+  - `random`
+  - `maglev`
+- `hash_5tuple` 与 `hash_src_ip` 先作为 control-plane 语义保留，可在后续映射到 Maglev 输入或普通哈希
+
+### 17.6 Socket LB Path
+
+职责：
+
+- 处理节点内 connect/sendmsg/recvmsg 的低开销转译
+- 优先覆盖 node-local service 命中
+
+Aria 建议：
+
+- 第一阶段先做 TCP/UDP socket connect/sendmsg fast path
+- socket path 只负责 frontend 查找、backend 选择、sock revnat
+- 如果命中 cross-node backend，只生成 handoff 所需的本地转发表达，不在 socket hook 里硬做复杂跨节点处理
+
+### 17.7 Packet LB Path
+
+职责：
+
+- 处理外部流量、非 socket 场景、NodePort/LoadBalancer/FIP 入口
+- 负责真正的包级 rewrite、revnat、跨节点 handoff
+
+Aria 建议：
+
+- 先以 `tc ingress/egress` 为主战场
+- 第一阶段不要把 service LB 直接压到 XDP
+- 等 packet path 稳定后，再评估是否把早期 frontend 命中或 no-backend fast fail 下沉到 XDP
+
+### 17.8 Forwarding Projection
+
+职责：
+
+- 把 backend 选中结果投影成两类稳定路径：
+  - `node_local`
+  - `cross_node`
+
+Aria 建议：
+
+- `service_forwarding_projection` 作为正式 runtime family 保留
+- 其中必须显式表达：
+  - `forwarding_scope`
+  - `forwarding_mode`
+  - `handoff_target`
+  - `needs_revnat`
+- 这一步不要与 NAT/FIP 直接耦合；NAT/FIP 只作为后续入口来源，而不是 service datapath 的前置条件
+
+## 18. 具体落地顺序
+
+Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler、runtime、packet datapath 和 observability。
+
+### 18.1 第一步：完成 service shadow IR
+
+目标：
+
+- 稳定 `ServiceIR / BackendSetIR / HealthCheckIR`
+- 稳定 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection`
+- 稳定 `service_intent / service_execution`
+
+状态：
+
+- 这一步已经在进行中
+
+### 18.2 第二步：补第一版 service runtime family
+
+目标：
+
+- `service_frontend_map`
+- `backend_member_map`
+- `service_revnat_map`（先 shadow 预留）
+- `service_affinity_map`（先 shadow 预留）
+- `service_maglev_map`（先 shadow 预留）
+
+要求：
+
+- 仍然先不进入真实 datapath
+- 先把 map family 和 object count / runtime budget 钉死
+
+### 18.3 第三步：实现 node-local socket LB
+
+目标：
+
+- 对本机 connect/sendmsg/recvmsg 的 service VIP 命中做转译
+- 支持 `random / maglev`
+- 支持 `session_affinity = none/client_ip`
+
+验收：
+
+- 节点内 service 命中成功转后端
+- 本地 runtime execution summary 能解释 backend 选择
+
+### 18.4 第四步：实现 tc packet LB
+
+目标：
+
+- 为非 socket 场景和外部入口提供 packet path
+- 接入 `service_revnat_map`
+- 生成 `lb_event`
+
+验收：
+
+- 同一 service frontend 在 socket path 与 packet path 上的 backend 选择语义一致
+
+### 18.5 第五步：实现 cross-node forwarding handoff
+
+目标：
+
+- 让 selected backend 为 remote 时，转为 `cross_node` handoff
+- 与 Route Domain 协同，但不要求 Route/NAT 先完成全部功能
+
+要求：
+
+- service datapath 必须先能独立表达 cross-node handoff
+- 不允许因为 NAT/FIP 未完成而阻塞 service 主路径
+
+### 18.6 第六步：接健康检查与 session affinity 正式运行态
+
+目标：
+
+- 健康检查结果进入 backend 可用视图
+- session affinity 进入正式 map/state
+
+### 18.7 第七步：接 ServiceChain 与 Diagnose
+
+目标：
+
+- Service 作为 chain hop 或 chain 入口
+- `diagnose` 能输出：
+  - 命中了哪个 service
+  - 为什么选这个 backend
+  - 是 node-local 还是 cross-node
+  - 健康状态是否影响了选择
+
+## 19. Aria 当前实现状态
 
 截至 `2026-04-09`，仓库已经完成 `RFC-008` 的第一阶段对象层落地：
 

@@ -318,6 +318,20 @@ MapPlan 描述 runtime map 更新计划。
 - Backend
 - HealthCheck projection
 
+建议进一步拆为：
+
+- `ServiceFrontendMap`
+- `BackendMemberMap`
+- `ServiceRevNatMap`
+- `ServiceAffinityMap`
+- `ServiceMaglevMap`
+- `ServiceForwardingProjection`
+
+并在执行路径上显式区分：
+
+- `socket lb path`
+- `packet lb path`
+
 ### 10.6 Chain Domain
 
 负责：
