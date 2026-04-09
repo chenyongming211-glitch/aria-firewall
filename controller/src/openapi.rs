@@ -98,6 +98,7 @@ use utoipa::OpenApi;
             aria_api::NodeRegisterRequest,
             aria_api::NodeRegisterResponse,
             aria_api::DesiredStateDeleteRef,
+            aria_api::DesiredStatePublishRecord,
             aria_api::DesiredStateEnvelope,
             aria_api::ApplyObjectFailure,
             aria_api::ApplyStatusReport,
@@ -163,6 +164,9 @@ mod tests {
             .pointer("/components/schemas/DesiredStateEnvelope")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/DesiredStatePublishRecord")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/NodeRegisterRequest")
             .is_some());
         assert!(doc
@@ -211,5 +215,10 @@ mod tests {
         assert!(port_params.iter().any(|param| {
             param.get("name").and_then(|value| value.as_str()) == Some("node_id")
         }));
+        assert!(doc
+            .pointer(
+                "/components/schemas/SouthboundNodeStatusResponse/properties/last_desired_state"
+            )
+            .is_some());
     }
 }

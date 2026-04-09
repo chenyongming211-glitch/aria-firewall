@@ -1,7 +1,8 @@
 use aria_api::{
-    ApplyStatusReport, DesiredStateEnvelope, NetworkResource, NodeCapability, NodeHealthReport,
-    NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
-    RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse, TenantResource,
+    ApplyStatusReport, DesiredStateEnvelope, DesiredStatePublishRecord, NetworkResource,
+    NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource,
+    ResourceMetadata, RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse,
+    TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,8 @@ struct PersistedControllerState {
     route_tables: PersistedResourceStore<RouteTableResource>,
     generation: u64,
     southbound_nodes: BTreeMap<String, SouthboundNodeRuntime>,
+    #[serde(default)]
+    southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
 }
 
 #[async_trait]
@@ -314,6 +317,7 @@ pub struct InMemoryControllerStore {
     pub route_tables: ResourceStore<RouteTableResource>,
     generation: AtomicU64,
     southbound_nodes: RwLock<BTreeMap<String, SouthboundNodeRuntime>>,
+    southbound_publishes: RwLock<BTreeMap<String, DesiredStatePublishRecord>>,
 }
 
 impl InMemoryControllerStore {
@@ -327,6 +331,7 @@ impl InMemoryControllerStore {
             route_tables: ResourceStore::new("route_table", "rt"),
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
+            southbound_publishes: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -402,6 +407,51 @@ impl InMemoryControllerStore {
         self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn desired_state_object_counts(
+        tenants: &[TenantResource],
+        networks: &[NetworkResource],
+        ports: &[PortResource],
+        security_groups: &[SecurityGroupResource],
+        route_tables: &[RouteTableResource],
+        deletes: usize,
+    ) -> BTreeMap<String, usize> {
+        BTreeMap::from([
+            ("tenants".to_string(), tenants.len()),
+            ("networks".to_string(), networks.len()),
+            ("ports".to_string(), ports.len()),
+            ("security_groups".to_string(), security_groups.len()),
+            ("route_tables".to_string(), route_tables.len()),
+            ("deletes".to_string(), deletes),
+        ])
+    }
+
+    async fn published_desired_state(
+        &self,
+        node_id: &str,
+        generation: &str,
+        full_sync: bool,
+        object_counts: &BTreeMap<String, usize>,
+    ) -> (DesiredStatePublishRecord, bool) {
+        let mut publishes = self.southbound_publishes.write().await;
+        if let Some(existing) = publishes.get(node_id) {
+            if existing.generation == generation
+                && existing.full_sync == full_sync
+                && existing.object_counts == *object_counts
+            {
+                return (existing.clone(), false);
+            }
+        }
+
+        let record = DesiredStatePublishRecord {
+            generation: generation.to_string(),
+            issued_at: unix_timestamp_string(),
+            full_sync,
+            object_counts: object_counts.clone(),
+        };
+        publishes.insert(node_id.to_string(), record.clone());
+        (record, true)
+    }
+
     async fn snapshot_state(&self) -> PersistedControllerState {
         PersistedControllerState {
             tenants: self.tenants.snapshot().await,
@@ -412,6 +462,7 @@ impl InMemoryControllerStore {
             route_tables: self.route_tables.snapshot().await,
             generation: self.generation.load(Ordering::Relaxed),
             southbound_nodes: self.southbound_nodes.read().await.clone(),
+            southbound_publishes: self.southbound_publishes.read().await.clone(),
         }
     }
 
@@ -425,6 +476,7 @@ impl InMemoryControllerStore {
         self.generation
             .store(snapshot.generation, Ordering::Relaxed);
         *self.southbound_nodes.write().await = snapshot.southbound_nodes;
+        *self.southbound_publishes.write().await = snapshot.southbound_publishes;
     }
 
     async fn record_registration_inner(
@@ -443,27 +495,38 @@ impl InMemoryControllerStore {
 
         let now = unix_timestamp_string();
         let registration = NodeRegisterRequest { info, capability };
-        let mut states = self.southbound_nodes.write().await;
-        let entry = states
-            .entry(node_id.to_string())
-            .or_insert_with(|| SouthboundNodeRuntime {
-                registration: None,
-                last_apply_status: None,
-                last_health: None,
-                last_applied_generation: None,
-                last_seen_at: now.clone(),
-            });
-        entry.registration = Some(registration.clone());
-        entry.last_seen_at = now;
+        let (last_applied_generation, last_seen_at, last_apply_status, last_health) = {
+            let mut states = self.southbound_nodes.write().await;
+            let entry =
+                states
+                    .entry(node_id.to_string())
+                    .or_insert_with(|| SouthboundNodeRuntime {
+                        registration: None,
+                        last_apply_status: None,
+                        last_health: None,
+                        last_applied_generation: None,
+                        last_seen_at: now.clone(),
+                    });
+            entry.registration = Some(registration.clone());
+            entry.last_seen_at = now;
+            (
+                entry.last_applied_generation.clone(),
+                entry.last_seen_at.clone(),
+                entry.last_apply_status.clone(),
+                entry.last_health.clone(),
+            )
+        };
+        let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
-            last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: Some(entry.last_seen_at.clone()),
+            last_applied_generation,
+            last_seen_at: Some(last_seen_at),
+            last_desired_state,
             registration: Some(registration),
-            last_apply_status: entry.last_apply_status.clone(),
-            last_health: entry.last_health.clone(),
+            last_apply_status,
+            last_health,
         })
     }
 
@@ -481,28 +544,40 @@ impl InMemoryControllerStore {
             })?;
 
         let now = unix_timestamp_string();
-        let mut states = self.southbound_nodes.write().await;
-        let entry = states
-            .entry(node_id.to_string())
-            .or_insert_with(|| SouthboundNodeRuntime {
-                registration: None,
-                last_apply_status: None,
-                last_health: None,
-                last_applied_generation: None,
-                last_seen_at: now.clone(),
-            });
-        entry.last_applied_generation = Some(report.generation.clone());
-        entry.last_apply_status = Some(report);
-        entry.last_seen_at = now;
+        let (last_applied_generation, last_seen_at, registration, last_apply_status, last_health) = {
+            let mut states = self.southbound_nodes.write().await;
+            let entry =
+                states
+                    .entry(node_id.to_string())
+                    .or_insert_with(|| SouthboundNodeRuntime {
+                        registration: None,
+                        last_apply_status: None,
+                        last_health: None,
+                        last_applied_generation: None,
+                        last_seen_at: now.clone(),
+                    });
+            entry.last_applied_generation = Some(report.generation.clone());
+            entry.last_apply_status = Some(report);
+            entry.last_seen_at = now;
+            (
+                entry.last_applied_generation.clone(),
+                entry.last_seen_at.clone(),
+                entry.registration.clone(),
+                entry.last_apply_status.clone(),
+                entry.last_health.clone(),
+            )
+        };
+        let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
-            last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: Some(entry.last_seen_at.clone()),
-            registration: entry.registration.clone(),
-            last_apply_status: entry.last_apply_status.clone(),
-            last_health: entry.last_health.clone(),
+            last_applied_generation,
+            last_seen_at: Some(last_seen_at),
+            last_desired_state,
+            registration,
+            last_apply_status,
+            last_health,
         })
     }
 
@@ -520,27 +595,39 @@ impl InMemoryControllerStore {
             })?;
 
         let now = unix_timestamp_string();
-        let mut states = self.southbound_nodes.write().await;
-        let entry = states
-            .entry(node_id.to_string())
-            .or_insert_with(|| SouthboundNodeRuntime {
-                registration: None,
-                last_apply_status: None,
-                last_health: None,
-                last_applied_generation: None,
-                last_seen_at: now.clone(),
-            });
-        entry.last_health = Some(report);
-        entry.last_seen_at = now;
+        let (last_applied_generation, last_seen_at, registration, last_apply_status, last_health) = {
+            let mut states = self.southbound_nodes.write().await;
+            let entry =
+                states
+                    .entry(node_id.to_string())
+                    .or_insert_with(|| SouthboundNodeRuntime {
+                        registration: None,
+                        last_apply_status: None,
+                        last_health: None,
+                        last_applied_generation: None,
+                        last_seen_at: now.clone(),
+                    });
+            entry.last_health = Some(report);
+            entry.last_seen_at = now;
+            (
+                entry.last_applied_generation.clone(),
+                entry.last_seen_at.clone(),
+                entry.registration.clone(),
+                entry.last_apply_status.clone(),
+                entry.last_health.clone(),
+            )
+        };
+        let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
-            last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: Some(entry.last_seen_at.clone()),
-            registration: entry.registration.clone(),
-            last_apply_status: entry.last_apply_status.clone(),
-            last_health: entry.last_health.clone(),
+            last_applied_generation,
+            last_seen_at: Some(last_seen_at),
+            last_desired_state,
+            registration,
+            last_apply_status,
+            last_health,
         })
     }
 
@@ -556,6 +643,7 @@ impl InMemoryControllerStore {
                 id: node_id.to_string(),
             })?;
 
+        let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
         let states = self.southbound_nodes.read().await;
         if let Some(entry) = states.get(node_id) {
             Ok(SouthboundNodeStatusResponse {
@@ -563,6 +651,7 @@ impl InMemoryControllerStore {
                 desired_generation: self.current_generation_inner(),
                 last_applied_generation: entry.last_applied_generation.clone(),
                 last_seen_at: Some(entry.last_seen_at.clone()),
+                last_desired_state,
                 registration: entry.registration.clone(),
                 last_apply_status: entry.last_apply_status.clone(),
                 last_health: entry.last_health.clone(),
@@ -573,6 +662,7 @@ impl InMemoryControllerStore {
                 desired_generation: self.current_generation_inner(),
                 last_applied_generation: None,
                 last_seen_at: None,
+                last_desired_state,
                 registration: None,
                 last_apply_status: None,
                 last_health: None,
@@ -584,10 +674,14 @@ impl InMemoryControllerStore {
         self.southbound_nodes.write().await.remove(node_id);
     }
 
+    async fn clear_southbound_publish_inner(&self, node_id: &str) {
+        self.southbound_publishes.write().await.remove(node_id);
+    }
+
     async fn desired_state_for_node_inner(
         &self,
         node_id: &str,
-    ) -> Result<DesiredStateEnvelope, StoreError> {
+    ) -> Result<(DesiredStateEnvelope, bool), StoreError> {
         self.nodes
             .get(node_id)
             .await
@@ -650,18 +744,35 @@ impl InMemoryControllerStore {
             .filter(|tenant| tenant_ids.contains(&tenant.metadata.id))
             .collect::<Vec<_>>();
 
-        Ok(DesiredStateEnvelope {
-            generation: self.current_generation_inner(),
-            full_sync: true,
-            issued_at: unix_timestamp_string(),
-            node_id: node_id.to_string(),
-            tenants,
-            networks,
-            ports,
-            security_groups,
-            route_tables,
-            deletes: Vec::new(),
-        })
+        let object_counts = Self::desired_state_object_counts(
+            &tenants,
+            &networks,
+            &ports,
+            &security_groups,
+            &route_tables,
+            0,
+        );
+        let generation = self.current_generation_inner();
+        let (publish, changed) = self
+            .published_desired_state(node_id, &generation, true, &object_counts)
+            .await;
+
+        Ok((
+            DesiredStateEnvelope {
+                generation: publish.generation.clone(),
+                full_sync: publish.full_sync,
+                issued_at: publish.issued_at.clone(),
+                node_id: node_id.to_string(),
+                object_counts: publish.object_counts.clone(),
+                tenants,
+                networks,
+                ports,
+                security_groups,
+                route_tables,
+                deletes: Vec::new(),
+            },
+            changed,
+        ))
     }
 }
 
@@ -901,6 +1012,7 @@ impl ControllerStore for InMemoryControllerStore {
     async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
         let deleted = self.nodes.delete(id).await?;
         self.clear_southbound_runtime_inner(id).await;
+        self.clear_southbound_publish_inner(id).await;
         self.bump_generation_inner();
         Ok(deleted)
     }
@@ -947,7 +1059,8 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         node_id: &str,
     ) -> Result<DesiredStateEnvelope, StoreError> {
-        self.desired_state_for_node_inner(node_id).await
+        let (envelope, _) = self.desired_state_for_node_inner(node_id).await?;
+        Ok(envelope)
     }
 }
 
@@ -1057,7 +1170,19 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         node_id: &str,
     ) -> Result<DesiredStateEnvelope, StoreError> {
-        self.inner.desired_state_for_node(node_id).await
+        let _guard = self.mutation_lock.lock().await;
+        let before = self.inner.snapshot_state().await;
+        let (envelope, changed) = self.inner.desired_state_for_node_inner(node_id).await?;
+
+        if changed {
+            let after = self.inner.snapshot_state().await;
+            if let Err(err) = self.persist_snapshot_locked(&after).await {
+                self.inner.restore_state(before).await;
+                return Err(err);
+            }
+        }
+
+        Ok(envelope)
     }
 }
 

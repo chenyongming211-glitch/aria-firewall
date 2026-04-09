@@ -356,6 +356,7 @@ southbound 协议 v1 的验收标准：
 - 已覆盖 `register / desired-state / apply-status / heartbeat / status`
 - desired-state 已按节点维度输出首批对象：`Tenant / Network / Port / SecurityGroup / RouteTable`
 - `status` 响应中的 `last_seen_at` 仅在节点产生过 southbound 观察记录后才返回，避免伪造时间戳
+- controller 已开始记录 per-node desired-state publish 摘要，包含 `generation / issued_at / full_sync / object_counts`，并在同 generation 重复拉取时复用已有发布时间
 
 当前仍未实现：
 

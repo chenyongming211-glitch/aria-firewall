@@ -169,6 +169,14 @@ pub struct DesiredStateDeleteRef {
     "full_sync": true,
     "issued_at": "1712649900",
     "node_id": "node-0001",
+    "object_counts": {
+        "tenants": 1,
+        "networks": 1,
+        "ports": 2,
+        "security_groups": 1,
+        "route_tables": 1,
+        "deletes": 0
+    },
     "tenants": [],
     "networks": [],
     "ports": [],
@@ -188,6 +196,9 @@ pub struct DesiredStateEnvelope {
     /// Target node identifier.
     #[schema(example = "node-0001")]
     pub node_id: String,
+    /// Per-kind object counts contained in the envelope.
+    #[serde(default)]
+    pub object_counts: BTreeMap<String, usize>,
     /// Tenant objects relevant to the node.
     #[serde(default)]
     pub tenants: Vec<TenantResource>,
@@ -206,6 +217,34 @@ pub struct DesiredStateEnvelope {
     /// Explicit deletes for incremental protocols.
     #[serde(default)]
     pub deletes: Vec<DesiredStateDeleteRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "generation": "5",
+    "issued_at": "1712649900",
+    "full_sync": true,
+    "object_counts": {
+        "tenants": 1,
+        "networks": 1,
+        "ports": 2,
+        "security_groups": 1,
+        "route_tables": 1,
+        "deletes": 0
+    }
+}))]
+pub struct DesiredStatePublishRecord {
+    /// Published desired-state generation identifier.
+    #[schema(example = "5")]
+    pub generation: String,
+    /// First controller publish timestamp for this generation snapshot.
+    #[schema(example = "1712649900")]
+    pub issued_at: String,
+    /// Whether the publication corresponds to a full snapshot.
+    pub full_sync: bool,
+    /// Per-kind object counts contained in the published snapshot.
+    #[serde(default)]
+    pub object_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -331,6 +370,19 @@ pub struct HeartbeatResponse {
     "desired_generation": "5",
     "last_applied_generation": "5",
     "last_seen_at": "1712649915",
+    "last_desired_state": {
+        "generation": "5",
+        "issued_at": "1712649900",
+        "full_sync": true,
+        "object_counts": {
+            "tenants": 1,
+            "networks": 1,
+            "ports": 2,
+            "security_groups": 1,
+            "route_tables": 1,
+            "deletes": 0
+        }
+    },
     "registration": {
         "info": {
             "node_id": "node-0001",
@@ -372,6 +424,9 @@ pub struct SouthboundNodeStatusResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "1712649915")]
     pub last_seen_at: Option<String>,
+    /// Latest desired-state publication recorded by the controller, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_desired_state: Option<DesiredStatePublishRecord>,
     /// Latest registration payload, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<NodeRegisterRequest>,
