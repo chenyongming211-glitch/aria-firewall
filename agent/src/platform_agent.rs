@@ -1102,6 +1102,14 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             },
             shadow_apply_only: true,
         },
+        CompileDomainSummary {
+            domain: "nat".to_string(),
+            input_objects: 0,
+            compiled_objects: 0,
+            failed_objects: 0,
+            status: "shadow_reserved".to_string(),
+            shadow_apply_only: true,
+        },
     ];
 
     let compiled_at = unix_timestamp_string();
@@ -1561,7 +1569,9 @@ fn build_runtime_inventory(
             failed_objects: summary.failed_objects,
             attach_operations: attach_counts.get(&summary.domain).copied().unwrap_or(0),
             map_operations: map_counts.get(&summary.domain).copied().unwrap_or(0),
-            status: if summary.failed_objects == 0 {
+            status: if summary.status == "shadow_reserved" {
+                "shadow_inventory_reserved".to_string()
+            } else if summary.failed_objects == 0 {
                 "shadow_inventory_ready".to_string()
             } else {
                 "shadow_inventory_degraded".to_string()
@@ -1871,9 +1881,17 @@ fn build_runtime_intent(
                 || reconcile_domains.contains(domain_summary.domain.as_str())
                 || (reconcile_plan.full_reconcile && reconcile_domains.contains("core"));
             let requires_cleanup = cleanup_domains.contains(&domain_summary.domain);
-            let full_reconcile =
-                reconcile_plan.full_reconcile && (changed || reconcile_domains.contains("core"));
-            let desired_action = if full_reconcile {
+            let reserved_nat_domain = domain_summary.domain == "nat"
+                && domain_summary.compiled_objects == 0
+                && domain_summary.attach_operations == 0
+                && domain_summary.map_operations == 0
+                && domain_summary.failed_objects == 0;
+            let full_reconcile = !reserved_nat_domain
+                && reconcile_plan.full_reconcile
+                && (changed || reconcile_domains.contains("core"));
+            let desired_action = if reserved_nat_domain {
+                "reserve_shadow".to_string()
+            } else if full_reconcile {
                 "full_shadow_reconcile".to_string()
             } else if requires_cleanup {
                 "cleanup_shadow".to_string()
@@ -1882,7 +1900,9 @@ fn build_runtime_intent(
             } else {
                 "maintain_shadow".to_string()
             };
-            let reason = if full_reconcile {
+            let reason = if reserved_nat_domain {
+                "reserved_for_snat_dnat_floating_ip".to_string()
+            } else if full_reconcile {
                 "generation_or_capability_shift".to_string()
             } else if requires_cleanup {
                 "runtime_cleanup_required".to_string()
@@ -1936,6 +1956,7 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         "security_program" => "security".to_string(),
         "port_bindings" => "ports".to_string(),
         "route_program" => "routes".to_string(),
+        "nat_program" => "nat".to_string(),
         _ => "runtime".to_string(),
     }
 }
