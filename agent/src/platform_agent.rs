@@ -143,11 +143,55 @@ struct RuntimePlan {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryAttach {
+    domain: String,
+    hook_family: String,
+    scope: String,
+    operation: String,
+    object_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryMapEntry {
+    domain: String,
+    map_family: String,
+    operation: String,
+    object_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryDomainSummary {
+    domain: String,
+    compiled_objects: usize,
+    failed_objects: usize,
+    attach_operations: usize,
+    map_operations: usize,
+    status: String,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventory {
+    generation: String,
+    previous_generation: Option<String>,
+    compiled_at: String,
+    observed_at: String,
+    compiler_version: String,
+    required_hooks: Vec<String>,
+    required_qdisc: Vec<String>,
+    attach_inventory: Vec<RuntimeInventoryAttach>,
+    map_inventory: Vec<RuntimeInventoryMapEntry>,
+    domain_inventory: Vec<RuntimeInventoryDomainSummary>,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
     reconcile_plan: ReconcilePlan,
     runtime_plan: RuntimePlan,
+    runtime_inventory: RuntimeInventory,
     apply_report: ApplyStatusReport,
 }
 
@@ -208,6 +252,7 @@ impl PlatformAgent {
         let mut compiled_state = self.state_store.load_compiled_state().await;
         let mut reconcile_plan = self.state_store.load_reconcile_plan().await;
         let mut runtime_plan = self.state_store.load_runtime_plan().await;
+        let mut runtime_inventory = self.state_store.load_runtime_inventory().await;
         loop {
             interval.tick().await;
 
@@ -274,6 +319,10 @@ impl PlatformAgent {
                 || reconcile_plan.as_ref().map(|plan| plan.generation.as_str())
                     != Some(desired_generation.as_str())
                 || runtime_plan.as_ref().map(|plan| plan.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || runtime_inventory
+                    .as_ref()
+                    .map(|inventory| inventory.generation.as_str())
                     != Some(desired_generation.as_str());
 
             let mut last_reconcile_at = compiled_state
@@ -349,6 +398,24 @@ impl PlatformAgent {
                         attach_bindings = outcome.runtime_plan.attach_plan.bindings.len(),
                         map_entries = outcome.runtime_plan.map_plan.entries.len(),
                         "persisted shadow runtime plan"
+                    );
+                }
+
+                if let Err(error) = self
+                    .state_store
+                    .save_runtime_inventory(&outcome.runtime_inventory)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist runtime inventory");
+                    heartbeat_error = Some(error);
+                } else {
+                    runtime_inventory = Some(outcome.runtime_inventory.clone());
+                    info!(
+                        generation = %outcome.runtime_inventory.generation,
+                        attach_inventory = outcome.runtime_inventory.attach_inventory.len(),
+                        map_inventory = outcome.runtime_inventory.map_inventory.len(),
+                        domain_inventory = outcome.runtime_inventory.domain_inventory.len(),
+                        "persisted shadow runtime inventory"
                     );
                 }
 
@@ -581,6 +648,15 @@ impl LocalPlatformStateStore {
         self.save_json(self.runtime_plan_path(), plan).await
     }
 
+    async fn load_runtime_inventory(&self) -> Option<RuntimeInventory> {
+        self.load_json(self.runtime_inventory_path()).await
+    }
+
+    async fn save_runtime_inventory(&self, inventory: &RuntimeInventory) -> Result<(), String> {
+        self.save_json(self.runtime_inventory_path(), inventory)
+            .await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
@@ -595,6 +671,10 @@ impl LocalPlatformStateStore {
 
     fn runtime_plan_path(&self) -> PathBuf {
         self.root.join("runtime-plan.json")
+    }
+
+    fn runtime_inventory_path(&self) -> PathBuf {
+        self.root.join("runtime-inventory.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -907,6 +987,11 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         &compiled_state,
         context.capability,
     );
+    let runtime_inventory = build_runtime_inventory(
+        context.previous_compiled_state,
+        &compiled_state,
+        &runtime_plan,
+    );
 
     let status = if failed_objects.is_empty() {
         "partial".to_string()
@@ -920,6 +1005,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         compiled_state,
         reconcile_plan,
         runtime_plan,
+        runtime_inventory,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -1269,6 +1355,99 @@ fn build_runtime_plan(
         attach_plan,
         map_plan,
         shadow_apply_only: true,
+    }
+}
+
+fn build_runtime_inventory(
+    previous_state: Option<&CompiledNodeState>,
+    compiled_state: &CompiledNodeState,
+    runtime_plan: &RuntimePlan,
+) -> RuntimeInventory {
+    let attach_inventory = runtime_plan
+        .attach_plan
+        .bindings
+        .iter()
+        .map(|binding| RuntimeInventoryAttach {
+            domain: inventory_domain_from_scope(&binding.scope),
+            hook_family: binding.hook_family.clone(),
+            scope: binding.scope.clone(),
+            operation: binding.operation.clone(),
+            object_count: binding.object_count,
+        })
+        .collect::<Vec<_>>();
+
+    let map_inventory = runtime_plan
+        .map_plan
+        .entries
+        .iter()
+        .map(|entry| RuntimeInventoryMapEntry {
+            domain: inventory_domain_from_map_family(&entry.map_family),
+            map_family: entry.map_family.clone(),
+            operation: entry.operation.clone(),
+            object_count: entry.object_count,
+        })
+        .collect::<Vec<_>>();
+
+    let mut attach_counts = BTreeMap::new();
+    for entry in &attach_inventory {
+        *attach_counts.entry(entry.domain.clone()).or_insert(0usize) += 1;
+    }
+
+    let mut map_counts = BTreeMap::new();
+    for entry in &map_inventory {
+        *map_counts.entry(entry.domain.clone()).or_insert(0usize) += 1;
+    }
+
+    let domain_inventory = compiled_state
+        .domain_summaries
+        .iter()
+        .map(|summary| RuntimeInventoryDomainSummary {
+            domain: summary.domain.clone(),
+            compiled_objects: summary.compiled_objects,
+            failed_objects: summary.failed_objects,
+            attach_operations: attach_counts.get(&summary.domain).copied().unwrap_or(0),
+            map_operations: map_counts.get(&summary.domain).copied().unwrap_or(0),
+            status: if summary.failed_objects == 0 {
+                "shadow_inventory_ready".to_string()
+            } else {
+                "shadow_inventory_degraded".to_string()
+            },
+            shadow_apply_only: true,
+        })
+        .collect::<Vec<_>>();
+
+    RuntimeInventory {
+        generation: runtime_plan.generation.clone(),
+        previous_generation: previous_state
+            .map(|state| state.generation.clone())
+            .filter(|generation| generation != &runtime_plan.generation),
+        compiled_at: runtime_plan.compiled_at.clone(),
+        observed_at: unix_timestamp_string(),
+        compiler_version: compiled_state.compiler_version.clone(),
+        required_hooks: runtime_plan.attach_plan.required_hooks.clone(),
+        required_qdisc: runtime_plan.attach_plan.required_qdisc.clone(),
+        attach_inventory,
+        map_inventory,
+        domain_inventory,
+        shadow_apply_only: true,
+    }
+}
+
+fn inventory_domain_from_scope(scope: &str) -> String {
+    match scope {
+        "port-bindings" | "anti-spoof-fastpath" => "ports".to_string(),
+        "route-tables" => "routes".to_string(),
+        _ => "runtime".to_string(),
+    }
+}
+
+fn inventory_domain_from_map_family(map_family: &str) -> String {
+    match map_family {
+        "tenant_index" | "network_index" => "identity".to_string(),
+        "security_program" => "security".to_string(),
+        "port_bindings" => "ports".to_string(),
+        "route_program" => "routes".to_string(),
+        _ => "runtime".to_string(),
     }
 }
 
