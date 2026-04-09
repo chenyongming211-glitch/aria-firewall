@@ -1,9 +1,10 @@
 use aria_api::{
-    NetworkResource, NodeResource, PortResource, ResourceMetadata, RouteTableResource,
-    SecurityGroupResource, TenantResource,
+    ApplyStatusReport, DesiredStateEnvelope, NetworkResource, NodeCapability, NodeHealthReport,
+    NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
+    RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -39,6 +40,15 @@ impl_stored_resource!(RouteTableResource);
 pub enum StoreError {
     AlreadyExists { resource: &'static str, id: String },
     NotFound { resource: &'static str, id: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct SouthboundNodeRuntime {
+    pub registration: Option<NodeRegisterRequest>,
+    pub last_apply_status: Option<ApplyStatusReport>,
+    pub last_health: Option<NodeHealthReport>,
+    pub last_applied_generation: Option<String>,
+    pub last_seen_at: String,
 }
 
 pub struct ResourceStore<T> {
@@ -145,6 +155,8 @@ pub struct PlatformStore {
     pub ports: ResourceStore<PortResource>,
     pub security_groups: ResourceStore<SecurityGroupResource>,
     pub route_tables: ResourceStore<RouteTableResource>,
+    generation: AtomicU64,
+    southbound_nodes: RwLock<BTreeMap<String, SouthboundNodeRuntime>>,
 }
 
 impl PlatformStore {
@@ -156,6 +168,8 @@ impl PlatformStore {
             ports: ResourceStore::new("port", "port"),
             security_groups: ResourceStore::new("security_group", "sg"),
             route_tables: ResourceStore::new("route_table", "rt"),
+            generation: AtomicU64::new(0),
+            southbound_nodes: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -171,6 +185,247 @@ impl PlatformStore {
         );
         counts.insert("route_tables".to_string(), self.route_tables.count().await);
         counts
+    }
+
+    pub fn current_generation(&self) -> String {
+        self.generation.load(Ordering::Relaxed).to_string()
+    }
+
+    pub fn bump_generation(&self) -> String {
+        (self.generation.fetch_add(1, Ordering::Relaxed) + 1).to_string()
+    }
+
+    pub async fn record_registration(
+        &self,
+        node_id: &str,
+        info: NodeInfo,
+        capability: NodeCapability,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "node",
+                id: node_id.to_string(),
+            })?;
+
+        let now = unix_timestamp_string();
+        let registration = NodeRegisterRequest { info, capability };
+        let mut states = self.southbound_nodes.write().await;
+        let entry = states
+            .entry(node_id.to_string())
+            .or_insert_with(|| SouthboundNodeRuntime {
+                registration: None,
+                last_apply_status: None,
+                last_health: None,
+                last_applied_generation: None,
+                last_seen_at: now.clone(),
+            });
+        entry.registration = Some(registration.clone());
+        entry.last_seen_at = now;
+
+        Ok(SouthboundNodeStatusResponse {
+            node_id: node_id.to_string(),
+            desired_generation: self.current_generation(),
+            last_applied_generation: entry.last_applied_generation.clone(),
+            last_seen_at: entry.last_seen_at.clone(),
+            registration: Some(registration),
+            last_apply_status: entry.last_apply_status.clone(),
+            last_health: entry.last_health.clone(),
+        })
+    }
+
+    pub async fn record_apply_status(
+        &self,
+        node_id: &str,
+        report: ApplyStatusReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "node",
+                id: node_id.to_string(),
+            })?;
+
+        let now = unix_timestamp_string();
+        let mut states = self.southbound_nodes.write().await;
+        let entry = states
+            .entry(node_id.to_string())
+            .or_insert_with(|| SouthboundNodeRuntime {
+                registration: None,
+                last_apply_status: None,
+                last_health: None,
+                last_applied_generation: None,
+                last_seen_at: now.clone(),
+            });
+        entry.last_applied_generation = Some(report.generation.clone());
+        entry.last_apply_status = Some(report);
+        entry.last_seen_at = now;
+
+        Ok(SouthboundNodeStatusResponse {
+            node_id: node_id.to_string(),
+            desired_generation: self.current_generation(),
+            last_applied_generation: entry.last_applied_generation.clone(),
+            last_seen_at: entry.last_seen_at.clone(),
+            registration: entry.registration.clone(),
+            last_apply_status: entry.last_apply_status.clone(),
+            last_health: entry.last_health.clone(),
+        })
+    }
+
+    pub async fn record_health(
+        &self,
+        node_id: &str,
+        report: NodeHealthReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "node",
+                id: node_id.to_string(),
+            })?;
+
+        let now = unix_timestamp_string();
+        let mut states = self.southbound_nodes.write().await;
+        let entry = states
+            .entry(node_id.to_string())
+            .or_insert_with(|| SouthboundNodeRuntime {
+                registration: None,
+                last_apply_status: None,
+                last_health: None,
+                last_applied_generation: None,
+                last_seen_at: now.clone(),
+            });
+        entry.last_health = Some(report);
+        entry.last_seen_at = now;
+
+        Ok(SouthboundNodeStatusResponse {
+            node_id: node_id.to_string(),
+            desired_generation: self.current_generation(),
+            last_applied_generation: entry.last_applied_generation.clone(),
+            last_seen_at: entry.last_seen_at.clone(),
+            registration: entry.registration.clone(),
+            last_apply_status: entry.last_apply_status.clone(),
+            last_health: entry.last_health.clone(),
+        })
+    }
+
+    pub async fn southbound_status(
+        &self,
+        node_id: &str,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "node",
+                id: node_id.to_string(),
+            })?;
+
+        let states = self.southbound_nodes.read().await;
+        if let Some(entry) = states.get(node_id) {
+            Ok(SouthboundNodeStatusResponse {
+                node_id: node_id.to_string(),
+                desired_generation: self.current_generation(),
+                last_applied_generation: entry.last_applied_generation.clone(),
+                last_seen_at: entry.last_seen_at.clone(),
+                registration: entry.registration.clone(),
+                last_apply_status: entry.last_apply_status.clone(),
+                last_health: entry.last_health.clone(),
+            })
+        } else {
+            Ok(SouthboundNodeStatusResponse {
+                node_id: node_id.to_string(),
+                desired_generation: self.current_generation(),
+                last_applied_generation: None,
+                last_seen_at: unix_timestamp_string(),
+                registration: None,
+                last_apply_status: None,
+                last_health: None,
+            })
+        }
+    }
+
+    pub async fn desired_state_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<DesiredStateEnvelope, StoreError> {
+        self.nodes
+            .get(node_id)
+            .await
+            .ok_or_else(|| StoreError::NotFound {
+                resource: "node",
+                id: node_id.to_string(),
+            })?;
+
+        let ports = self
+            .ports
+            .list()
+            .await
+            .into_iter()
+            .filter(|port| port.spec.node_id.as_deref() == Some(node_id))
+            .collect::<Vec<_>>();
+
+        let mut tenant_ids = BTreeSet::new();
+        let mut network_ids = BTreeSet::new();
+        let mut security_group_ids = BTreeSet::new();
+
+        for port in &ports {
+            tenant_ids.insert(port.spec.tenant_id.clone());
+            network_ids.insert(port.spec.network_id.clone());
+            security_group_ids.extend(port.spec.security_group_ids.iter().cloned());
+        }
+
+        let networks = self
+            .networks
+            .list()
+            .await
+            .into_iter()
+            .filter(|network| network_ids.contains(&network.metadata.id))
+            .collect::<Vec<_>>();
+
+        for network in &networks {
+            tenant_ids.insert(network.spec.tenant_id.clone());
+        }
+
+        let security_groups = self
+            .security_groups
+            .list()
+            .await
+            .into_iter()
+            .filter(|sg| security_group_ids.contains(&sg.metadata.id))
+            .collect::<Vec<_>>();
+
+        let route_tables = self
+            .route_tables
+            .list()
+            .await
+            .into_iter()
+            .filter(|route_table| network_ids.contains(&route_table.spec.network_id))
+            .collect::<Vec<_>>();
+
+        let tenants = self
+            .tenants
+            .list()
+            .await
+            .into_iter()
+            .filter(|tenant| tenant_ids.contains(&tenant.metadata.id))
+            .collect::<Vec<_>>();
+
+        Ok(DesiredStateEnvelope {
+            generation: self.current_generation(),
+            full_sync: true,
+            issued_at: unix_timestamp_string(),
+            node_id: node_id.to_string(),
+            tenants,
+            networks,
+            ports,
+            security_groups,
+            route_tables,
+            deletes: Vec::new(),
+        })
     }
 }
 

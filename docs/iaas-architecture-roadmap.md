@@ -40,6 +40,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 提供内存态资源存储
 - 提供 `/openapi.json` 与 `/docs`
 - 首批资源覆盖 `Tenant / Node / Network / Port / SecurityGroup / RouteTable`
+- 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`
 
 当前实现仍不包含：
 

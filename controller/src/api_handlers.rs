@@ -213,6 +213,7 @@ pub async fn create_tenant(
         status: tenant_status(),
     };
     let created = store.tenants.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -273,6 +274,7 @@ pub async fn update_tenant(
         status: existing.status,
     };
     let updated = store.tenants.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -292,6 +294,7 @@ pub async fn delete_tenant(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.tenants.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("tenant", &id)))
 }
 
@@ -332,6 +335,7 @@ pub async fn create_node(
         status: node_status(),
     };
     let created = store.nodes.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -392,6 +396,7 @@ pub async fn update_node(
         status: existing.status,
     };
     let updated = store.nodes.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -411,6 +416,7 @@ pub async fn delete_node(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.nodes.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("node", &id)))
 }
 
@@ -451,6 +457,7 @@ pub async fn create_network(
         status: network_status(),
     };
     let created = store.networks.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -511,6 +518,7 @@ pub async fn update_network(
         status: existing.status,
     };
     let updated = store.networks.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -530,6 +538,7 @@ pub async fn delete_network(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.networks.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("network", &id)))
 }
 
@@ -570,6 +579,7 @@ pub async fn create_port(
         status: port_status(),
     };
     let created = store.ports.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -630,6 +640,7 @@ pub async fn update_port(
         status: existing.status,
     };
     let updated = store.ports.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -649,6 +660,7 @@ pub async fn delete_port(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.ports.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("port", &id)))
 }
 
@@ -692,6 +704,7 @@ pub async fn create_security_group(
         status: security_group_status(rule_count),
     };
     let created = store.security_groups.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -756,6 +769,7 @@ pub async fn update_security_group(
         },
     };
     let updated = store.security_groups.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -775,6 +789,7 @@ pub async fn delete_security_group(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.security_groups.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("security_group", &id)))
 }
 
@@ -815,6 +830,7 @@ pub async fn create_route_table(
         status: route_table_status(),
     };
     let created = store.route_tables.create(resource).await?;
+    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -875,6 +891,7 @@ pub async fn update_route_table(
         status: existing.status,
     };
     let updated = store.route_tables.replace(&id, resource).await?;
+    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -894,5 +911,6 @@ pub async fn delete_route_table(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.route_tables.delete(&id).await?;
+    store.bump_generation();
     Ok(Json(deleted_message("route_table", &id)))
 }

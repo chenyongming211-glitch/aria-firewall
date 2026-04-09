@@ -1,6 +1,7 @@
 mod api_handlers;
 mod api_routes;
 mod openapi;
+mod southbound_handlers;
 mod store;
 
 use std::{net::SocketAddr, sync::Arc};

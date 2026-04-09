@@ -346,3 +346,22 @@ southbound 协议 v1 的验收标准：
 - `RFC-003A` protobuf schema
 - `RFC-003B` certificate and identity
 - `RFC-003C` event streaming channel
+
+## 15. 当前实现状态（2026-04-09）
+
+当前仓库已经新增第一阶段 southbound 骨架，但仍是过渡实现：
+
+- 共享消息模型已经进入 `aria-api`
+- `controller` 已提供临时 HTTP 形态的 southbound 路由
+- 已覆盖 `register / desired-state / apply-status / heartbeat / status`
+- desired-state 已按节点维度输出首批对象：`Tenant / Network / Port / SecurityGroup / RouteTable`
+
+当前仍未实现：
+
+- gRPC 流式传输
+- mTLS 与 node identity
+- full sync / incremental update 双形态协议
+- southbound 版本协商
+- 事件流与配置流隔离
+
+因此当前实现只能视为本 RFC 的语义骨架和消息基线，不代表最终 transport 已冻结。

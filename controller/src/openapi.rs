@@ -33,7 +33,12 @@ use utoipa::OpenApi;
         crate::api_handlers::create_route_table,
         crate::api_handlers::get_route_table,
         crate::api_handlers::update_route_table,
-        crate::api_handlers::delete_route_table
+        crate::api_handlers::delete_route_table,
+        crate::southbound_handlers::register_node,
+        crate::southbound_handlers::desired_state,
+        crate::southbound_handlers::apply_status,
+        crate::southbound_handlers::heartbeat,
+        crate::southbound_handlers::status
     ),
     components(
         schemas(
@@ -80,7 +85,20 @@ use utoipa::OpenApi;
             aria_api::CreateRouteTableRequest,
             aria_api::UpdateRouteTableRequest,
             aria_api::RouteTableListResponse,
-            aria_api::MessageResponse
+            aria_api::MessageResponse,
+            aria_api::NodeAddress,
+            aria_api::NodeInfo,
+            aria_api::NodeCapability,
+            aria_api::NodeRegisterRequest,
+            aria_api::NodeRegisterResponse,
+            aria_api::DesiredStateDeleteRef,
+            aria_api::DesiredStateEnvelope,
+            aria_api::ApplyObjectFailure,
+            aria_api::ApplyStatusReport,
+            aria_api::ApplyStatusResponse,
+            aria_api::NodeHealthReport,
+            aria_api::HeartbeatResponse,
+            aria_api::SouthboundNodeStatusResponse
         )
     ),
     tags(
@@ -90,7 +108,8 @@ use utoipa::OpenApi;
         (name = "networks", description = "Logical network resources"),
         (name = "ports", description = "Port and attachment-facing resources"),
         (name = "security-groups", description = "Security group resources"),
-        (name = "route-tables", description = "Route table resources")
+        (name = "route-tables", description = "Route table resources"),
+        (name = "southbound", description = "Controller-agent desired-state and status exchange")
     )
 )]
 pub struct ApiDoc;
@@ -111,6 +130,15 @@ mod tests {
         assert!(doc.pointer("/paths/~1api~1v1~1ports").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1security-groups").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1route-tables").is_some());
+        assert!(doc
+            .pointer("/paths/~1api~1v1~1southbound~1nodes~1{id}~1register")
+            .is_some());
+        assert!(doc
+            .pointer("/paths/~1api~1v1~1southbound~1nodes~1{id}~1desired-state")
+            .is_some());
+        assert!(doc
+            .pointer("/paths/~1api~1v1~1southbound~1nodes~1{id}~1apply-status")
+            .is_some());
 
         assert!(doc
             .pointer("/components/schemas/PlatformApiError")
@@ -124,6 +152,15 @@ mod tests {
             .is_some());
         assert!(doc
             .pointer("/components/schemas/RouteTableResource")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/NodeRegisterRequest")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/NodeHealthReport")
             .is_some());
 
         assert_eq!(
@@ -140,6 +177,11 @@ mod tests {
             doc.pointer("/paths/~1api~1v1~1route-tables~1{id}/put/operationId")
                 .and_then(|value| value.as_str()),
             Some("updateRouteTable")
+        );
+        assert_eq!(
+            doc.pointer("/paths/~1api~1v1~1southbound~1nodes~1{id}~1register/post/operationId")
+                .and_then(|value| value.as_str()),
+            Some("registerSouthboundNode")
         );
     }
 }

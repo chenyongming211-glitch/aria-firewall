@@ -6,7 +6,7 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::{api_handlers, store::PlatformStore};
+use crate::{api_handlers, southbound_handlers, store::PlatformStore};
 
 pub fn build_router(store: Arc<PlatformStore>) -> Router {
     Router::new()
@@ -71,6 +71,26 @@ pub fn build_router(store: Arc<PlatformStore>) -> Router {
             get(api_handlers::get_route_table)
                 .put(api_handlers::update_route_table)
                 .delete(api_handlers::delete_route_table),
+        )
+        .route(
+            "/api/v1/southbound/nodes/{id}/register",
+            post(southbound_handlers::register_node),
+        )
+        .route(
+            "/api/v1/southbound/nodes/{id}/desired-state",
+            get(southbound_handlers::desired_state),
+        )
+        .route(
+            "/api/v1/southbound/nodes/{id}/apply-status",
+            post(southbound_handlers::apply_status),
+        )
+        .route(
+            "/api/v1/southbound/nodes/{id}/heartbeat",
+            post(southbound_handlers::heartbeat),
+        )
+        .route(
+            "/api/v1/southbound/nodes/{id}/status",
+            get(southbound_handlers::status),
         )
         .with_state(store)
 }

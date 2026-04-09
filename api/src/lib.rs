@@ -4,8 +4,10 @@ use std::fmt;
 use utoipa::ToSchema;
 
 mod platform;
+mod southbound;
 
 pub use platform::*;
+pub use southbound::*;
 
 // ── Error ──
 
