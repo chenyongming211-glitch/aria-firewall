@@ -40,6 +40,7 @@
 - 当前只提供平台级 northbound API 骨架、默认内存态资源存储和 `/openapi.json` / `/docs`，首批资源覆盖 `Tenant / Node / Network / Port / SecurityGroup / RouteTable`。
 - northbound 列表接口已提供第一版分页/过滤骨架，支持 `limit / page_token / label_selector` 以及按资源维度的基础过滤字段。
 - northbound 现已支持 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 会与响应头保持一致。
+- controller 已补第一版对象关系校验与删除保护，当前会校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`。
 - 已新增第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`，作为 `RFC-003` 的过渡实现。
 - controller 当前已经通过可替换的 store trait 隔离存储边界，并新增了可选的文件快照 backend；未配置 `ARIA_CONTROLLER_STATE_PATH` 时仍默认走内存版。
 - 当前还没有接入持久化、鉴权审计、southbound 编译或 datapath 联动；这些能力仍按 RFC 路线后续实现。

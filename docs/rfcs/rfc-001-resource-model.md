@@ -507,6 +507,13 @@ AddressSet 是当前 `group` 的长期演进目标，用于聚合 IP/CIDR 集合
 - `SecurityGroup`
 - `RouteTable`
 
+当前 controller 已经开始对这批对象施加第一版平台关系约束：
+
+- `Network.tenant_id`、`SecurityGroup.tenant_id` 必须引用已存在的 `Tenant`
+- `Port` 会校验 `tenant/network/node/security_group` 的一阶引用，并要求 `Port.tenant_id` 与 `Network.tenant_id` 一致
+- `RouteTable.network_id` 必须引用已存在的 `Network`
+- 删除 `Tenant / Node / Network / SecurityGroup` 时会先检查是否仍有下游对象引用
+
 这些对象已经进入共享 `aria-api` schema，并通过实验性的 `controller` crate 暴露为 northbound API。
 
 当前仍未落代码的对象包括但不限于：
