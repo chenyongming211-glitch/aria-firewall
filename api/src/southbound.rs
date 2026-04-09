@@ -368,9 +368,10 @@ pub struct SouthboundNodeStatusResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "5")]
     pub last_applied_generation: Option<String>,
-    /// Last controller-side observation timestamp.
+    /// Last controller-side observation timestamp, if the node has reported any southbound activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "1712649915")]
-    pub last_seen_at: String,
+    pub last_seen_at: Option<String>,
     /// Latest registration payload, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<NodeRegisterRequest>,

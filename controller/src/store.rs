@@ -61,7 +61,7 @@ pub struct SouthboundNodeRuntime {
 pub trait ControllerStore: Send + Sync {
     async fn resource_counts(&self) -> BTreeMap<String, usize>;
     fn current_generation(&self) -> String;
-    fn bump_generation(&self) -> String;
+    fn bump_generation(&self);
 
     async fn list_tenants(&self) -> Vec<TenantResource>;
     async fn get_tenant(&self, id: &str) -> Option<TenantResource>;
@@ -354,8 +354,8 @@ impl InMemoryControllerStore {
         self.generation.load(Ordering::Relaxed).to_string()
     }
 
-    fn bump_generation_inner(&self) -> String {
-        (self.generation.fetch_add(1, Ordering::Relaxed) + 1).to_string()
+    fn bump_generation_inner(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
     }
 
     async fn record_registration_inner(
@@ -391,7 +391,7 @@ impl InMemoryControllerStore {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: entry.last_seen_at.clone(),
+            last_seen_at: Some(entry.last_seen_at.clone()),
             registration: Some(registration),
             last_apply_status: entry.last_apply_status.clone(),
             last_health: entry.last_health.clone(),
@@ -430,7 +430,7 @@ impl InMemoryControllerStore {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: entry.last_seen_at.clone(),
+            last_seen_at: Some(entry.last_seen_at.clone()),
             registration: entry.registration.clone(),
             last_apply_status: entry.last_apply_status.clone(),
             last_health: entry.last_health.clone(),
@@ -468,7 +468,7 @@ impl InMemoryControllerStore {
             node_id: node_id.to_string(),
             desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
-            last_seen_at: entry.last_seen_at.clone(),
+            last_seen_at: Some(entry.last_seen_at.clone()),
             registration: entry.registration.clone(),
             last_apply_status: entry.last_apply_status.clone(),
             last_health: entry.last_health.clone(),
@@ -493,7 +493,7 @@ impl InMemoryControllerStore {
                 node_id: node_id.to_string(),
                 desired_generation: self.current_generation_inner(),
                 last_applied_generation: entry.last_applied_generation.clone(),
-                last_seen_at: entry.last_seen_at.clone(),
+                last_seen_at: Some(entry.last_seen_at.clone()),
                 registration: entry.registration.clone(),
                 last_apply_status: entry.last_apply_status.clone(),
                 last_health: entry.last_health.clone(),
@@ -503,7 +503,7 @@ impl InMemoryControllerStore {
                 node_id: node_id.to_string(),
                 desired_generation: self.current_generation_inner(),
                 last_applied_generation: None,
-                last_seen_at: unix_timestamp_string(),
+                last_seen_at: None,
                 registration: None,
                 last_apply_status: None,
                 last_health: None,
@@ -630,7 +630,7 @@ impl ControllerStore for InMemoryControllerStore {
         self.current_generation_inner()
     }
 
-    fn bump_generation(&self) -> String {
+    fn bump_generation(&self) {
         self.bump_generation_inner()
     }
 

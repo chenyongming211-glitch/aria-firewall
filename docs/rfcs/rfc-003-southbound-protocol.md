@@ -355,6 +355,7 @@ southbound 协议 v1 的验收标准：
 - `controller` 已提供临时 HTTP 形态的 southbound 路由
 - 已覆盖 `register / desired-state / apply-status / heartbeat / status`
 - desired-state 已按节点维度输出首批对象：`Tenant / Network / Port / SecurityGroup / RouteTable`
+- `status` 响应中的 `last_seen_at` 仅在节点产生过 southbound 观察记录后才返回，避免伪造时间戳
 
 当前仍未实现：
 
