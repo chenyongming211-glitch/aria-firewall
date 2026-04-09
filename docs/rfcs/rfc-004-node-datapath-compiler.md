@@ -408,7 +408,19 @@ Agent 重启时，恢复流程建议为：
 - `core/src/state.rs` -> 当前局部功能状态机，未来需提升为对象级编译输出
 - `core/src/ebpf_ops/*` -> feature-specific materialization 层
 
-## 15. 当前缺口
+## 15. 当前实现状态（2026-04-09）
+
+当前仓库已经开始落第一阶段 agent 编译骨架：
+
+- `aria-agent` 已新增实验性的可选 southbound client
+- 当配置 `southbound_controller_url + southbound_node_id` 后，agent 会执行 `register / desired-state / apply-status / heartbeat` 循环
+- agent 当前会把 desired-state 缓存到 `${state_path}/platform-agent/desired-state-cache.json`
+- agent 当前会把第一版 `CompiledNodeState` 缓存到 `${state_path}/platform-agent/compiled-node-state.json`
+- 第一版编译器已开始把 `Tenant / Network / Port / SecurityGroup / RouteTable` 下沉为节点局部视图
+- 编译输出当前仍是 `shadow compile only`：只产出 `compiled state + apply report`，不会直接 materialize 到 datapath
+- 当前 `apply-status` 主要表达对象校验、降级原因和 shadow compile 结果，尚不代表 datapath 已成功写入
+
+## 16. 当前缺口
 
 当前主要缺口：
 
@@ -417,7 +429,7 @@ Agent 重启时，恢复流程建议为：
 - 缺少按编译域分治的结构
 - 缺少对象级失败和降级报告
 
-## 16. 验收标准
+## 17. 验收标准
 
 Node datapath 编译模型 v1 的验收标准：
 

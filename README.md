@@ -52,7 +52,9 @@
 - southbound `status` 现已补 `changed_kinds / has_deletes`，用轻量摘要表达当前仍待 reconcile 的资源种类，以及当前 generation 是否包含删除；`partial / failed` apply 也不会再低估待 reconcile 对象数。
 - northbound `Node.status` 现已开始镜像 southbound 的关键运行态，返回 `desired_generation / last_applied_generation / last_seen_at / last_reconcile_at / last_error / last_publish_summary / pending_object_counts / changed_kinds / has_deletes / sync_status`，并补齐 agent 版本、内核版本和能力摘要。
 - controller 当前已经通过可替换的 store trait 隔离存储边界，并新增了可选的文件快照 backend；未配置 `ARIA_CONTROLLER_STATE_PATH` 时仍默认走内存版，且 file-backed 模式不再因心跳重写整份 controller 快照。
-- 当前还没有接入持久化、鉴权审计、southbound 编译或 datapath 联动；这些能力仍按 RFC 路线后续实现。
+- `aria-agent` 已新增实验性的可选 southbound client；配置 `southbound_controller_url + southbound_node_id` 后，agent 会执行 `register / desired-state / apply-status / heartbeat`，并在 `${state_path}/platform-agent/` 下维护 `desired-state-cache.json` 与 `compiled-node-state.json`。
+- 当前 agent 侧 southbound 仍是 `shadow compile only`：只会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state` 并回报 compile/apply 结果，还不会直接 materialize 到 datapath。
+- 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
 
 ## 回归脚本
 

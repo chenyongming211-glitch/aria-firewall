@@ -1,0 +1,788 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use aria_api::{
+    ApplyObjectFailure, ApplyStatusReport, ApplyStatusResponse, DesiredStateEnvelope,
+    HeartbeatResponse, NodeAddress, NodeCapability, NodeHealthReport, NodeInfo,
+    NodeRegisterRequest, NodeRegisterResponse, PlatformApiError,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::{fs, task::JoinHandle, time};
+use tracing::{debug, info, warn};
+
+#[derive(Clone, Debug)]
+pub struct PlatformAgentConfig {
+    pub controller_url: String,
+    pub node_id: String,
+    pub management_address: Option<String>,
+    pub labels: BTreeMap<String, String>,
+    pub poll_interval: Duration,
+    pub register_interval: Duration,
+    pub state_dir: PathBuf,
+    pub trace_backend: String,
+    pub kernel_version: Option<String>,
+    pub max_port_policies: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DesiredStateCacheEntry {
+    cached_at: String,
+    envelope: DesiredStateEnvelope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledPortBinding {
+    port_id: String,
+    tenant_id: String,
+    network_id: String,
+    security_group_ids: Vec<String>,
+    fixed_ips: Vec<String>,
+    allowed_address_pairs: Vec<String>,
+    mac_address: String,
+    anti_spoof_enabled: bool,
+    admin_state_up: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledRouteTableView {
+    route_table_id: String,
+    network_id: String,
+    route_count: usize,
+    default_route: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledNodeState {
+    generation: String,
+    compiler_version: String,
+    node_id: String,
+    capability_profile: String,
+    full_sync: bool,
+    issued_at: String,
+    tenant_ids: Vec<String>,
+    network_ids: Vec<String>,
+    security_group_ids: Vec<String>,
+    port_bindings: Vec<CompiledPortBinding>,
+    route_tables: Vec<CompiledRouteTableView>,
+    warnings: Vec<String>,
+    degraded_reasons: Vec<String>,
+    compiled_at: String,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CompileOutcome {
+    compiled_state: CompiledNodeState,
+    apply_report: ApplyStatusReport,
+}
+
+#[derive(Debug)]
+struct CompilerContext<'a> {
+    node_id: &'a str,
+    desired: &'a DesiredStateEnvelope,
+    capability: &'a NodeCapability,
+}
+
+struct SouthboundClient {
+    base_url: String,
+    client: reqwest::Client,
+}
+
+struct LocalPlatformStateStore {
+    root: PathBuf,
+}
+
+struct PlatformAgent {
+    config: PlatformAgentConfig,
+    client: SouthboundClient,
+    state_store: LocalPlatformStateStore,
+    start_time: Instant,
+    capability: NodeCapability,
+}
+
+pub fn start(config: PlatformAgentConfig) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let agent = PlatformAgent::new(config);
+        agent.run().await;
+    })
+}
+
+impl PlatformAgent {
+    fn new(config: PlatformAgentConfig) -> Self {
+        let client = SouthboundClient::new(&config.controller_url);
+        let state_store = LocalPlatformStateStore::new(config.state_dir.clone());
+        let capability = build_node_capability(&config);
+        Self {
+            config,
+            client,
+            state_store,
+            start_time: Instant::now(),
+            capability,
+        }
+    }
+
+    async fn run(self) {
+        let mut interval = time::interval(self.config.poll_interval);
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        interval.tick().await;
+
+        let mut last_register_at: Option<Instant> = None;
+        let mut last_register_response: Option<NodeRegisterResponse> = None;
+        let mut desired_cache = self.state_store.load_desired_state().await;
+        let mut compiled_state = self.state_store.load_compiled_state().await;
+        loop {
+            interval.tick().await;
+
+            let needs_register = last_register_at
+                .map(|registered_at| registered_at.elapsed() >= self.config.register_interval)
+                .unwrap_or(true);
+            if needs_register {
+                match self.register().await {
+                    Ok(response) => {
+                        info!(
+                            node_id = %response.node_id,
+                            desired_generation = %response.desired_generation,
+                            full_sync_required = response.full_sync_required,
+                            "southbound node registration refreshed"
+                        );
+                        last_register_response = Some(response);
+                        last_register_at = Some(Instant::now());
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "southbound node registration failed");
+                        continue;
+                    }
+                }
+            }
+
+            let Some(register_response) = last_register_response.as_ref() else {
+                continue;
+            };
+
+            let desired_state = match self
+                .client
+                .desired_state(&self.config.node_id, &register_response.desired_state_url)
+                .await
+            {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    warn!(error = %error, "failed to fetch desired-state envelope");
+                    let last_reconcile_at = compiled_state
+                        .as_ref()
+                        .map(|state| state.compiled_at.clone());
+                    let attached_ports = compiled_state
+                        .as_ref()
+                        .map(|state| state.port_bindings.len())
+                        .unwrap_or(0);
+                    if let Err(heartbeat_error) = self
+                        .send_heartbeat(attached_ports, last_reconcile_at, Some(error))
+                        .await
+                    {
+                        warn!(error = %heartbeat_error, "failed to report degraded heartbeat");
+                    }
+                    continue;
+                }
+            };
+
+            let desired_generation = desired_state.generation.clone();
+            let needs_compile = desired_cache
+                .as_ref()
+                .map(|cache| cache.envelope.generation.as_str())
+                != Some(desired_generation.as_str())
+                || compiled_state
+                    .as_ref()
+                    .map(|state| state.generation.as_str())
+                    != Some(desired_generation.as_str());
+
+            let mut last_reconcile_at = compiled_state
+                .as_ref()
+                .map(|state| state.compiled_at.clone());
+            let mut attached_ports = compiled_state
+                .as_ref()
+                .map(|state| state.port_bindings.len())
+                .unwrap_or(0);
+            let mut heartbeat_error: Option<String> = None;
+
+            if needs_compile {
+                let cache_entry = DesiredStateCacheEntry {
+                    cached_at: unix_timestamp_string(),
+                    envelope: desired_state.clone(),
+                };
+                if let Err(error) = self.state_store.save_desired_state(&cache_entry).await {
+                    warn!(error = %error, "failed to persist desired-state cache");
+                    heartbeat_error = Some(error);
+                } else {
+                    desired_cache = Some(cache_entry);
+                }
+
+                let outcome = compile_desired_state(CompilerContext {
+                    node_id: &self.config.node_id,
+                    desired: &desired_state,
+                    capability: &self.capability,
+                });
+                attached_ports = outcome.compiled_state.port_bindings.len();
+                last_reconcile_at = Some(outcome.compiled_state.compiled_at.clone());
+
+                if let Err(error) = self
+                    .state_store
+                    .save_compiled_state(&outcome.compiled_state)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist compiled node state");
+                    heartbeat_error = Some(error);
+                } else {
+                    compiled_state = Some(outcome.compiled_state.clone());
+                }
+
+                if let Err(error) = self
+                    .client
+                    .report_apply_status(&self.config.node_id, &outcome.apply_report)
+                    .await
+                {
+                    warn!(error = %error, "failed to report apply status");
+                    heartbeat_error = Some(error);
+                } else {
+                    info!(
+                        generation = %outcome.apply_report.generation,
+                        status = %outcome.apply_report.status,
+                        warnings = outcome.apply_report.warnings.len(),
+                        failed_objects = outcome.apply_report.failed_objects.len(),
+                        "reported southbound compile/apply status"
+                    );
+                }
+            }
+
+            if let Err(error) = self
+                .send_heartbeat(attached_ports, last_reconcile_at, heartbeat_error.clone())
+                .await
+            {
+                warn!(error = %error, "failed to report southbound heartbeat");
+            }
+        }
+    }
+
+    async fn register(&self) -> Result<NodeRegisterResponse, String> {
+        let request = NodeRegisterRequest {
+            info: NodeInfo {
+                node_id: self.config.node_id.clone(),
+                hostname: hostname(),
+                agent_version: env!("CARGO_PKG_VERSION").to_string(),
+                kernel_version: self
+                    .config
+                    .kernel_version
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                addresses: self
+                    .config
+                    .management_address
+                    .as_ref()
+                    .map(|value| {
+                        vec![NodeAddress {
+                            kind: "management".to_string(),
+                            value: value.clone(),
+                        }]
+                    })
+                    .unwrap_or_default(),
+                labels: self.config.labels.clone(),
+            },
+            capability: self.capability.clone(),
+        };
+        self.client
+            .register_node(&self.config.node_id, &request)
+            .await
+    }
+
+    async fn send_heartbeat(
+        &self,
+        attached_ports: usize,
+        last_reconcile_at: Option<String>,
+        last_error: Option<String>,
+    ) -> Result<HeartbeatResponse, String> {
+        let report = NodeHealthReport {
+            agent_uptime: self.start_time.elapsed().as_secs(),
+            datapath_ready: last_error.is_none(),
+            attached_ports,
+            event_queue_depth: 0,
+            wal_health: "ok".to_string(),
+            last_reconcile_at,
+            last_error,
+        };
+        self.client.heartbeat(&self.config.node_id, &report).await
+    }
+}
+
+impl SouthboundClient {
+    fn new(base_url: &str) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        }
+    }
+
+    async fn register_node(
+        &self,
+        node_id: &str,
+        request: &NodeRegisterRequest,
+    ) -> Result<NodeRegisterResponse, String> {
+        let response = self
+            .client
+            .post(self.url(&format!("/api/v1/southbound/nodes/{node_id}/register")))
+            .json(request)
+            .send()
+            .await
+            .map_err(connection_error)?;
+        self.parse_response(response).await
+    }
+
+    async fn desired_state(
+        &self,
+        node_id: &str,
+        desired_state_url: &str,
+    ) -> Result<DesiredStateEnvelope, String> {
+        let response = self
+            .client
+            .get(self.resolve_url(
+                desired_state_url,
+                &format!("/api/v1/southbound/nodes/{node_id}/desired-state"),
+            ))
+            .send()
+            .await
+            .map_err(connection_error)?;
+        self.parse_response(response).await
+    }
+
+    async fn report_apply_status(
+        &self,
+        node_id: &str,
+        report: &ApplyStatusReport,
+    ) -> Result<ApplyStatusResponse, String> {
+        let response = self
+            .client
+            .post(self.url(&format!("/api/v1/southbound/nodes/{node_id}/apply-status")))
+            .json(report)
+            .send()
+            .await
+            .map_err(connection_error)?;
+        self.parse_response(response).await
+    }
+
+    async fn heartbeat(
+        &self,
+        node_id: &str,
+        report: &NodeHealthReport,
+    ) -> Result<HeartbeatResponse, String> {
+        let response = self
+            .client
+            .post(self.url(&format!("/api/v1/southbound/nodes/{node_id}/heartbeat")))
+            .json(report)
+            .send()
+            .await
+            .map_err(connection_error)?;
+        self.parse_response(response).await
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base_url, path)
+    }
+
+    fn resolve_url(&self, desired_state_url: &str, fallback_path: &str) -> String {
+        if desired_state_url.starts_with("http://") || desired_state_url.starts_with("https://") {
+            desired_state_url.to_string()
+        } else if desired_state_url.trim().is_empty() {
+            self.url(fallback_path)
+        } else {
+            self.url(desired_state_url)
+        }
+    }
+
+    async fn parse_response<T: DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T, String> {
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json::<T>()
+                .await
+                .map_err(|error| format!("failed to decode southbound response: {error}"));
+        }
+
+        let message = parse_platform_error(response).await.unwrap_or_else(|| {
+            format!("southbound request failed with status {}", status.as_u16())
+        });
+        Err(message)
+    }
+}
+
+impl LocalPlatformStateStore {
+    fn new(base_state_dir: PathBuf) -> Self {
+        Self {
+            root: base_state_dir.join("platform-agent"),
+        }
+    }
+
+    async fn load_desired_state(&self) -> Option<DesiredStateCacheEntry> {
+        self.load_json(self.desired_state_path()).await
+    }
+
+    async fn save_desired_state(&self, state: &DesiredStateCacheEntry) -> Result<(), String> {
+        self.save_json(self.desired_state_path(), state).await
+    }
+
+    async fn load_compiled_state(&self) -> Option<CompiledNodeState> {
+        self.load_json(self.compiled_state_path()).await
+    }
+
+    async fn save_compiled_state(&self, state: &CompiledNodeState) -> Result<(), String> {
+        self.save_json(self.compiled_state_path(), state).await
+    }
+
+    fn desired_state_path(&self) -> PathBuf {
+        self.root.join("desired-state-cache.json")
+    }
+
+    fn compiled_state_path(&self) -> PathBuf {
+        self.root.join("compiled-node-state.json")
+    }
+
+    async fn load_json<T>(&self, path: PathBuf) -> Option<T>
+    where
+        T: DeserializeOwned,
+    {
+        let contents = fs::read_to_string(&path).await.ok()?;
+        match serde_json::from_str::<T>(&contents) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                warn!(path = %path.display(), error = %error, "failed to decode local platform-agent state");
+                None
+            }
+        }
+    }
+
+    async fn save_json<T>(&self, path: PathBuf, value: &T) -> Result<(), String>
+    where
+        T: Serialize,
+    {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await.map_err(|error| {
+                format!(
+                    "failed to create platform-agent state directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let bytes = serde_json::to_vec_pretty(value).map_err(|error| {
+            format!(
+                "failed to encode platform-agent state {}: {error}",
+                path.display()
+            )
+        })?;
+        let tmp_path = temp_path(&path);
+        fs::write(&tmp_path, bytes).await.map_err(|error| {
+            format!(
+                "failed to write platform-agent state {}: {error}",
+                tmp_path.display()
+            )
+        })?;
+        fs::rename(&tmp_path, &path).await.map_err(|error| {
+            format!(
+                "failed to replace platform-agent state {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(())
+    }
+}
+
+fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapability {
+    let mut supported_hooks = vec!["xdp".to_string(), "tc".to_string()];
+    supported_hooks.sort();
+    supported_hooks.dedup();
+
+    let mut limits = BTreeMap::new();
+    limits.insert(
+        "max_port_policies".to_string(),
+        config.max_port_policies as u64,
+    );
+
+    NodeCapability {
+        supported_hooks,
+        supports_xdp: true,
+        supports_tc: true,
+        supports_socket_lb: false,
+        supports_trace_ringbuf: config.trace_backend == "ringbuf",
+        supports_nat: false,
+        supports_lb: false,
+        supports_encap: false,
+        supports_qos_shaping: true,
+        limits,
+        observability_profile: Some(if config.trace_backend == "ringbuf" {
+            "full".to_string()
+        } else {
+            "standard".to_string()
+        }),
+    }
+}
+
+fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
+    let tenant_ids = context
+        .desired
+        .tenants
+        .iter()
+        .map(|tenant| tenant.metadata.id.clone())
+        .collect::<BTreeSet<_>>();
+    let network_by_id = context
+        .desired
+        .networks
+        .iter()
+        .map(|network| (network.metadata.id.clone(), network))
+        .collect::<BTreeMap<_, _>>();
+    let security_group_by_id = context
+        .desired
+        .security_groups
+        .iter()
+        .map(|security_group| (security_group.metadata.id.clone(), security_group))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut failed_objects = Vec::new();
+    let mut warnings = Vec::new();
+    let mut port_bindings = Vec::new();
+
+    for port in &context.desired.ports {
+        if let Some(bound_node_id) = port.spec.node_id.as_deref() {
+            if bound_node_id != context.node_id {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "port".to_string(),
+                    id: port.metadata.id.clone(),
+                    reason: format!(
+                        "port bound to node '{}' instead of '{}'",
+                        bound_node_id, context.node_id
+                    ),
+                });
+                continue;
+            }
+        } else {
+            warnings.push(format!(
+                "port '{}' has no explicit node binding; treating it as node-local shadow state",
+                port.metadata.id
+            ));
+        }
+
+        if !tenant_ids.is_empty() && !tenant_ids.contains(&port.spec.tenant_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "port".to_string(),
+                id: port.metadata.id.clone(),
+                reason: format!(
+                    "missing tenant '{}' in desired envelope",
+                    port.spec.tenant_id
+                ),
+            });
+            continue;
+        }
+
+        if !network_by_id.contains_key(&port.spec.network_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "port".to_string(),
+                id: port.metadata.id.clone(),
+                reason: format!(
+                    "missing network '{}' in desired envelope",
+                    port.spec.network_id
+                ),
+            });
+            continue;
+        }
+
+        let mut missing_security_group = None;
+        for security_group_id in &port.spec.security_group_ids {
+            if !security_group_by_id.contains_key(security_group_id) {
+                missing_security_group = Some(security_group_id.clone());
+                break;
+            }
+        }
+        if let Some(security_group_id) = missing_security_group {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "port".to_string(),
+                id: port.metadata.id.clone(),
+                reason: format!(
+                    "missing security group '{}' in desired envelope",
+                    security_group_id
+                ),
+            });
+            continue;
+        }
+
+        port_bindings.push(CompiledPortBinding {
+            port_id: port.metadata.id.clone(),
+            tenant_id: port.spec.tenant_id.clone(),
+            network_id: port.spec.network_id.clone(),
+            security_group_ids: port.spec.security_group_ids.clone(),
+            fixed_ips: port.spec.fixed_ips.clone(),
+            allowed_address_pairs: port.spec.allowed_address_pairs.clone(),
+            mac_address: port.spec.mac_address.clone(),
+            anti_spoof_enabled: port.spec.anti_spoof_enabled,
+            admin_state_up: port.spec.admin_state_up,
+        });
+    }
+
+    let mut compiled_route_tables = Vec::new();
+    for route_table in &context.desired.route_tables {
+        if !network_by_id.contains_key(&route_table.spec.network_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "route_table".to_string(),
+                id: route_table.metadata.id.clone(),
+                reason: format!(
+                    "missing network '{}' in desired envelope",
+                    route_table.spec.network_id
+                ),
+            });
+            continue;
+        }
+
+        compiled_route_tables.push(CompiledRouteTableView {
+            route_table_id: route_table.metadata.id.clone(),
+            network_id: route_table.spec.network_id.clone(),
+            route_count: route_table.spec.routes.len(),
+            default_route: route_table.spec.default_route.clone(),
+        });
+    }
+
+    if context.desired.deletes.is_empty() {
+        debug!(
+            generation = %context.desired.generation,
+            "southbound desired-state contains no explicit delete refs"
+        );
+    }
+
+    let mut compiled_objects = BTreeMap::new();
+    compiled_objects.insert("tenants".to_string(), context.desired.tenants.len());
+    compiled_objects.insert("networks".to_string(), context.desired.networks.len());
+    compiled_objects.insert("ports".to_string(), port_bindings.len());
+    compiled_objects.insert(
+        "security_groups".to_string(),
+        context.desired.security_groups.len(),
+    );
+    compiled_objects.insert("route_tables".to_string(), compiled_route_tables.len());
+    if !context.desired.deletes.is_empty() {
+        compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
+    }
+
+    let mut degraded_reasons = vec!["shadow_apply_only".to_string()];
+    if !failed_objects.is_empty() {
+        degraded_reasons.push("object_validation_failed".to_string());
+    }
+    degraded_reasons.sort();
+    degraded_reasons.dedup();
+
+    let compiled_at = unix_timestamp_string();
+    let compiled_state = CompiledNodeState {
+        generation: context.desired.generation.clone(),
+        compiler_version: env!("CARGO_PKG_VERSION").to_string(),
+        node_id: context.node_id.to_string(),
+        capability_profile: capability_profile(context.capability),
+        full_sync: context.desired.full_sync,
+        issued_at: context.desired.issued_at.clone(),
+        tenant_ids: tenant_ids.into_iter().collect(),
+        network_ids: network_by_id.keys().cloned().collect(),
+        security_group_ids: security_group_by_id.keys().cloned().collect(),
+        port_bindings,
+        route_tables: compiled_route_tables,
+        warnings: warnings.clone(),
+        degraded_reasons: degraded_reasons.clone(),
+        compiled_at: compiled_at.clone(),
+        shadow_apply_only: true,
+    };
+
+    let status = if failed_objects.is_empty() {
+        "partial".to_string()
+    } else if compiled_objects.values().copied().sum::<usize>() > failed_objects.len() {
+        "partial".to_string()
+    } else {
+        "failed".to_string()
+    };
+
+    CompileOutcome {
+        compiled_state,
+        apply_report: ApplyStatusReport {
+            generation: context.desired.generation.clone(),
+            status,
+            applied_at: compiled_at,
+            compiled_objects,
+            failed_objects,
+            warnings,
+            degraded_reasons,
+        },
+    }
+}
+
+fn capability_profile(capability: &NodeCapability) -> String {
+    let mut hooks = capability.supported_hooks.clone();
+    hooks.sort();
+    let hooks = hooks.join("+");
+    let trace = if capability.supports_trace_ringbuf {
+        "ringbuf"
+    } else {
+        "legacy"
+    };
+    format!("{hooks}:trace={trace}:nat={}", capability.supports_nat)
+}
+
+async fn parse_platform_error(response: reqwest::Response) -> Option<String> {
+    let status = response.status();
+    let body = response.text().await.ok()?;
+    if let Ok(error) = serde_json::from_str::<PlatformApiError>(&body) {
+        return Some(format!("{}: {}", status.as_u16(), error.message));
+    }
+    if body.trim().is_empty() {
+        None
+    } else {
+        Some(format!("{}: {}", status.as_u16(), body.trim()))
+    }
+}
+
+fn connection_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        "southbound request timed out".to_string()
+    } else if error.is_connect() {
+        format!("failed to connect to controller: {error}")
+    } else if let Some(status) = error.status() {
+        format!("southbound request failed with status {}", status.as_u16())
+    } else {
+        format!("southbound request failed: {error}")
+    }
+}
+
+fn hostname() -> String {
+    for path in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn unix_timestamp_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
+}
+
+fn temp_path(path: &Path) -> PathBuf {
+    let mut tmp = path.to_path_buf();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|ext| format!("{ext}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    tmp.set_extension(extension);
+    tmp
+}

@@ -1,5 +1,6 @@
 use clap::Parser;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ mod kernel_drop_manager;
 mod kernel_drop_support;
 mod netlink;
 mod openapi;
+mod platform_agent;
 mod service_chain;
 mod ssl_manager;
 mod ssl_support;
@@ -57,6 +59,18 @@ struct Config {
     log_filter: String,
     #[serde(default = "default_log_file_path")]
     log_file_path: String,
+    #[serde(default)]
+    southbound_controller_url: Option<String>,
+    #[serde(default)]
+    southbound_node_id: Option<String>,
+    #[serde(default)]
+    southbound_management_address: Option<String>,
+    #[serde(default)]
+    southbound_labels: BTreeMap<String, String>,
+    #[serde(default = "default_southbound_poll_interval_secs")]
+    southbound_poll_interval_secs: u64,
+    #[serde(default = "default_southbound_register_interval_secs")]
+    southbound_register_interval_secs: u64,
 }
 
 fn default_ebpf_path() -> String {
@@ -103,6 +117,14 @@ fn default_log_file_path() -> String {
     "/var/log/aria-agent/aria-agent.log".to_string()
 }
 
+fn default_southbound_poll_interval_secs() -> u64 {
+    15
+}
+
+fn default_southbound_register_interval_secs() -> u64 {
+    300
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -117,6 +139,12 @@ impl Default for Config {
             log_format: default_log_format(),
             log_filter: default_log_filter(),
             log_file_path: default_log_file_path(),
+            southbound_controller_url: None,
+            southbound_node_id: None,
+            southbound_management_address: None,
+            southbound_labels: BTreeMap::new(),
+            southbound_poll_interval_secs: default_southbound_poll_interval_secs(),
+            southbound_register_interval_secs: default_southbound_register_interval_secs(),
         }
     }
 }
@@ -188,11 +216,7 @@ fn build_log_writer(config: &Config) -> DualMakeWriter {
         return DualMakeWriter { file: None };
     }
 
-    let file = match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    let file = match OpenOptions::new().create(true).append(true).open(&log_path) {
         Ok(file) => file,
         Err(e) => {
             eprintln!(
@@ -277,14 +301,15 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let trace_backend_preference =
-        match ebpf_binary::TraceBackendPreference::parse(&config.trace_backend) {
-            Ok(preference) => preference,
-            Err(e) => {
-                error!(trace_backend = %config.trace_backend, error = %e, "invalid trace backend preference");
-                std::process::exit(1);
-            }
-        };
+    let trace_backend_preference = match ebpf_binary::TraceBackendPreference::parse(
+        &config.trace_backend,
+    ) {
+        Ok(preference) => preference,
+        Err(e) => {
+            error!(trace_backend = %config.trace_backend, error = %e, "invalid trace backend preference");
+            std::process::exit(1);
+        }
+    };
 
     let resolved_ebpf = match ebpf_binary::resolve_ebpf_binary(
         &config.ebpf_path,
@@ -316,6 +341,10 @@ async fn main() {
         log_format = %config.log_format,
         log_filter = %config.log_filter,
         log_file_path = %config.log_file_path,
+        southbound_controller_url = ?config.southbound_controller_url,
+        southbound_node_id = ?config.southbound_node_id,
+        southbound_poll_interval_secs = config.southbound_poll_interval_secs,
+        southbound_register_interval_secs = config.southbound_register_interval_secs,
         "starting aria-agent"
     );
 
@@ -432,6 +461,40 @@ async fn main() {
         }
     });
 
+    let southbound_task = match (
+        config.southbound_controller_url.clone(),
+        config.southbound_node_id.clone(),
+    ) {
+        (Some(controller_url), Some(node_id))
+            if !controller_url.trim().is_empty() && !node_id.trim().is_empty() =>
+        {
+            Some(platform_agent::start(platform_agent::PlatformAgentConfig {
+                controller_url,
+                node_id,
+                management_address: config.southbound_management_address.clone(),
+                labels: config.southbound_labels.clone(),
+                poll_interval: std::time::Duration::from_secs(
+                    config.southbound_poll_interval_secs.max(5),
+                ),
+                register_interval: std::time::Duration::from_secs(
+                    config
+                        .southbound_register_interval_secs
+                        .max(config.southbound_poll_interval_secs.max(5)),
+                ),
+                state_dir: PathBuf::from(&config.state_path),
+                trace_backend: resolved_ebpf.trace_backend.as_str().to_string(),
+                kernel_version: resolved_ebpf.kernel_version.clone(),
+                max_port_policies: config.max_port_policies,
+            }))
+        }
+        _ => {
+            info!(
+                "southbound platform-agent loop disabled; controller_url or node_id not configured"
+            );
+            None
+        }
+    };
+
     // Start HTTP server
     let http_task = tokio::spawn(async move {
         info!(listen_addr = %listen_addr, "HTTP API server listening");
@@ -458,6 +521,9 @@ async fn main() {
     http_task.abort();
     compact_task.abort();
     ssl_reconcile_task.abort();
+    if let Some(task) = southbound_task {
+        task.abort();
+    }
 
     // Final compact: ensure WAL is flushed to snapshot
     control_plane.compact_all().await;
