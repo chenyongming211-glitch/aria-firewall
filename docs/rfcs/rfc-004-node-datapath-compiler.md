@@ -419,11 +419,13 @@ Agent 重启时，恢复流程建议为：
 - agent 当前会把第一版 `ReconcilePlan` 缓存到 `${state_path}/platform-agent/reconcile-plan.json`
 - agent 当前会把第一版 `RuntimePlan` 缓存到 `${state_path}/platform-agent/runtime-plan.json`
 - agent 当前会把第一版 `RuntimeInventory` 缓存到 `${state_path}/platform-agent/runtime-inventory.json`
+- agent 当前会把第一版 `RuntimeInventoryDiff` 缓存到 `${state_path}/platform-agent/runtime-inventory-diff.json`
 - 第一版编译器已开始把 `Tenant / Network / Port / SecurityGroup / RouteTable` 下沉为节点局部视图
 - `CompiledNodeState` 已开始输出 `identity / ports / security / routes` 四个 domain summary，作为后续按编译域分治的第一阶段骨架
 - `RuntimeInventory` 已开始按 `identity / ports / security / routes` 汇总 shadow attach/map/domain inventory，作为后续本地 runtime reconcile 的恢复基线
+- `RuntimeInventoryDiff` 已开始按编译域汇总 attach/map/domain delta，作为后续 runtime inventory reconcile 与增量 materialization 的轻量差异骨架
 - `ApplyStatusReport` 已开始携带 `domain_statuses`，把 domain-level shadow 结果回报给 controller
-- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + runtime plan + runtime inventory + apply report`，不会直接 materialize 到 datapath
+- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + runtime plan + runtime inventory + runtime inventory diff + apply report`，不会直接 materialize 到 datapath
 - 当前 `apply-status` 主要表达对象校验、降级原因和 shadow compile 结果，尚不代表 datapath 已成功写入
 
 ## 16. 当前缺口
@@ -432,7 +434,7 @@ Agent 重启时，恢复流程建议为：
 
 - 缺少平台对象到 runtime 的正式 IR
 - 缺少 generation 化的 compiled state
-- 缺少按编译域分治的结构化 IR 与 runtime inventory
+- 缺少按编译域分治的结构化 IR 与可执行 runtime inventory projection
 - 缺少对象级失败和降级报告
 
 ## 17. 验收标准

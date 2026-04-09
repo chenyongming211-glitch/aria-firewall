@@ -56,8 +56,8 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - controller 已通过 store trait 隔离存储边界，并新增可选的文件快照 backend；默认实现仍为内存版
 - file-backed controller 已把 `registration / apply-status / heartbeat / health` 明确为内存态运行状态，不再在每次心跳时重写整份 controller 快照
 - `aria-agent` 已新增实验性的可选 southbound client；当 `southbound_controller_url` 与 `southbound_node_id` 被配置后，agent 会执行 `register / desired-state / apply-status / heartbeat` 循环
-- agent 侧已开始持久化 `${state_path}/platform-agent/desired-state-cache.json`、`${state_path}/platform-agent/compiled-node-state.json`、`${state_path}/platform-agent/reconcile-plan.json`、`${state_path}/platform-agent/runtime-plan.json` 与 `${state_path}/platform-agent/runtime-inventory.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory` 的第一阶段本地恢复骨架
-- agent 当前只实现 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，生成第一版本地 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)` 与 `runtime inventory` 并回报 `partial / failed` 结果；`CompiledNodeState` 已开始按 `identity / ports / security / routes` 输出本地 domain summary，但尚未把这些结果 materialize 到 datapath
+- agent 侧已开始持久化 `${state_path}/platform-agent/desired-state-cache.json`、`${state_path}/platform-agent/compiled-node-state.json`、`${state_path}/platform-agent/reconcile-plan.json`、`${state_path}/platform-agent/runtime-plan.json`、`${state_path}/platform-agent/runtime-inventory.json` 与 `${state_path}/platform-agent/runtime-inventory-diff.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory / runtime inventory diff` 的第一阶段本地恢复骨架
+- agent 当前只实现 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，生成第一版本地 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)`、`runtime inventory` 与 `runtime inventory diff` 并回报 `partial / failed` 结果；`CompiledNodeState` 已开始按 `identity / ports / security / routes` 输出本地 domain summary，但尚未把这些结果 materialize 到 datapath
 - agent 当前回报给 controller 的 `apply-status` 也已开始携带按 `identity / ports / security / routes` 划分的 `domain_statuses`，为后续 rollout / datapath 域化状态面提供统一语义
 
 当前实现仍不包含：

@@ -186,12 +186,59 @@ struct RuntimeInventory {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryAttachDelta {
+    domain: String,
+    hook_family: String,
+    scope: String,
+    operation: String,
+    previous_object_count: usize,
+    current_object_count: usize,
+    change_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryMapDelta {
+    domain: String,
+    map_family: String,
+    operation: String,
+    previous_object_count: usize,
+    current_object_count: usize,
+    change_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryDomainDelta {
+    domain: String,
+    previous_attach_operations: usize,
+    current_attach_operations: usize,
+    previous_map_operations: usize,
+    current_map_operations: usize,
+    previous_compiled_objects: usize,
+    current_compiled_objects: usize,
+    change_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeInventoryDiff {
+    generation: String,
+    previous_generation: Option<String>,
+    observed_at: String,
+    changed_domains: Vec<String>,
+    attach_deltas: Vec<RuntimeInventoryAttachDelta>,
+    map_deltas: Vec<RuntimeInventoryMapDelta>,
+    domain_deltas: Vec<RuntimeInventoryDomainDelta>,
+    has_cleanup: bool,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
     reconcile_plan: ReconcilePlan,
     runtime_plan: RuntimePlan,
     runtime_inventory: RuntimeInventory,
+    runtime_inventory_diff: RuntimeInventoryDiff,
     apply_report: ApplyStatusReport,
 }
 
@@ -201,6 +248,7 @@ struct CompilerContext<'a> {
     desired: &'a DesiredStateEnvelope,
     capability: &'a NodeCapability,
     previous_compiled_state: Option<&'a CompiledNodeState>,
+    previous_runtime_inventory: Option<&'a RuntimeInventory>,
 }
 
 struct SouthboundClient {
@@ -253,6 +301,7 @@ impl PlatformAgent {
         let mut reconcile_plan = self.state_store.load_reconcile_plan().await;
         let mut runtime_plan = self.state_store.load_runtime_plan().await;
         let mut runtime_inventory = self.state_store.load_runtime_inventory().await;
+        let mut runtime_inventory_diff = self.state_store.load_runtime_inventory_diff().await;
         loop {
             interval.tick().await;
 
@@ -323,6 +372,10 @@ impl PlatformAgent {
                 || runtime_inventory
                     .as_ref()
                     .map(|inventory| inventory.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || runtime_inventory_diff
+                    .as_ref()
+                    .map(|diff| diff.generation.as_str())
                     != Some(desired_generation.as_str());
 
             let mut last_reconcile_at = compiled_state
@@ -351,6 +404,7 @@ impl PlatformAgent {
                     desired: &desired_state,
                     capability: &self.capability,
                     previous_compiled_state: compiled_state.as_ref(),
+                    previous_runtime_inventory: runtime_inventory.as_ref(),
                 });
                 attached_ports = outcome.compiled_state.port_bindings.len();
                 last_reconcile_at = Some(outcome.compiled_state.compiled_at.clone());
@@ -416,6 +470,24 @@ impl PlatformAgent {
                         map_inventory = outcome.runtime_inventory.map_inventory.len(),
                         domain_inventory = outcome.runtime_inventory.domain_inventory.len(),
                         "persisted shadow runtime inventory"
+                    );
+                }
+
+                if let Err(error) = self
+                    .state_store
+                    .save_runtime_inventory_diff(&outcome.runtime_inventory_diff)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist runtime inventory diff");
+                    heartbeat_error = Some(error);
+                } else {
+                    runtime_inventory_diff = Some(outcome.runtime_inventory_diff.clone());
+                    info!(
+                        generation = %outcome.runtime_inventory_diff.generation,
+                        changed_domains = outcome.runtime_inventory_diff.changed_domains.len(),
+                        attach_deltas = outcome.runtime_inventory_diff.attach_deltas.len(),
+                        map_deltas = outcome.runtime_inventory_diff.map_deltas.len(),
+                        "persisted shadow runtime inventory diff"
                     );
                 }
 
@@ -657,6 +729,15 @@ impl LocalPlatformStateStore {
             .await
     }
 
+    async fn load_runtime_inventory_diff(&self) -> Option<RuntimeInventoryDiff> {
+        self.load_json(self.runtime_inventory_diff_path()).await
+    }
+
+    async fn save_runtime_inventory_diff(&self, diff: &RuntimeInventoryDiff) -> Result<(), String> {
+        self.save_json(self.runtime_inventory_diff_path(), diff)
+            .await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
@@ -675,6 +756,10 @@ impl LocalPlatformStateStore {
 
     fn runtime_inventory_path(&self) -> PathBuf {
         self.root.join("runtime-inventory.json")
+    }
+
+    fn runtime_inventory_diff_path(&self) -> PathBuf {
+        self.root.join("runtime-inventory-diff.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -1004,6 +1089,8 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         &compiled_state,
         &runtime_plan,
     );
+    let runtime_inventory_diff =
+        build_runtime_inventory_diff(context.previous_runtime_inventory, &runtime_inventory);
 
     let status = if failed_objects.is_empty() {
         "partial".to_string()
@@ -1018,6 +1105,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         reconcile_plan,
         runtime_plan,
         runtime_inventory,
+        runtime_inventory_diff,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -1431,6 +1519,249 @@ fn build_runtime_inventory(
         attach_inventory,
         map_inventory,
         domain_inventory,
+        shadow_apply_only: true,
+    }
+}
+
+fn build_runtime_inventory_diff(
+    previous_inventory: Option<&RuntimeInventory>,
+    current_inventory: &RuntimeInventory,
+) -> RuntimeInventoryDiff {
+    let mut attach_deltas = Vec::new();
+    let mut changed_domains = BTreeSet::new();
+    let mut has_cleanup = false;
+
+    let previous_attach = previous_inventory
+        .map(|inventory| {
+            inventory
+                .attach_inventory
+                .iter()
+                .map(|entry| {
+                    (
+                        (
+                            entry.domain.clone(),
+                            entry.hook_family.clone(),
+                            entry.scope.clone(),
+                            entry.operation.clone(),
+                        ),
+                        entry.object_count,
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_attach = current_inventory
+        .attach_inventory
+        .iter()
+        .map(|entry| {
+            (
+                (
+                    entry.domain.clone(),
+                    entry.hook_family.clone(),
+                    entry.scope.clone(),
+                    entry.operation.clone(),
+                ),
+                entry.object_count,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let attach_keys = previous_attach
+        .keys()
+        .cloned()
+        .chain(current_attach.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    for (domain, hook_family, scope, operation) in attach_keys {
+        let previous_object_count = previous_attach
+            .get(&(
+                domain.clone(),
+                hook_family.clone(),
+                scope.clone(),
+                operation.clone(),
+            ))
+            .copied()
+            .unwrap_or(0);
+        let current_object_count = current_attach
+            .get(&(
+                domain.clone(),
+                hook_family.clone(),
+                scope.clone(),
+                operation.clone(),
+            ))
+            .copied()
+            .unwrap_or(0);
+        if previous_object_count == current_object_count {
+            continue;
+        }
+        let change_type = if previous_object_count == 0 {
+            "added".to_string()
+        } else if current_object_count == 0 {
+            "removed".to_string()
+        } else {
+            "updated".to_string()
+        };
+        if operation.contains("cleanup") || change_type == "removed" {
+            has_cleanup = true;
+        }
+        changed_domains.insert(domain.clone());
+        attach_deltas.push(RuntimeInventoryAttachDelta {
+            domain,
+            hook_family,
+            scope,
+            operation,
+            previous_object_count,
+            current_object_count,
+            change_type,
+        });
+    }
+
+    let previous_maps = previous_inventory
+        .map(|inventory| {
+            inventory
+                .map_inventory
+                .iter()
+                .map(|entry| {
+                    (
+                        (
+                            entry.domain.clone(),
+                            entry.map_family.clone(),
+                            entry.operation.clone(),
+                        ),
+                        entry.object_count,
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_maps = current_inventory
+        .map_inventory
+        .iter()
+        .map(|entry| {
+            (
+                (
+                    entry.domain.clone(),
+                    entry.map_family.clone(),
+                    entry.operation.clone(),
+                ),
+                entry.object_count,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let map_keys = previous_maps
+        .keys()
+        .cloned()
+        .chain(current_maps.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut map_deltas = Vec::new();
+    for (domain, map_family, operation) in map_keys {
+        let previous_object_count = previous_maps
+            .get(&(domain.clone(), map_family.clone(), operation.clone()))
+            .copied()
+            .unwrap_or(0);
+        let current_object_count = current_maps
+            .get(&(domain.clone(), map_family.clone(), operation.clone()))
+            .copied()
+            .unwrap_or(0);
+        if previous_object_count == current_object_count {
+            continue;
+        }
+        let change_type = if previous_object_count == 0 {
+            "added".to_string()
+        } else if current_object_count == 0 {
+            "removed".to_string()
+        } else {
+            "updated".to_string()
+        };
+        if operation.contains("cleanup") || change_type == "removed" {
+            has_cleanup = true;
+        }
+        changed_domains.insert(domain.clone());
+        map_deltas.push(RuntimeInventoryMapDelta {
+            domain,
+            map_family,
+            operation,
+            previous_object_count,
+            current_object_count,
+            change_type,
+        });
+    }
+
+    let previous_domains = previous_inventory
+        .map(|inventory| {
+            inventory
+                .domain_inventory
+                .iter()
+                .map(|domain| (domain.domain.clone(), domain))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_domains = current_inventory
+        .domain_inventory
+        .iter()
+        .map(|domain| (domain.domain.clone(), domain))
+        .collect::<BTreeMap<_, _>>();
+    let domain_keys = previous_domains
+        .keys()
+        .cloned()
+        .chain(current_domains.keys().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut domain_deltas = Vec::new();
+    for domain in domain_keys {
+        let previous = previous_domains.get(&domain);
+        let current = current_domains.get(&domain);
+        let previous_attach_operations = previous
+            .map(|summary| summary.attach_operations)
+            .unwrap_or(0);
+        let current_attach_operations = current
+            .map(|summary| summary.attach_operations)
+            .unwrap_or(0);
+        let previous_map_operations = previous.map(|summary| summary.map_operations).unwrap_or(0);
+        let current_map_operations = current.map(|summary| summary.map_operations).unwrap_or(0);
+        let previous_compiled_objects = previous
+            .map(|summary| summary.compiled_objects)
+            .unwrap_or(0);
+        let current_compiled_objects = current.map(|summary| summary.compiled_objects).unwrap_or(0);
+
+        if previous_attach_operations == current_attach_operations
+            && previous_map_operations == current_map_operations
+            && previous_compiled_objects == current_compiled_objects
+        {
+            continue;
+        }
+
+        let change_type = if previous.is_none() {
+            "added".to_string()
+        } else if current.is_none() {
+            "removed".to_string()
+        } else {
+            "updated".to_string()
+        };
+        if change_type == "removed" {
+            has_cleanup = true;
+        }
+        changed_domains.insert(domain.clone());
+        domain_deltas.push(RuntimeInventoryDomainDelta {
+            domain,
+            previous_attach_operations,
+            current_attach_operations,
+            previous_map_operations,
+            current_map_operations,
+            previous_compiled_objects,
+            current_compiled_objects,
+            change_type,
+        });
+    }
+
+    RuntimeInventoryDiff {
+        generation: current_inventory.generation.clone(),
+        previous_generation: previous_inventory
+            .map(|inventory| inventory.generation.clone())
+            .filter(|generation| generation != &current_inventory.generation),
+        observed_at: unix_timestamp_string(),
+        changed_domains: changed_domains.into_iter().collect(),
+        attach_deltas,
+        map_deltas,
+        domain_deltas,
+        has_cleanup,
         shadow_apply_only: true,
     }
 }

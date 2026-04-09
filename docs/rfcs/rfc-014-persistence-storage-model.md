@@ -297,7 +297,7 @@ Persistence model v1 的验收标准：
 - southbound runtime（`registration / apply-status / heartbeat / health`）现已明确作为内存态运行状态处理，不再跟随每次心跳重写整份 controller 快照
 - southbound 已开始持久化 per-node desired-state publish 摘要，作为 `per-node desired generation / publish records` 的第一阶段雏形
 - `aria-agent` 已新增第一版本地 platform-agent 状态目录 `${state_path}/platform-agent/`
-- agent 当前会持久化 `desired-state-cache.json`、`compiled-node-state.json`、`reconcile-plan.json`、`runtime-plan.json` 与 `runtime-inventory.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory` 的本地恢复骨架
+- agent 当前会持久化 `desired-state-cache.json`、`compiled-node-state.json`、`reconcile-plan.json`、`runtime-plan.json`、`runtime-inventory.json` 与 `runtime-inventory-diff.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory / runtime inventory diff` 的本地恢复骨架
 - 默认实现仍为内存态 backend
 - northbound / southbound handler 已只依赖抽象边界，不再直接依赖具体内存实现
 - northbound 对象写入当前以“store 内部 mutation + generation bump”为 durability 边界，再写入文件快照
