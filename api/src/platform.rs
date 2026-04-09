@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[allow(unused_imports)]
 use serde_json::json;
 use std::collections::BTreeMap;
 use utoipa::{IntoParams, ToSchema};
