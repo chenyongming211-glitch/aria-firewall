@@ -234,6 +234,15 @@ mod tests {
             .pointer("/components/schemas/DesiredStateEnvelope")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/health_checks")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/backend_sets")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/services")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/DesiredStatePublishRecord")
             .is_some());
         assert!(doc

@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use crate::{
-    NetworkResource, PortResource, RouteTableResource, SecurityGroupResource, TenantResource,
+    BackendSetResource, HealthCheckResource, NetworkResource, PortResource, RouteTableResource,
+    SecurityGroupResource, ServiceResource, TenantResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -176,6 +177,9 @@ pub struct DesiredStateDeleteRef {
         "ports": 2,
         "security_groups": 1,
         "route_tables": 1,
+        "health_checks": 1,
+        "backend_sets": 1,
+        "services": 1,
         "deletes": 0
     },
     "tenants": [],
@@ -183,6 +187,9 @@ pub struct DesiredStateDeleteRef {
     "ports": [],
     "security_groups": [],
     "route_tables": [],
+    "health_checks": [],
+    "backend_sets": [],
+    "services": [],
     "deletes": []
 }))]
 pub struct DesiredStateEnvelope {
@@ -215,6 +222,15 @@ pub struct DesiredStateEnvelope {
     /// Route-table objects relevant to the node.
     #[serde(default)]
     pub route_tables: Vec<RouteTableResource>,
+    /// Health-check objects relevant to the node.
+    #[serde(default)]
+    pub health_checks: Vec<HealthCheckResource>,
+    /// Backend-set objects relevant to the node.
+    #[serde(default)]
+    pub backend_sets: Vec<BackendSetResource>,
+    /// Service objects relevant to the node.
+    #[serde(default)]
+    pub services: Vec<ServiceResource>,
     /// Explicit deletes for incremental protocols.
     #[serde(default)]
     pub deletes: Vec<DesiredStateDeleteRef>,
@@ -231,6 +247,9 @@ pub struct DesiredStateEnvelope {
         "ports": 2,
         "security_groups": 1,
         "route_tables": 1,
+        "health_checks": 1,
+        "backend_sets": 1,
+        "services": 1,
         "deletes": 0
     }
 }))]
@@ -276,7 +295,7 @@ pub struct ApplyObjectFailure {
     "shadow_apply_only": true
 }))]
 pub struct ApplyDomainStatus {
-    /// Compile/apply domain such as `identity`, `ports`, `security`, or `routes`.
+    /// Compile/apply domain such as `identity`, `ports`, `security`, `routes`, or `services`.
     #[schema(example = "ports")]
     pub domain: String,
     /// Number of input objects routed into this domain.

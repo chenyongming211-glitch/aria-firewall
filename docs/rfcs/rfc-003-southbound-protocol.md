@@ -354,11 +354,11 @@ southbound 协议 v1 的验收标准：
 - 共享消息模型已经进入 `aria-api`
 - `controller` 已提供临时 HTTP 形态的 southbound 路由
 - 已覆盖 `register / desired-state / apply-status / heartbeat / status`
-- desired-state 已按节点维度输出首批对象：`Tenant / Network / Port / SecurityGroup / RouteTable`
+- desired-state 已按节点维度输出首批对象：`Tenant / Network / Port / SecurityGroup / RouteTable / HealthCheck / BackendSet / Service`
 - `aria-agent` 已新增实验性的可选 southbound client；配置 `southbound_controller_url + southbound_node_id` 后，会执行 `register / desired-state / apply-status / heartbeat` 循环
 - agent 当前会把 desired-state 缓存到 `${state_path}/platform-agent/desired-state-cache.json`，并把第一版节点局部 `compiled state` 缓存到 `${state_path}/platform-agent/compiled-node-state.json`
-- 当前 agent 侧 southbound 仍是 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译为节点局部视图并回报 compile/apply 结果，但尚未 materialize 到 datapath
-- `apply-status` 已开始携带 `domain_statuses`，按 `identity / ports / security / routes / nat` 汇总各编译域的 shadow 结果；其中 `nat` 域当前仅作为 `SNAT / DNAT / Floating IP` 的 shadow reserved 占位
+- 当前 agent 侧 southbound 仍是 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable / HealthCheck / BackendSet / Service` 编译为节点局部视图并回报 compile/apply 结果，但尚未 materialize 到 datapath
+- `apply-status` 已开始携带 `domain_statuses`，按 `identity / ports / security / routes / services / nat` 汇总各编译域的 shadow 结果；其中 `services` 域用于承载 `Service / BackendSet / HealthCheck` 的 shadow 编译结果，`nat` 域当前仅作为 `SNAT / DNAT / Floating IP` 的 shadow reserved 占位
 - `status` 响应中的 `last_seen_at` 仅在节点产生过 southbound 观察记录后才返回，避免伪造时间戳
 - controller 已开始记录 per-node desired-state publish 摘要，包含 `generation / issued_at / full_sync / object_counts`，并在同 generation 重复拉取时复用已有发布时间
 - `status` 响应已开始派生 `sync_status`，综合 `desired_generation / last_applied_generation / apply-status / health` 反映节点是否追平、失败或降级

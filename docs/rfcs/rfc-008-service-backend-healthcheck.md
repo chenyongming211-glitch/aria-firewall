@@ -292,10 +292,11 @@ Service 模型 v1 的验收标准：
 - 当前覆盖 CRUD、OpenAPI、基础分页/过滤、引用完整性校验和删除依赖保护
 - `BackendSet` 与 `HealthCheck` 的引用关系、`Service` 与 `BackendSet` 的引用关系，现已由 store mutation 边界原子校验
 - `routing / NAT / Floating IP` 的预留位不会阻塞该对象层推进
+- `southbound desired-state` 现已开始按节点相关网络投影 `Service / BackendSet / HealthCheck`
+- `aria-agent` 现已开始在 `services` shadow 域中编译 `Service / BackendSet / HealthCheck`，并把结果写入 `compiled state / reconcile plan / runtime inventory / runtime intent`
 
 当前仍未实现：
 
-- southbound 发布与 agent 编译
 - 健康检查执行器
 - session affinity 状态
 - 节点内转发与跨节点转发的 L4 LB datapath

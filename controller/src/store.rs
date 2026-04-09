@@ -1114,6 +1114,9 @@ impl InMemoryControllerStore {
         ports: &[PortResource],
         security_groups: &[SecurityGroupResource],
         route_tables: &[RouteTableResource],
+        health_checks: &[HealthCheckResource],
+        backend_sets: &[BackendSetResource],
+        services: &[ServiceResource],
         deletes: usize,
     ) -> BTreeMap<String, usize> {
         BTreeMap::from([
@@ -1122,6 +1125,9 @@ impl InMemoryControllerStore {
             ("ports".to_string(), ports.len()),
             ("security_groups".to_string(), security_groups.len()),
             ("route_tables".to_string(), route_tables.len()),
+            ("health_checks".to_string(), health_checks.len()),
+            ("backend_sets".to_string(), backend_sets.len()),
+            ("services".to_string(), services.len()),
             ("deletes".to_string(), deletes),
         ])
     }
@@ -1623,6 +1629,42 @@ impl InMemoryControllerStore {
             .filter(|route_table| network_ids.contains(&route_table.spec.network_id))
             .collect::<Vec<_>>();
 
+        let backend_sets = self
+            .backend_sets
+            .list()
+            .await
+            .into_iter()
+            .filter(|backend_set| network_ids.contains(&backend_set.spec.network_id))
+            .collect::<Vec<_>>();
+
+        let services = self
+            .services
+            .list()
+            .await
+            .into_iter()
+            .filter(|service| network_ids.contains(&service.spec.network_id))
+            .collect::<Vec<_>>();
+
+        let health_check_ids = backend_sets
+            .iter()
+            .filter_map(|backend_set| backend_set.spec.health_check_id.clone())
+            .collect::<BTreeSet<_>>();
+
+        let health_checks = self
+            .health_checks
+            .list()
+            .await
+            .into_iter()
+            .filter(|health_check| {
+                health_check_ids.contains(&health_check.metadata.id)
+                    || health_check
+                        .spec
+                        .network_id
+                        .as_deref()
+                        .is_some_and(|network_id| network_ids.contains(network_id))
+            })
+            .collect::<Vec<_>>();
+
         let tenants = self
             .tenants
             .list()
@@ -1637,6 +1679,9 @@ impl InMemoryControllerStore {
             &ports,
             &security_groups,
             &route_tables,
+            &health_checks,
+            &backend_sets,
+            &services,
             0,
         );
         let generation = self.current_generation_inner();
@@ -1656,6 +1701,9 @@ impl InMemoryControllerStore {
                 ports,
                 security_groups,
                 route_tables,
+                health_checks,
+                backend_sets,
+                services,
                 deletes: Vec::new(),
             },
             changed,

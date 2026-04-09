@@ -62,6 +62,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - agent 侧已开始持久化 `${state_path}/platform-agent/desired-state-cache.json`、`${state_path}/platform-agent/compiled-node-state.json`、`${state_path}/platform-agent/reconcile-plan.json`、`${state_path}/platform-agent/runtime-plan.json`、`${state_path}/platform-agent/runtime-inventory.json`、`${state_path}/platform-agent/runtime-inventory-diff.json` 与 `${state_path}/platform-agent/runtime-intent.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory / runtime inventory diff / runtime intent` 的第一阶段本地恢复骨架
 - agent 当前只实现 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，生成第一版本地 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)`、`runtime inventory`、`runtime inventory diff` 与 `runtime intent` 并回报 `partial / failed` 结果；`CompiledNodeState` 已开始按 `identity / ports / security / routes / nat` 输出本地 domain summary，其中 `routes` 域对应 routing 预留位，`nat` 域对应 `SNAT / DNAT / Floating IP` 的 shadow reserved 预留位，但尚未把这些结果 materialize 到 datapath
 - agent 当前回报给 controller 的 `apply-status` 也已开始携带按 `identity / ports / security / routes / nat` 划分的 `domain_statuses`，为后续 rollout / datapath 域化状态面提供统一语义
+- southbound `desired-state` 现已开始向节点投影 `Service / BackendSet / HealthCheck` 对象；agent 的 shadow compiler 也已开始把这些对象编译为 `services` 域的本地摘要、运行计划、inventory 与 intent，但仍然不会进入真实 L4 LB datapath
 
 当前实现仍不包含：
 
@@ -69,7 +70,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 认证、授权与审计
 - southbound 增量协议
 - datapath 下发与恢复闭环
-- `Service / BackendSet / HealthCheck` 的 southbound 发布、agent 编译、健康检查执行与 L4 LB datapath materialization
+- `Service / BackendSet / HealthCheck` 的健康检查执行与 L4 LB datapath materialization
 
 因此当前实现只能视为平台控制面的启动骨架，而不是完整的 Phase 1 完成态。
 

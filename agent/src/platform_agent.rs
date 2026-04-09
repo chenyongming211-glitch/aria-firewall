@@ -53,6 +53,39 @@ struct CompiledRouteTableView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledHealthCheckView {
+    health_check_id: String,
+    tenant_id: String,
+    network_id: Option<String>,
+    protocol: String,
+    target_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledBackendSetView {
+    backend_set_id: String,
+    tenant_id: String,
+    network_id: String,
+    health_check_id: Option<String>,
+    policy: String,
+    backend_count: usize,
+    local_backend_count: usize,
+    remote_backend_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompiledServiceView {
+    service_id: String,
+    tenant_id: String,
+    network_id: String,
+    backend_set_id: Option<String>,
+    vip: String,
+    protocol: String,
+    port_count: usize,
+    exposure_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CompileDomainSummary {
     domain: String,
     input_objects: usize,
@@ -75,6 +108,9 @@ struct CompiledNodeState {
     security_group_ids: Vec<String>,
     port_bindings: Vec<CompiledPortBinding>,
     route_tables: Vec<CompiledRouteTableView>,
+    health_checks: Vec<CompiledHealthCheckView>,
+    backend_sets: Vec<CompiledBackendSetView>,
+    services: Vec<CompiledServiceView>,
     domain_summaries: Vec<CompileDomainSummary>,
     warnings: Vec<String>,
     degraded_reasons: Vec<String>,
@@ -922,6 +958,18 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         .iter()
         .map(|security_group| (security_group.metadata.id.clone(), security_group))
         .collect::<BTreeMap<_, _>>();
+    let health_check_by_id = context
+        .desired
+        .health_checks
+        .iter()
+        .map(|health_check| (health_check.metadata.id.clone(), health_check))
+        .collect::<BTreeMap<_, _>>();
+    let port_by_id = context
+        .desired
+        .ports
+        .iter()
+        .map(|port| (port.metadata.id.clone(), port))
+        .collect::<BTreeMap<_, _>>();
 
     let mut failed_objects = Vec::new();
     let mut warnings = Vec::new();
@@ -1025,6 +1073,201 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         });
     }
 
+    let mut compiled_health_checks = Vec::new();
+    for health_check in &context.desired.health_checks {
+        if !tenant_ids.is_empty() && !tenant_ids.contains(&health_check.spec.tenant_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "health_check".to_string(),
+                id: health_check.metadata.id.clone(),
+                reason: format!(
+                    "missing tenant '{}' in desired envelope",
+                    health_check.spec.tenant_id
+                ),
+            });
+            continue;
+        }
+
+        if let Some(network_id) = health_check.spec.network_id.as_deref() {
+            if !network_by_id.contains_key(network_id) {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "health_check".to_string(),
+                    id: health_check.metadata.id.clone(),
+                    reason: format!("missing network '{}' in desired envelope", network_id),
+                });
+                continue;
+            }
+        }
+
+        compiled_health_checks.push(CompiledHealthCheckView {
+            health_check_id: health_check.metadata.id.clone(),
+            tenant_id: health_check.spec.tenant_id.clone(),
+            network_id: health_check.spec.network_id.clone(),
+            protocol: health_check.spec.protocol.clone(),
+            target_port: health_check.spec.target_port,
+        });
+    }
+
+    let compiled_health_check_ids = compiled_health_checks
+        .iter()
+        .map(|health_check| health_check.health_check_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut compiled_backend_sets = Vec::new();
+    for backend_set in &context.desired.backend_sets {
+        if !tenant_ids.is_empty() && !tenant_ids.contains(&backend_set.spec.tenant_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "backend_set".to_string(),
+                id: backend_set.metadata.id.clone(),
+                reason: format!(
+                    "missing tenant '{}' in desired envelope",
+                    backend_set.spec.tenant_id
+                ),
+            });
+            continue;
+        }
+
+        if !network_by_id.contains_key(&backend_set.spec.network_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "backend_set".to_string(),
+                id: backend_set.metadata.id.clone(),
+                reason: format!(
+                    "missing network '{}' in desired envelope",
+                    backend_set.spec.network_id
+                ),
+            });
+            continue;
+        }
+
+        if let Some(health_check_id) = backend_set.spec.health_check_id.as_deref() {
+            if !compiled_health_check_ids.contains(health_check_id)
+                && !health_check_by_id.contains_key(health_check_id)
+            {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "backend_set".to_string(),
+                    id: backend_set.metadata.id.clone(),
+                    reason: format!(
+                        "missing health_check '{}' in desired envelope",
+                        health_check_id
+                    ),
+                });
+                continue;
+            }
+        }
+
+        let mut local_backend_count = 0usize;
+        let mut remote_backend_count = 0usize;
+        for backend in &backend_set.spec.backends {
+            if let Some(target_ref) = backend.target_ref.as_deref() {
+                if let Some(port) = port_by_id.get(target_ref) {
+                    let bound_node = port.spec.node_id.as_deref().unwrap_or(context.node_id);
+                    if bound_node == context.node_id {
+                        local_backend_count += 1;
+                    } else {
+                        remote_backend_count += 1;
+                    }
+                } else if backend.node_id.as_deref() == Some(context.node_id)
+                    || backend.locality.as_deref() == Some("local")
+                {
+                    failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "backend_set".to_string(),
+                        id: backend_set.metadata.id.clone(),
+                        reason: format!(
+                            "backend '{}' references local port '{}' that is missing from desired envelope",
+                            backend.id, target_ref
+                        ),
+                    });
+                    local_backend_count = 0;
+                    remote_backend_count = 0;
+                    break;
+                } else {
+                    warnings.push(format!(
+                        "backend_set '{}' backend '{}' references remote port '{}' outside node-local desired envelope; treating as remote shadow backend",
+                        backend_set.metadata.id, backend.id, target_ref
+                    ));
+                    remote_backend_count += 1;
+                }
+            } else if backend.locality.as_deref() == Some("local") {
+                local_backend_count += 1;
+            } else {
+                remote_backend_count += 1;
+            }
+        }
+
+        if failed_objects.iter().any(|failure| {
+            failure.resource_kind == "backend_set" && failure.id == backend_set.metadata.id
+        }) {
+            continue;
+        }
+
+        compiled_backend_sets.push(CompiledBackendSetView {
+            backend_set_id: backend_set.metadata.id.clone(),
+            tenant_id: backend_set.spec.tenant_id.clone(),
+            network_id: backend_set.spec.network_id.clone(),
+            health_check_id: backend_set.spec.health_check_id.clone(),
+            policy: backend_set.spec.policy.clone(),
+            backend_count: backend_set.spec.backends.len(),
+            local_backend_count,
+            remote_backend_count,
+        });
+    }
+
+    let compiled_backend_set_ids = compiled_backend_sets
+        .iter()
+        .map(|backend_set| backend_set.backend_set_id.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut compiled_services = Vec::new();
+    for service in &context.desired.services {
+        if !tenant_ids.is_empty() && !tenant_ids.contains(&service.spec.tenant_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "service".to_string(),
+                id: service.metadata.id.clone(),
+                reason: format!(
+                    "missing tenant '{}' in desired envelope",
+                    service.spec.tenant_id
+                ),
+            });
+            continue;
+        }
+
+        if !network_by_id.contains_key(&service.spec.network_id) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "service".to_string(),
+                id: service.metadata.id.clone(),
+                reason: format!(
+                    "missing network '{}' in desired envelope",
+                    service.spec.network_id
+                ),
+            });
+            continue;
+        }
+
+        if let Some(backend_set_id) = service.spec.backend_set_id.as_deref() {
+            if !compiled_backend_set_ids.contains(backend_set_id) {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "service".to_string(),
+                    id: service.metadata.id.clone(),
+                    reason: format!(
+                        "missing backend_set '{}' in desired envelope",
+                        backend_set_id
+                    ),
+                });
+                continue;
+            }
+        }
+
+        compiled_services.push(CompiledServiceView {
+            service_id: service.metadata.id.clone(),
+            tenant_id: service.spec.tenant_id.clone(),
+            network_id: service.spec.network_id.clone(),
+            backend_set_id: service.spec.backend_set_id.clone(),
+            vip: service.spec.vip.clone(),
+            protocol: service.spec.protocol.clone(),
+            port_count: service.spec.ports.len(),
+            exposure_type: service.spec.exposure_type.clone(),
+        });
+    }
+
     if context.desired.deletes.is_empty() {
         debug!(
             generation = %context.desired.generation,
@@ -1041,6 +1284,9 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         context.desired.security_groups.len(),
     );
     compiled_objects.insert("route_tables".to_string(), compiled_route_tables.len());
+    compiled_objects.insert("health_checks".to_string(), compiled_health_checks.len());
+    compiled_objects.insert("backend_sets".to_string(), compiled_backend_sets.len());
+    compiled_objects.insert("services".to_string(), compiled_services.len());
     if !context.desired.deletes.is_empty() {
         compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
     }
@@ -1059,6 +1305,15 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     let route_failure_count = failed_objects
         .iter()
         .filter(|failure| failure.resource_kind == "route_table")
+        .count();
+    let service_failure_count = failed_objects
+        .iter()
+        .filter(|failure| {
+            matches!(
+                failure.resource_kind.as_str(),
+                "health_check" | "backend_set" | "service"
+            )
+        })
         .count();
 
     let domain_summaries = vec![
@@ -1103,6 +1358,22 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             shadow_apply_only: true,
         },
         CompileDomainSummary {
+            domain: "services".to_string(),
+            input_objects: context.desired.health_checks.len()
+                + context.desired.backend_sets.len()
+                + context.desired.services.len(),
+            compiled_objects: compiled_health_checks.len()
+                + compiled_backend_sets.len()
+                + compiled_services.len(),
+            failed_objects: service_failure_count,
+            status: if service_failure_count == 0 {
+                "shadow_ready".to_string()
+            } else {
+                "shadow_degraded".to_string()
+            },
+            shadow_apply_only: true,
+        },
+        CompileDomainSummary {
             domain: "nat".to_string(),
             input_objects: 0,
             compiled_objects: 0,
@@ -1125,6 +1396,9 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         security_group_ids: security_group_by_id.keys().cloned().collect(),
         port_bindings,
         route_tables: compiled_route_tables,
+        health_checks: compiled_health_checks,
+        backend_sets: compiled_backend_sets,
+        services: compiled_services,
         domain_summaries,
         warnings: warnings.clone(),
         degraded_reasons: degraded_reasons.clone(),
@@ -1225,11 +1499,60 @@ fn build_reconcile_plan(
         .iter()
         .map(|route_table| route_table.route_table_id.as_str())
         .collect::<BTreeSet<_>>();
+    let previous_health_check_ids = previous_state
+        .map(|state| {
+            state
+                .health_checks
+                .iter()
+                .map(|health_check| health_check.health_check_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_health_check_ids = next_state
+        .health_checks
+        .iter()
+        .map(|health_check| health_check.health_check_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_backend_set_ids = previous_state
+        .map(|state| {
+            state
+                .backend_sets
+                .iter()
+                .map(|backend_set| backend_set.backend_set_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_backend_set_ids = next_state
+        .backend_sets
+        .iter()
+        .map(|backend_set| backend_set.backend_set_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_service_ids = previous_state
+        .map(|state| {
+            state
+                .services
+                .iter()
+                .map(|service| service.service_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_service_ids = next_state
+        .services
+        .iter()
+        .map(|service| service.service_id.as_str())
+        .collect::<BTreeSet<_>>();
 
     let ports_removed = previous_port_ids.difference(&next_port_ids).count();
     let route_tables_removed = previous_route_table_ids
         .difference(&next_route_table_ids)
         .count();
+    let health_checks_removed = previous_health_check_ids
+        .difference(&next_health_check_ids)
+        .count();
+    let backend_sets_removed = previous_backend_set_ids
+        .difference(&next_backend_set_ids)
+        .count();
+    let services_removed = previous_service_ids.difference(&next_service_ids).count();
 
     let previous_generation = previous_state.map(|state| state.generation.clone());
     let full_reconcile = previous_state
@@ -1284,13 +1607,44 @@ fn build_reconcile_plan(
     {
         changed_kinds.push("tenants".to_string());
     }
+    if previous_state.is_none()
+        || next_state.health_checks.len()
+            != previous_state
+                .map(|state| state.health_checks.len())
+                .unwrap_or(0)
+        || health_checks_removed > 0
+    {
+        changed_kinds.push("health_checks".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.backend_sets.len()
+            != previous_state
+                .map(|state| state.backend_sets.len())
+                .unwrap_or(0)
+        || backend_sets_removed > 0
+    {
+        changed_kinds.push("backend_sets".to_string());
+    }
+    if previous_state.is_none()
+        || next_state.services.len()
+            != previous_state
+                .map(|state| state.services.len())
+                .unwrap_or(0)
+        || services_removed > 0
+    {
+        changed_kinds.push("services".to_string());
+    }
 
     let mut actions = Vec::new();
     if full_reconcile {
         actions.push(ReconcileAction {
             domain: "core".to_string(),
             operation: "full_shadow_reconcile".to_string(),
-            object_count: next_state.port_bindings.len() + next_state.route_tables.len(),
+            object_count: next_state.port_bindings.len()
+                + next_state.route_tables.len()
+                + next_state.health_checks.len()
+                + next_state.backend_sets.len()
+                + next_state.services.len(),
         });
     }
     if !next_state.port_bindings.is_empty() {
@@ -1326,6 +1680,23 @@ fn build_reconcile_plan(
             domain: "security".to_string(),
             operation: "refresh_shadow_security".to_string(),
             object_count: next_state.security_group_ids.len(),
+        });
+    }
+    let service_shadow_count =
+        next_state.health_checks.len() + next_state.backend_sets.len() + next_state.services.len();
+    if service_shadow_count > 0 {
+        actions.push(ReconcileAction {
+            domain: "services".to_string(),
+            operation: "refresh_shadow_services".to_string(),
+            object_count: service_shadow_count,
+        });
+    }
+    let services_cleanup = health_checks_removed + backend_sets_removed + services_removed;
+    if services_cleanup > 0 {
+        actions.push(ReconcileAction {
+            domain: "services".to_string(),
+            operation: "cleanup_shadow_services".to_string(),
+            object_count: services_cleanup,
         });
     }
 
@@ -1375,11 +1746,60 @@ fn build_runtime_plan(
         .iter()
         .map(|route_table| route_table.route_table_id.as_str())
         .collect::<BTreeSet<_>>();
+    let previous_health_check_ids = previous_state
+        .map(|state| {
+            state
+                .health_checks
+                .iter()
+                .map(|health_check| health_check.health_check_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_health_check_ids = next_state
+        .health_checks
+        .iter()
+        .map(|health_check| health_check.health_check_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_backend_set_ids = previous_state
+        .map(|state| {
+            state
+                .backend_sets
+                .iter()
+                .map(|backend_set| backend_set.backend_set_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_backend_set_ids = next_state
+        .backend_sets
+        .iter()
+        .map(|backend_set| backend_set.backend_set_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let previous_service_ids = previous_state
+        .map(|state| {
+            state
+                .services
+                .iter()
+                .map(|service| service.service_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_service_ids = next_state
+        .services
+        .iter()
+        .map(|service| service.service_id.as_str())
+        .collect::<BTreeSet<_>>();
 
     let ports_removed = previous_port_ids.difference(&next_port_ids).count();
     let route_tables_removed = previous_route_table_ids
         .difference(&next_route_table_ids)
         .count();
+    let health_checks_removed = previous_health_check_ids
+        .difference(&next_health_check_ids)
+        .count();
+    let backend_sets_removed = previous_backend_set_ids
+        .difference(&next_backend_set_ids)
+        .count();
+    let services_removed = previous_service_ids.difference(&next_service_ids).count();
 
     let mut bindings = Vec::new();
     if capability.supports_tc && !next_state.port_bindings.is_empty() {
@@ -1501,6 +1921,48 @@ fn build_runtime_plan(
             map_family: "route_program".to_string(),
             operation: "cleanup_shadow".to_string(),
             object_count: route_tables_removed,
+        });
+    }
+    if !next_state.health_checks.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "health_check_catalog".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.health_checks.len(),
+        });
+    }
+    if !next_state.backend_sets.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "backend_set_catalog".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.backend_sets.len(),
+        });
+    }
+    if !next_state.services.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "service_catalog".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.services.len(),
+        });
+    }
+    if health_checks_removed > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "health_check_catalog".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: health_checks_removed,
+        });
+    }
+    if backend_sets_removed > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "backend_set_catalog".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: backend_sets_removed,
+        });
+    }
+    if services_removed > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_catalog".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: services_removed,
         });
     }
 
@@ -1956,6 +2418,9 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         "security_program" => "security".to_string(),
         "port_bindings" => "ports".to_string(),
         "route_program" => "routes".to_string(),
+        "health_check_catalog" | "backend_set_catalog" | "service_catalog" => {
+            "services".to_string()
+        }
         "nat_program" => "nat".to_string(),
         _ => "runtime".to_string(),
     }
