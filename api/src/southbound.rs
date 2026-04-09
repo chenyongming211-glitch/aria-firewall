@@ -267,10 +267,46 @@ pub struct ApplyObjectFailure {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
+    "domain": "ports",
+    "input_objects": 4,
+    "compiled_objects": 3,
+    "failed_objects": 1,
+    "status": "shadow_degraded",
+    "shadow_apply_only": true
+}))]
+pub struct ApplyDomainStatus {
+    /// Compile/apply domain such as `identity`, `ports`, `security`, or `routes`.
+    #[schema(example = "ports")]
+    pub domain: String,
+    /// Number of input objects routed into this domain.
+    pub input_objects: usize,
+    /// Number of objects successfully compiled in this domain.
+    pub compiled_objects: usize,
+    /// Number of failed objects in this domain.
+    pub failed_objects: usize,
+    /// Domain-local status summary.
+    #[schema(example = "shadow_degraded")]
+    pub status: String,
+    /// Whether this domain result is shadow-only.
+    pub shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
     "generation": "5",
     "status": "applied",
     "applied_at": "1712649910",
     "compiled_objects": {"ports": 4, "security_groups": 2},
+    "domain_statuses": [
+        {
+            "domain": "ports",
+            "input_objects": 4,
+            "compiled_objects": 4,
+            "failed_objects": 0,
+            "status": "shadow_ready",
+            "shadow_apply_only": true
+        }
+    ],
     "failed_objects": [],
     "warnings": [],
     "degraded_reasons": []
@@ -288,6 +324,9 @@ pub struct ApplyStatusReport {
     /// Count of objects compiled by kind.
     #[serde(default)]
     pub compiled_objects: BTreeMap<String, usize>,
+    /// Domain-oriented compile/apply summary aligned with the node compiler pipeline.
+    #[serde(default)]
+    pub domain_statuses: Vec<ApplyDomainStatus>,
     /// Per-object failures, if any.
     #[serde(default)]
     pub failed_objects: Vec<ApplyObjectFailure>,

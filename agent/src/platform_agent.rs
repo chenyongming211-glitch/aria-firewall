@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aria_api::{
-    ApplyObjectFailure, ApplyStatusReport, ApplyStatusResponse, DesiredStateEnvelope,
-    HeartbeatResponse, NodeAddress, NodeCapability, NodeHealthReport, NodeInfo,
-    NodeRegisterRequest, NodeRegisterResponse, PlatformApiError,
+    ApplyDomainStatus, ApplyObjectFailure, ApplyStatusReport, ApplyStatusResponse,
+    DesiredStateEnvelope, HeartbeatResponse, NodeAddress, NodeCapability, NodeHealthReport,
+    NodeInfo, NodeRegisterRequest, NodeRegisterResponse, PlatformApiError,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{fs, task::JoinHandle, time};
@@ -925,6 +925,17 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             status,
             applied_at: compiled_at,
             compiled_objects,
+            domain_statuses: domain_summaries
+                .iter()
+                .map(|summary| ApplyDomainStatus {
+                    domain: summary.domain.clone(),
+                    input_objects: summary.input_objects,
+                    compiled_objects: summary.compiled_objects,
+                    failed_objects: summary.failed_objects,
+                    status: summary.status.clone(),
+                    shadow_apply_only: summary.shadow_apply_only,
+                })
+                .collect(),
             failed_objects,
             warnings,
             degraded_reasons,

@@ -54,6 +54,7 @@
 - controller 当前已经通过可替换的 store trait 隔离存储边界，并新增了可选的文件快照 backend；未配置 `ARIA_CONTROLLER_STATE_PATH` 时仍默认走内存版，且 file-backed 模式不再因心跳重写整份 controller 快照。
 - `aria-agent` 已新增实验性的可选 southbound client；配置 `southbound_controller_url + southbound_node_id` 后，agent 会执行 `register / desired-state / apply-status / heartbeat`，并在 `${state_path}/platform-agent/` 下维护 `desired-state-cache.json`、`compiled-node-state.json`、`reconcile-plan.json` 与 `runtime-plan.json`。
 - 当前 agent 侧 southbound 仍是 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，并生成第一版 `reconcile plan` 与 `runtime plan (AttachPlan / MapPlan)`；`CompiledNodeState` 也已开始提供 `identity / ports / security / routes` 四个编译域的本地摘要。这些结果只用于回报 compile/reconcile 语义，还不会直接 materialize 到 datapath。
+- `apply-status` 现在也开始携带按 `identity / ports / security / routes` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
 
 ## 回归脚本
