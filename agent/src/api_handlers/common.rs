@@ -47,7 +47,6 @@ pub(crate) fn legacy_drop_headers(instance: &str) -> HeaderMap {
 pub(crate) fn kernel_drop_mode_name(mode: KernelDropMode) -> &'static str {
     match mode {
         KernelDropMode::Disabled => "disabled",
-        KernelDropMode::ScaffoldOnly => "scaffold_only",
         KernelDropMode::KfreeSkbLegacy => "kfree_skb_legacy",
         KernelDropMode::KfreeSkbReasonful => "kfree_skb_reasonful",
     }
