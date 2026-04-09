@@ -417,8 +417,9 @@ Agent 重启时，恢复流程建议为：
 - agent 当前会把 desired-state 缓存到 `${state_path}/platform-agent/desired-state-cache.json`
 - agent 当前会把第一版 `CompiledNodeState` 缓存到 `${state_path}/platform-agent/compiled-node-state.json`
 - agent 当前会把第一版 `ReconcilePlan` 缓存到 `${state_path}/platform-agent/reconcile-plan.json`
+- agent 当前会把第一版 `RuntimePlan` 缓存到 `${state_path}/platform-agent/runtime-plan.json`
 - 第一版编译器已开始把 `Tenant / Network / Port / SecurityGroup / RouteTable` 下沉为节点局部视图
-- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + apply report`，不会直接 materialize 到 datapath
+- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + runtime plan + apply report`，不会直接 materialize 到 datapath
 - 当前 `apply-status` 主要表达对象校验、降级原因和 shadow compile 结果，尚不代表 datapath 已成功写入
 
 ## 16. 当前缺口

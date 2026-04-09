@@ -90,10 +90,53 @@ struct ReconcilePlan {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AttachBindingPlan {
+    hook_family: String,
+    scope: String,
+    operation: String,
+    object_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AttachPlan {
+    generation: String,
+    compiled_at: String,
+    required_hooks: Vec<String>,
+    bindings: Vec<AttachBindingPlan>,
+    required_qdisc: Vec<String>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MapPlanEntry {
+    map_family: String,
+    operation: String,
+    object_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MapPlan {
+    generation: String,
+    compiled_at: String,
+    entries: Vec<MapPlanEntry>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimePlan {
+    generation: String,
+    compiled_at: String,
+    attach_plan: AttachPlan,
+    map_plan: MapPlan,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
     reconcile_plan: ReconcilePlan,
+    runtime_plan: RuntimePlan,
     apply_report: ApplyStatusReport,
 }
 
@@ -153,6 +196,7 @@ impl PlatformAgent {
         let mut desired_cache = self.state_store.load_desired_state().await;
         let mut compiled_state = self.state_store.load_compiled_state().await;
         let mut reconcile_plan = self.state_store.load_reconcile_plan().await;
+        let mut runtime_plan = self.state_store.load_runtime_plan().await;
         loop {
             interval.tick().await;
 
@@ -277,6 +321,23 @@ impl PlatformAgent {
                 }
 
                 if let Err(error) = self
+                    .state_store
+                    .save_runtime_plan(&outcome.runtime_plan)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist runtime plan");
+                    heartbeat_error = Some(error);
+                } else {
+                    runtime_plan = Some(outcome.runtime_plan.clone());
+                    info!(
+                        generation = %outcome.runtime_plan.generation,
+                        attach_bindings = outcome.runtime_plan.attach_plan.bindings.len(),
+                        map_entries = outcome.runtime_plan.map_plan.entries.len(),
+                        "persisted shadow runtime plan"
+                    );
+                }
+
+                if let Err(error) = self
                     .client
                     .report_apply_status(&self.config.node_id, &outcome.apply_report)
                     .await
@@ -295,7 +356,10 @@ impl PlatformAgent {
             }
 
             if !needs_compile {
-                last_reconcile_at = reconcile_plan.as_ref().map(|plan| plan.compiled_at.clone());
+                last_reconcile_at = reconcile_plan
+                    .as_ref()
+                    .map(|plan| plan.compiled_at.clone())
+                    .or_else(|| runtime_plan.as_ref().map(|plan| plan.compiled_at.clone()));
             }
 
             if let Err(error) = self
@@ -494,6 +558,14 @@ impl LocalPlatformStateStore {
         self.save_json(self.reconcile_plan_path(), plan).await
     }
 
+    async fn load_runtime_plan(&self) -> Option<RuntimePlan> {
+        self.load_json(self.runtime_plan_path()).await
+    }
+
+    async fn save_runtime_plan(&self, plan: &RuntimePlan) -> Result<(), String> {
+        self.save_json(self.runtime_plan_path(), plan).await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
@@ -504,6 +576,10 @@ impl LocalPlatformStateStore {
 
     fn reconcile_plan_path(&self) -> PathBuf {
         self.root.join("reconcile-plan.json")
+    }
+
+    fn runtime_plan_path(&self) -> PathBuf {
+        self.root.join("runtime-plan.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -758,6 +834,11 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         &compiled_state,
         warnings.clone(),
     );
+    let runtime_plan = build_runtime_plan(
+        context.previous_compiled_state,
+        &compiled_state,
+        context.capability,
+    );
 
     let status = if failed_objects.is_empty() {
         "partial".to_string()
@@ -770,6 +851,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     CompileOutcome {
         compiled_state,
         reconcile_plan,
+        runtime_plan,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -928,6 +1010,185 @@ fn build_reconcile_plan(
         changed_kinds,
         actions,
         warnings,
+        shadow_apply_only: true,
+    }
+}
+
+fn build_runtime_plan(
+    previous_state: Option<&CompiledNodeState>,
+    next_state: &CompiledNodeState,
+    capability: &NodeCapability,
+) -> RuntimePlan {
+    let previous_port_ids = previous_state
+        .map(|state| {
+            state
+                .port_bindings
+                .iter()
+                .map(|binding| binding.port_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_port_ids = next_state
+        .port_bindings
+        .iter()
+        .map(|binding| binding.port_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let previous_route_table_ids = previous_state
+        .map(|state| {
+            state
+                .route_tables
+                .iter()
+                .map(|route_table| route_table.route_table_id.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let next_route_table_ids = next_state
+        .route_tables
+        .iter()
+        .map(|route_table| route_table.route_table_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let ports_removed = previous_port_ids.difference(&next_port_ids).count();
+    let route_tables_removed = previous_route_table_ids
+        .difference(&next_route_table_ids)
+        .count();
+
+    let mut bindings = Vec::new();
+    if capability.supports_tc && !next_state.port_bindings.is_empty() {
+        bindings.push(AttachBindingPlan {
+            hook_family: "tc_ingress".to_string(),
+            scope: "port-bindings".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.port_bindings.len(),
+        });
+        bindings.push(AttachBindingPlan {
+            hook_family: "tc_egress".to_string(),
+            scope: "port-bindings".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.port_bindings.len(),
+        });
+    }
+    if capability.supports_xdp && !next_state.port_bindings.is_empty() {
+        bindings.push(AttachBindingPlan {
+            hook_family: "xdp".to_string(),
+            scope: "anti-spoof-fastpath".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.port_bindings.len(),
+        });
+    }
+    if capability.supports_tc && !next_state.route_tables.is_empty() {
+        bindings.push(AttachBindingPlan {
+            hook_family: "tc_egress".to_string(),
+            scope: "route-tables".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.route_tables.len(),
+        });
+    }
+    if capability.supports_tc && ports_removed > 0 {
+        bindings.push(AttachBindingPlan {
+            hook_family: "tc".to_string(),
+            scope: "port-bindings".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: ports_removed,
+        });
+    }
+    if capability.supports_tc && route_tables_removed > 0 {
+        bindings.push(AttachBindingPlan {
+            hook_family: "tc".to_string(),
+            scope: "route-tables".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: route_tables_removed,
+        });
+    }
+
+    let mut required_hooks = bindings
+        .iter()
+        .map(|binding| binding.hook_family.clone())
+        .collect::<Vec<_>>();
+    required_hooks.sort();
+    required_hooks.dedup();
+
+    let mut required_qdisc = Vec::new();
+    if bindings
+        .iter()
+        .any(|binding| binding.hook_family.starts_with("tc"))
+    {
+        required_qdisc.push("clsact".to_string());
+    }
+
+    let attach_plan = AttachPlan {
+        generation: next_state.generation.clone(),
+        compiled_at: next_state.compiled_at.clone(),
+        required_hooks,
+        bindings,
+        required_qdisc,
+        shadow_apply_only: true,
+    };
+
+    let mut entries = Vec::new();
+    if !next_state.tenant_ids.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "tenant_index".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.tenant_ids.len(),
+        });
+    }
+    if !next_state.network_ids.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "network_index".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.network_ids.len(),
+        });
+    }
+    if !next_state.security_group_ids.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "security_program".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.security_group_ids.len(),
+        });
+    }
+    if !next_state.port_bindings.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "port_bindings".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.port_bindings.len(),
+        });
+    }
+    if ports_removed > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "port_bindings".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: ports_removed,
+        });
+    }
+    if !next_state.route_tables.is_empty() {
+        entries.push(MapPlanEntry {
+            map_family: "route_program".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_state.route_tables.len(),
+        });
+    }
+    if route_tables_removed > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "route_program".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: route_tables_removed,
+        });
+    }
+
+    let map_plan = MapPlan {
+        generation: next_state.generation.clone(),
+        compiled_at: next_state.compiled_at.clone(),
+        entries,
+        shadow_apply_only: true,
+    };
+
+    RuntimePlan {
+        generation: next_state.generation.clone(),
+        compiled_at: next_state.compiled_at.clone(),
+        attach_plan,
+        map_plan,
         shadow_apply_only: true,
     }
 }
