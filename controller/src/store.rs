@@ -3,12 +3,18 @@ use aria_api::{
     NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
     RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse, TenantResource,
 };
+use async_trait::async_trait;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::RwLock;
+
+pub type SharedStore = Arc<dyn ControllerStore>;
 
 pub trait StoredResource: Clone + Send + Sync + 'static {
     fn metadata(&self) -> &ResourceMetadata;
@@ -49,6 +55,108 @@ pub struct SouthboundNodeRuntime {
     pub last_health: Option<NodeHealthReport>,
     pub last_applied_generation: Option<String>,
     pub last_seen_at: String,
+}
+
+#[async_trait]
+pub trait ControllerStore: Send + Sync {
+    async fn resource_counts(&self) -> BTreeMap<String, usize>;
+    fn current_generation(&self) -> String;
+    fn bump_generation(&self) -> String;
+
+    async fn list_tenants(&self) -> Vec<TenantResource>;
+    async fn get_tenant(&self, id: &str) -> Option<TenantResource>;
+    async fn create_tenant(&self, resource: TenantResource) -> Result<TenantResource, StoreError>;
+    async fn update_tenant(
+        &self,
+        id: &str,
+        resource: TenantResource,
+    ) -> Result<TenantResource, StoreError>;
+    async fn delete_tenant(&self, id: &str) -> Result<TenantResource, StoreError>;
+
+    async fn list_nodes(&self) -> Vec<NodeResource>;
+    async fn get_node(&self, id: &str) -> Option<NodeResource>;
+    async fn create_node(&self, resource: NodeResource) -> Result<NodeResource, StoreError>;
+    async fn update_node(
+        &self,
+        id: &str,
+        resource: NodeResource,
+    ) -> Result<NodeResource, StoreError>;
+    async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError>;
+
+    async fn list_networks(&self) -> Vec<NetworkResource>;
+    async fn get_network(&self, id: &str) -> Option<NetworkResource>;
+    async fn create_network(
+        &self,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError>;
+    async fn update_network(
+        &self,
+        id: &str,
+        resource: NetworkResource,
+    ) -> Result<NetworkResource, StoreError>;
+    async fn delete_network(&self, id: &str) -> Result<NetworkResource, StoreError>;
+
+    async fn list_ports(&self) -> Vec<PortResource>;
+    async fn get_port(&self, id: &str) -> Option<PortResource>;
+    async fn create_port(&self, resource: PortResource) -> Result<PortResource, StoreError>;
+    async fn update_port(
+        &self,
+        id: &str,
+        resource: PortResource,
+    ) -> Result<PortResource, StoreError>;
+    async fn delete_port(&self, id: &str) -> Result<PortResource, StoreError>;
+
+    async fn list_security_groups(&self) -> Vec<SecurityGroupResource>;
+    async fn get_security_group(&self, id: &str) -> Option<SecurityGroupResource>;
+    async fn create_security_group(
+        &self,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError>;
+    async fn update_security_group(
+        &self,
+        id: &str,
+        resource: SecurityGroupResource,
+    ) -> Result<SecurityGroupResource, StoreError>;
+    async fn delete_security_group(&self, id: &str) -> Result<SecurityGroupResource, StoreError>;
+
+    async fn list_route_tables(&self) -> Vec<RouteTableResource>;
+    async fn get_route_table(&self, id: &str) -> Option<RouteTableResource>;
+    async fn create_route_table(
+        &self,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError>;
+    async fn update_route_table(
+        &self,
+        id: &str,
+        resource: RouteTableResource,
+    ) -> Result<RouteTableResource, StoreError>;
+    async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError>;
+
+    async fn record_registration(
+        &self,
+        node_id: &str,
+        info: NodeInfo,
+        capability: NodeCapability,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError>;
+    async fn record_apply_status(
+        &self,
+        node_id: &str,
+        report: ApplyStatusReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError>;
+    async fn record_health(
+        &self,
+        node_id: &str,
+        report: NodeHealthReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError>;
+    async fn southbound_status(
+        &self,
+        node_id: &str,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError>;
+    async fn clear_southbound_runtime(&self, node_id: &str);
+    async fn desired_state_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<DesiredStateEnvelope, StoreError>;
 }
 
 pub struct ResourceStore<T> {
@@ -148,7 +256,7 @@ where
     }
 }
 
-pub struct PlatformStore {
+pub struct InMemoryControllerStore {
     pub tenants: ResourceStore<TenantResource>,
     pub nodes: ResourceStore<NodeResource>,
     pub networks: ResourceStore<NetworkResource>,
@@ -159,7 +267,7 @@ pub struct PlatformStore {
     southbound_nodes: RwLock<BTreeMap<String, SouthboundNodeRuntime>>,
 }
 
-impl PlatformStore {
+impl InMemoryControllerStore {
     pub fn new() -> Self {
         Self {
             tenants: ResourceStore::new("tenant", "tenant"),
@@ -173,7 +281,7 @@ impl PlatformStore {
         }
     }
 
-    pub async fn resource_counts(&self) -> BTreeMap<String, usize> {
+    async fn resource_counts_inner(&self) -> BTreeMap<String, usize> {
         let mut counts = BTreeMap::new();
         counts.insert("tenants".to_string(), self.tenants.count().await);
         counts.insert("nodes".to_string(), self.nodes.count().await);
@@ -187,15 +295,70 @@ impl PlatformStore {
         counts
     }
 
-    pub fn current_generation(&self) -> String {
+    fn list_resource<T>(
+        &self,
+        store: &ResourceStore<T>,
+    ) -> impl std::future::Future<Output = Vec<T>> + '_
+    where
+        T: StoredResource,
+    {
+        store.list()
+    }
+
+    fn get_resource<T>(
+        &self,
+        store: &ResourceStore<T>,
+        id: &str,
+    ) -> impl std::future::Future<Output = Option<T>> + '_
+    where
+        T: StoredResource,
+    {
+        store.get(id)
+    }
+
+    fn create_resource<T>(
+        &self,
+        store: &ResourceStore<T>,
+        resource: T,
+    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    where
+        T: StoredResource,
+    {
+        store.create(resource)
+    }
+
+    fn update_resource<T>(
+        &self,
+        store: &ResourceStore<T>,
+        id: &str,
+        resource: T,
+    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    where
+        T: StoredResource,
+    {
+        store.replace(id, resource)
+    }
+
+    fn delete_resource<T>(
+        &self,
+        store: &ResourceStore<T>,
+        id: &str,
+    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    where
+        T: StoredResource,
+    {
+        store.delete(id)
+    }
+
+    fn current_generation_inner(&self) -> String {
         self.generation.load(Ordering::Relaxed).to_string()
     }
 
-    pub fn bump_generation(&self) -> String {
+    fn bump_generation_inner(&self) -> String {
         (self.generation.fetch_add(1, Ordering::Relaxed) + 1).to_string()
     }
 
-    pub async fn record_registration(
+    async fn record_registration_inner(
         &self,
         node_id: &str,
         info: NodeInfo,
@@ -226,7 +389,7 @@ impl PlatformStore {
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
-            desired_generation: self.current_generation(),
+            desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
             last_seen_at: entry.last_seen_at.clone(),
             registration: Some(registration),
@@ -235,7 +398,7 @@ impl PlatformStore {
         })
     }
 
-    pub async fn record_apply_status(
+    async fn record_apply_status_inner(
         &self,
         node_id: &str,
         report: ApplyStatusReport,
@@ -265,7 +428,7 @@ impl PlatformStore {
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
-            desired_generation: self.current_generation(),
+            desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
             last_seen_at: entry.last_seen_at.clone(),
             registration: entry.registration.clone(),
@@ -274,7 +437,7 @@ impl PlatformStore {
         })
     }
 
-    pub async fn record_health(
+    async fn record_health_inner(
         &self,
         node_id: &str,
         report: NodeHealthReport,
@@ -303,7 +466,7 @@ impl PlatformStore {
 
         Ok(SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
-            desired_generation: self.current_generation(),
+            desired_generation: self.current_generation_inner(),
             last_applied_generation: entry.last_applied_generation.clone(),
             last_seen_at: entry.last_seen_at.clone(),
             registration: entry.registration.clone(),
@@ -312,7 +475,7 @@ impl PlatformStore {
         })
     }
 
-    pub async fn southbound_status(
+    async fn southbound_status_inner(
         &self,
         node_id: &str,
     ) -> Result<SouthboundNodeStatusResponse, StoreError> {
@@ -328,7 +491,7 @@ impl PlatformStore {
         if let Some(entry) = states.get(node_id) {
             Ok(SouthboundNodeStatusResponse {
                 node_id: node_id.to_string(),
-                desired_generation: self.current_generation(),
+                desired_generation: self.current_generation_inner(),
                 last_applied_generation: entry.last_applied_generation.clone(),
                 last_seen_at: entry.last_seen_at.clone(),
                 registration: entry.registration.clone(),
@@ -338,7 +501,7 @@ impl PlatformStore {
         } else {
             Ok(SouthboundNodeStatusResponse {
                 node_id: node_id.to_string(),
-                desired_generation: self.current_generation(),
+                desired_generation: self.current_generation_inner(),
                 last_applied_generation: None,
                 last_seen_at: unix_timestamp_string(),
                 registration: None,
@@ -348,11 +511,11 @@ impl PlatformStore {
         }
     }
 
-    pub async fn clear_southbound_runtime(&self, node_id: &str) {
+    async fn clear_southbound_runtime_inner(&self, node_id: &str) {
         self.southbound_nodes.write().await.remove(node_id);
     }
 
-    pub async fn desired_state_for_node(
+    async fn desired_state_for_node_inner(
         &self,
         node_id: &str,
     ) -> Result<DesiredStateEnvelope, StoreError> {
@@ -419,7 +582,7 @@ impl PlatformStore {
             .collect::<Vec<_>>();
 
         Ok(DesiredStateEnvelope {
-            generation: self.current_generation(),
+            generation: self.current_generation_inner(),
             full_sync: true,
             issued_at: unix_timestamp_string(),
             node_id: node_id.to_string(),
@@ -430,6 +593,144 @@ impl PlatformStore {
             route_tables,
             deletes: Vec::new(),
         })
+    }
+}
+
+macro_rules! impl_resource_methods {
+    ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $ty:ty, $field:ident) => {
+        async fn $list(&self) -> Vec<$ty> {
+            self.list_resource(&self.$field).await
+        }
+
+        async fn $get(&self, id: &str) -> Option<$ty> {
+            self.get_resource(&self.$field, id).await
+        }
+
+        async fn $create(&self, resource: $ty) -> Result<$ty, StoreError> {
+            self.create_resource(&self.$field, resource).await
+        }
+
+        async fn $update(&self, id: &str, resource: $ty) -> Result<$ty, StoreError> {
+            self.update_resource(&self.$field, id, resource).await
+        }
+
+        async fn $delete(&self, id: &str) -> Result<$ty, StoreError> {
+            self.delete_resource(&self.$field, id).await
+        }
+    };
+}
+
+#[async_trait]
+impl ControllerStore for InMemoryControllerStore {
+    async fn resource_counts(&self) -> BTreeMap<String, usize> {
+        self.resource_counts_inner().await
+    }
+
+    fn current_generation(&self) -> String {
+        self.current_generation_inner()
+    }
+
+    fn bump_generation(&self) -> String {
+        self.bump_generation_inner()
+    }
+
+    impl_resource_methods!(
+        list_tenants,
+        get_tenant,
+        create_tenant,
+        update_tenant,
+        delete_tenant,
+        TenantResource,
+        tenants
+    );
+    impl_resource_methods!(
+        list_nodes,
+        get_node,
+        create_node,
+        update_node,
+        delete_node,
+        NodeResource,
+        nodes
+    );
+    impl_resource_methods!(
+        list_networks,
+        get_network,
+        create_network,
+        update_network,
+        delete_network,
+        NetworkResource,
+        networks
+    );
+    impl_resource_methods!(
+        list_ports,
+        get_port,
+        create_port,
+        update_port,
+        delete_port,
+        PortResource,
+        ports
+    );
+    impl_resource_methods!(
+        list_security_groups,
+        get_security_group,
+        create_security_group,
+        update_security_group,
+        delete_security_group,
+        SecurityGroupResource,
+        security_groups
+    );
+    impl_resource_methods!(
+        list_route_tables,
+        get_route_table,
+        create_route_table,
+        update_route_table,
+        delete_route_table,
+        RouteTableResource,
+        route_tables
+    );
+
+    async fn record_registration(
+        &self,
+        node_id: &str,
+        info: NodeInfo,
+        capability: NodeCapability,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.record_registration_inner(node_id, info, capability)
+            .await
+    }
+
+    async fn record_apply_status(
+        &self,
+        node_id: &str,
+        report: ApplyStatusReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.record_apply_status_inner(node_id, report).await
+    }
+
+    async fn record_health(
+        &self,
+        node_id: &str,
+        report: NodeHealthReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.record_health_inner(node_id, report).await
+    }
+
+    async fn southbound_status(
+        &self,
+        node_id: &str,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.southbound_status_inner(node_id).await
+    }
+
+    async fn clear_southbound_runtime(&self, node_id: &str) {
+        self.clear_southbound_runtime_inner(node_id).await;
+    }
+
+    async fn desired_state_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<DesiredStateEnvelope, StoreError> {
+        self.desired_state_for_node_inner(node_id).await
     }
 }
 

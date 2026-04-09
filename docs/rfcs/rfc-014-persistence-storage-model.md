@@ -287,3 +287,20 @@ Persistence model v1 的验收标准：
 - `RFC-014A` platform metadata store
 - `RFC-014B` observability hot/cold pipeline
 - `RFC-014C` agent local recovery store
+
+## 15. 当前实现状态（2026-04-09）
+
+当前仓库已经落下持久化模型的第一步代码骨架：
+
+- `controller` 已通过 store trait 隔离存储边界
+- 默认实现仍为内存态 backend
+- northbound / southbound handler 已只依赖抽象边界，不再直接依赖具体内存实现
+
+当前仍未实现：
+
+- 事务型平台对象存储
+- rollout / publish 持久化记录
+- observability 热/冷分层存储
+- 审计独立保留与查询
+
+因此当前状态只能视为持久化演进的接口前置，而不是 `RFC-014` 的完整实现。

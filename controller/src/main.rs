@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("ARIA_CONTROLLER_BIND").unwrap_or_else(|_| "127.0.0.1:8180".to_string());
     let addr: SocketAddr = bind.parse()?;
 
-    let store = Arc::new(store::PlatformStore::new());
+    let store: store::SharedStore = Arc::new(store::InMemoryControllerStore::new());
     let app = api_routes::build_router(store).layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(addr).await?;
 

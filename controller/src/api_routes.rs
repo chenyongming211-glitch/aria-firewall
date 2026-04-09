@@ -2,13 +2,12 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::{api_handlers, southbound_handlers, store::PlatformStore};
+use crate::{api_handlers, southbound_handlers, store::SharedStore};
 
-pub fn build_router(store: Arc<PlatformStore>) -> Router {
+pub fn build_router(store: SharedStore) -> Router {
     Router::new()
         .merge(SwaggerUi::new("/docs").url("/openapi.json", crate::openapi::ApiDoc::openapi()))
         .route("/api/v1/health", get(api_handlers::health))

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use aria_api::{
     ControllerHealthResponse, CreateNetworkRequest, CreateNodeRequest, CreatePortRequest,
@@ -18,9 +18,9 @@ use axum::{
     Json,
 };
 
-use crate::store::{PlatformStore, StoreError};
+use crate::store::{SharedStore, StoreError};
 
-pub(crate) type AppState = Arc<PlatformStore>;
+pub(crate) type AppState = SharedStore;
 
 #[derive(Debug)]
 pub(crate) enum ControllerError {
@@ -184,7 +184,7 @@ pub async fn health(State(store): State<AppState>) -> Json<ControllerHealthRespo
     responses((status = 200, description = "List tenants", body = TenantListResponse))
 )]
 pub async fn list_tenants(State(store): State<AppState>) -> Json<TenantListResponse> {
-    let items = store.tenants.list().await;
+    let items = store.list_tenants().await;
     Json(TenantListResponse {
         total_count: items.len(),
         items,
@@ -212,7 +212,7 @@ pub async fn create_tenant(
         spec: request.spec,
         status: tenant_status(),
     };
-    let created = store.tenants.create(resource).await?;
+    let created = store.create_tenant(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -233,8 +233,7 @@ pub async fn get_tenant(
     Path(id): Path<String>,
 ) -> Result<Json<TenantResource>, ControllerError> {
     let resource = store
-        .tenants
-        .get(&id)
+        .get_tenant(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "tenant",
@@ -261,8 +260,7 @@ pub async fn update_tenant(
     Json(request): Json<UpdateTenantRequest>,
 ) -> Result<Json<TenantResource>, ControllerError> {
     let existing = store
-        .tenants
-        .get(&id)
+        .get_tenant(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "tenant",
@@ -273,7 +271,7 @@ pub async fn update_tenant(
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.tenants.replace(&id, resource).await?;
+    let updated = store.update_tenant(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -293,7 +291,7 @@ pub async fn delete_tenant(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.tenants.delete(&id).await?;
+    store.delete_tenant(&id).await?;
     store.bump_generation();
     Ok(Json(deleted_message("tenant", &id)))
 }
@@ -306,7 +304,7 @@ pub async fn delete_tenant(
     responses((status = 200, description = "List nodes", body = NodeListResponse))
 )]
 pub async fn list_nodes(State(store): State<AppState>) -> Json<NodeListResponse> {
-    let items = store.nodes.list().await;
+    let items = store.list_nodes().await;
     Json(NodeListResponse {
         total_count: items.len(),
         items,
@@ -334,7 +332,7 @@ pub async fn create_node(
         spec: request.spec,
         status: node_status(),
     };
-    let created = store.nodes.create(resource).await?;
+    let created = store.create_node(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -354,14 +352,10 @@ pub async fn get_node(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<NodeResource>, ControllerError> {
-    let resource = store
-        .nodes
-        .get(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "node",
-            id,
-        })?;
+    let resource = store.get_node(&id).await.ok_or(ControllerError::NotFound {
+        resource: "node",
+        id,
+    })?;
     Ok(Json(resource))
 }
 
@@ -382,20 +376,16 @@ pub async fn update_node(
     Path(id): Path<String>,
     Json(request): Json<UpdateNodeRequest>,
 ) -> Result<Json<NodeResource>, ControllerError> {
-    let existing = store
-        .nodes
-        .get(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "node",
-            id: id.clone(),
-        })?;
+    let existing = store.get_node(&id).await.ok_or(ControllerError::NotFound {
+        resource: "node",
+        id: id.clone(),
+    })?;
     let resource = NodeResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.nodes.replace(&id, resource).await?;
+    let updated = store.update_node(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -415,7 +405,7 @@ pub async fn delete_node(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.nodes.delete(&id).await?;
+    store.delete_node(&id).await?;
     store.clear_southbound_runtime(&id).await;
     store.bump_generation();
     Ok(Json(deleted_message("node", &id)))
@@ -429,7 +419,7 @@ pub async fn delete_node(
     responses((status = 200, description = "List networks", body = NetworkListResponse))
 )]
 pub async fn list_networks(State(store): State<AppState>) -> Json<NetworkListResponse> {
-    let items = store.networks.list().await;
+    let items = store.list_networks().await;
     Json(NetworkListResponse {
         total_count: items.len(),
         items,
@@ -457,7 +447,7 @@ pub async fn create_network(
         spec: request.spec,
         status: network_status(),
     };
-    let created = store.networks.create(resource).await?;
+    let created = store.create_network(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -478,8 +468,7 @@ pub async fn get_network(
     Path(id): Path<String>,
 ) -> Result<Json<NetworkResource>, ControllerError> {
     let resource = store
-        .networks
-        .get(&id)
+        .get_network(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "network",
@@ -506,8 +495,7 @@ pub async fn update_network(
     Json(request): Json<UpdateNetworkRequest>,
 ) -> Result<Json<NetworkResource>, ControllerError> {
     let existing = store
-        .networks
-        .get(&id)
+        .get_network(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "network",
@@ -518,7 +506,7 @@ pub async fn update_network(
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.networks.replace(&id, resource).await?;
+    let updated = store.update_network(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -538,7 +526,7 @@ pub async fn delete_network(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.networks.delete(&id).await?;
+    store.delete_network(&id).await?;
     store.bump_generation();
     Ok(Json(deleted_message("network", &id)))
 }
@@ -551,7 +539,7 @@ pub async fn delete_network(
     responses((status = 200, description = "List ports", body = PortListResponse))
 )]
 pub async fn list_ports(State(store): State<AppState>) -> Json<PortListResponse> {
-    let items = store.ports.list().await;
+    let items = store.list_ports().await;
     Json(PortListResponse {
         total_count: items.len(),
         items,
@@ -579,7 +567,7 @@ pub async fn create_port(
         spec: request.spec,
         status: port_status(),
     };
-    let created = store.ports.create(resource).await?;
+    let created = store.create_port(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -599,14 +587,10 @@ pub async fn get_port(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<PortResource>, ControllerError> {
-    let resource = store
-        .ports
-        .get(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "port",
-            id,
-        })?;
+    let resource = store.get_port(&id).await.ok_or(ControllerError::NotFound {
+        resource: "port",
+        id,
+    })?;
     Ok(Json(resource))
 }
 
@@ -627,20 +611,16 @@ pub async fn update_port(
     Path(id): Path<String>,
     Json(request): Json<UpdatePortRequest>,
 ) -> Result<Json<PortResource>, ControllerError> {
-    let existing = store
-        .ports
-        .get(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "port",
-            id: id.clone(),
-        })?;
+    let existing = store.get_port(&id).await.ok_or(ControllerError::NotFound {
+        resource: "port",
+        id: id.clone(),
+    })?;
     let resource = PortResource {
         metadata: metadata_from_update(&existing.metadata, request.metadata),
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.ports.replace(&id, resource).await?;
+    let updated = store.update_port(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -660,7 +640,7 @@ pub async fn delete_port(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.ports.delete(&id).await?;
+    store.delete_port(&id).await?;
     store.bump_generation();
     Ok(Json(deleted_message("port", &id)))
 }
@@ -675,7 +655,7 @@ pub async fn delete_port(
 pub async fn list_security_groups(
     State(store): State<AppState>,
 ) -> Json<SecurityGroupListResponse> {
-    let items = store.security_groups.list().await;
+    let items = store.list_security_groups().await;
     Json(SecurityGroupListResponse {
         total_count: items.len(),
         items,
@@ -704,7 +684,7 @@ pub async fn create_security_group(
         spec: request.spec,
         status: security_group_status(rule_count),
     };
-    let created = store.security_groups.create(resource).await?;
+    let created = store.create_security_group(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -725,8 +705,7 @@ pub async fn get_security_group(
     Path(id): Path<String>,
 ) -> Result<Json<SecurityGroupResource>, ControllerError> {
     let resource = store
-        .security_groups
-        .get(&id)
+        .get_security_group(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "security_group",
@@ -753,8 +732,7 @@ pub async fn update_security_group(
     Json(request): Json<UpdateSecurityGroupRequest>,
 ) -> Result<Json<SecurityGroupResource>, ControllerError> {
     let existing = store
-        .security_groups
-        .get(&id)
+        .get_security_group(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "security_group",
@@ -769,7 +747,7 @@ pub async fn update_security_group(
             rule_count,
         },
     };
-    let updated = store.security_groups.replace(&id, resource).await?;
+    let updated = store.update_security_group(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -789,7 +767,7 @@ pub async fn delete_security_group(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.security_groups.delete(&id).await?;
+    store.delete_security_group(&id).await?;
     store.bump_generation();
     Ok(Json(deleted_message("security_group", &id)))
 }
@@ -802,7 +780,7 @@ pub async fn delete_security_group(
     responses((status = 200, description = "List route tables", body = RouteTableListResponse))
 )]
 pub async fn list_route_tables(State(store): State<AppState>) -> Json<RouteTableListResponse> {
-    let items = store.route_tables.list().await;
+    let items = store.list_route_tables().await;
     Json(RouteTableListResponse {
         total_count: items.len(),
         items,
@@ -830,7 +808,7 @@ pub async fn create_route_table(
         spec: request.spec,
         status: route_table_status(),
     };
-    let created = store.route_tables.create(resource).await?;
+    let created = store.create_route_table(resource).await?;
     store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
@@ -851,8 +829,7 @@ pub async fn get_route_table(
     Path(id): Path<String>,
 ) -> Result<Json<RouteTableResource>, ControllerError> {
     let resource = store
-        .route_tables
-        .get(&id)
+        .get_route_table(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "route_table",
@@ -879,8 +856,7 @@ pub async fn update_route_table(
     Json(request): Json<UpdateRouteTableRequest>,
 ) -> Result<Json<RouteTableResource>, ControllerError> {
     let existing = store
-        .route_tables
-        .get(&id)
+        .get_route_table(&id)
         .await
         .ok_or(ControllerError::NotFound {
             resource: "route_table",
@@ -891,7 +867,7 @@ pub async fn update_route_table(
         spec: request.spec,
         status: existing.status,
     };
-    let updated = store.route_tables.replace(&id, resource).await?;
+    let updated = store.update_route_table(&id, resource).await?;
     store.bump_generation();
     Ok(Json(updated))
 }
@@ -911,7 +887,7 @@ pub async fn delete_route_table(
     State(store): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
-    store.route_tables.delete(&id).await?;
+    store.delete_route_table(&id).await?;
     store.bump_generation();
     Ok(Json(deleted_message("route_table", &id)))
 }
