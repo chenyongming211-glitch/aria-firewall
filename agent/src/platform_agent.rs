@@ -53,6 +53,16 @@ struct CompiledRouteTableView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompileDomainSummary {
+    domain: String,
+    input_objects: usize,
+    compiled_objects: usize,
+    failed_objects: usize,
+    status: String,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CompiledNodeState {
     generation: String,
     compiler_version: String,
@@ -65,6 +75,7 @@ struct CompiledNodeState {
     security_group_ids: Vec<String>,
     port_bindings: Vec<CompiledPortBinding>,
     route_tables: Vec<CompiledRouteTableView>,
+    domain_summaries: Vec<CompileDomainSummary>,
     warnings: Vec<String>,
     degraded_reasons: Vec<String>,
     compiled_at: String,
@@ -259,6 +270,10 @@ impl PlatformAgent {
                 || compiled_state
                     .as_ref()
                     .map(|state| state.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || reconcile_plan.as_ref().map(|plan| plan.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || runtime_plan.as_ref().map(|plan| plan.generation.as_str())
                     != Some(desired_generation.as_str());
 
             let mut last_reconcile_at = compiled_state
@@ -811,6 +826,58 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     degraded_reasons.sort();
     degraded_reasons.dedup();
 
+    let port_failure_count = failed_objects
+        .iter()
+        .filter(|failure| failure.resource_kind == "port")
+        .count();
+    let route_failure_count = failed_objects
+        .iter()
+        .filter(|failure| failure.resource_kind == "route_table")
+        .count();
+
+    let domain_summaries = vec![
+        CompileDomainSummary {
+            domain: "identity".to_string(),
+            input_objects: context.desired.tenants.len() + context.desired.networks.len(),
+            compiled_objects: tenant_ids.len() + network_by_id.len(),
+            failed_objects: 0,
+            status: "shadow_ready".to_string(),
+            shadow_apply_only: true,
+        },
+        CompileDomainSummary {
+            domain: "ports".to_string(),
+            input_objects: context.desired.ports.len(),
+            compiled_objects: port_bindings.len(),
+            failed_objects: port_failure_count,
+            status: if port_failure_count == 0 {
+                "shadow_ready".to_string()
+            } else {
+                "shadow_degraded".to_string()
+            },
+            shadow_apply_only: true,
+        },
+        CompileDomainSummary {
+            domain: "security".to_string(),
+            input_objects: context.desired.security_groups.len(),
+            compiled_objects: security_group_by_id.len(),
+            failed_objects: 0,
+            status: "shadow_ready".to_string(),
+            shadow_apply_only: true,
+        },
+        CompileDomainSummary {
+            domain: "routes".to_string(),
+            input_objects: context.desired.route_tables.len(),
+            compiled_objects: compiled_route_tables.len(),
+            failed_objects: route_failure_count,
+            status: if route_failure_count == 0 {
+                "shadow_ready".to_string()
+            } else {
+                "shadow_degraded".to_string()
+            },
+            shadow_apply_only: true,
+        },
+    ];
+
     let compiled_at = unix_timestamp_string();
     let compiled_state = CompiledNodeState {
         generation: context.desired.generation.clone(),
@@ -824,6 +891,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         security_group_ids: security_group_by_id.keys().cloned().collect(),
         port_bindings,
         route_tables: compiled_route_tables,
+        domain_summaries,
         warnings: warnings.clone(),
         degraded_reasons: degraded_reasons.clone(),
         compiled_at: compiled_at.clone(),
