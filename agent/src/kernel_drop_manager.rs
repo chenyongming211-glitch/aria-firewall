@@ -25,7 +25,6 @@ const KERNEL_DROP_PERSISTED_LIVE_IFACES_SCHEMA_VERSION: u32 = 2;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum KernelDropMode {
     Disabled,
-    ScaffoldOnly,
     KfreeSkbLegacy,
     KfreeSkbReasonful,
 }
@@ -90,12 +89,6 @@ pub struct KernelDropManager {
     pin_path: String,
     state: Mutex<KernelDropManagerState>,
     kallsyms: Vec<(u64, String)>,
-}
-
-/// Resolved location info for a kernel drop event.
-pub struct ResolvedLocation {
-    pub symbol: String,
-    pub hint: Option<String>,
 }
 
 fn load_kallsyms() -> Vec<(u64, String)> {
@@ -373,20 +366,6 @@ impl KernelDropManager {
             mode: state.mode,
             managed_ifaces: state.managed_ifaces.len(),
             last_error: state.last_error.clone(),
-        }
-    }
-
-    pub async fn reason_name(&self, code: Option<u16>) -> String {
-        match code {
-            Some(c) => {
-                let state = self.state.lock().await;
-                state
-                    .reason_names
-                    .get(&c)
-                    .cloned()
-                    .unwrap_or_else(|| format!("reason_{}", c))
-            }
-            None => "unknown".to_string(),
         }
     }
 

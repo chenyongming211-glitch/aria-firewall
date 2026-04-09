@@ -1435,28 +1435,6 @@ impl ControlPlane {
         Ok(())
     }
 
-    // ── Policies with Stats (Aggregation) ──
-
-    pub async fn list_policies_with_stats(
-        &self,
-        instance: &str,
-    ) -> Result<
-        (
-            Vec<aria_core::state::RuleInfo>,
-            Vec<aria_core::monitoring::RuleStatsEntry>,
-        ),
-        ControlPlaneError,
-    > {
-        // Get policies configuration
-        let inst = self.get_instance(instance).await?;
-        let state = inst.read().await;
-        let rules = state.state.rules.clone();
-        let stats = aria_core::monitoring::get_rule_stats(state.map_runtime())
-            .map_err(|e| ControlPlaneError::KernelError(e))?;
-
-        Ok((rules, stats))
-    }
-
     // ── QoS ──
 
     pub async fn list_qos(&self, instance: &str) -> Result<Vec<QosRuleInfo>, ControlPlaneError> {
@@ -1666,23 +1644,6 @@ impl ControlPlane {
         }
 
         Ok(())
-    }
-
-    // ── QoS with Stats (Aggregation) ──
-
-    pub async fn list_qos_with_stats(
-        &self,
-        instance: &str,
-    ) -> Result<(Vec<QosRuleInfo>, Vec<aria_core::monitoring::QosStatsEntry>), ControlPlaneError>
-    {
-        // Get QoS configuration
-        let inst = self.get_instance(instance).await?;
-        let state = inst.read().await;
-        let rules = state.state.qos_rules.clone();
-        let stats = aria_core::monitoring::get_qos_stats(state.map_runtime())
-            .map_err(|e| ControlPlaneError::KernelError(e))?;
-
-        Ok((rules, stats))
     }
 
     // ── Mirror ──
@@ -1932,28 +1893,6 @@ impl ControlPlane {
         let stats = aria_core::monitoring::get_mirror_stats(state.map_runtime())
             .map_err(|e| ControlPlaneError::KernelError(e))?;
         Ok((stats, state.state.groups.clone()))
-    }
-
-    // ── Mirror with Stats (Aggregation) ──
-
-    pub async fn list_mirror_with_stats(
-        &self,
-        instance: &str,
-    ) -> Result<
-        (
-            Vec<MirrorRuleInfo>,
-            Vec<aria_core::monitoring::MirrorStatsEntry>,
-        ),
-        ControlPlaneError,
-    > {
-        // Get mirror configuration
-        let inst = self.get_instance(instance).await?;
-        let state = inst.read().await;
-        let rules = state.state.mirror_rules.clone();
-        let stats = aria_core::monitoring::get_mirror_stats(state.map_runtime())
-            .map_err(|e| ControlPlaneError::KernelError(e))?;
-
-        Ok((rules, stats))
     }
 
     // ── Conntrack ──

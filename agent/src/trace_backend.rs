@@ -241,6 +241,7 @@ impl TraceManager {
         }
     }
 
+    #[allow(dead_code)] // Will be used when detach path integrates trace cache cleanup.
     pub async fn clear_tap_cache(&self, pin_path: &str, tap_id: u32) {
         if self.backend == TraceBackendKind::LegacyMap {
             return;
