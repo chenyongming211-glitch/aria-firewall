@@ -3,6 +3,10 @@ use serde_json::json;
 use std::fmt;
 use utoipa::ToSchema;
 
+mod platform;
+
+pub use platform::*;
+
 // ── Error ──
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -1525,7 +1529,9 @@ pub fn proto_from_string(proto: &str) -> Result<u8, String> {
         "udp" => Ok(17),
         "icmp" => Ok(1),
         "any" => Ok(0),
-        _ => proto.parse::<u8>().map_err(|_| format!("Invalid protocol '{}'", proto)),
+        _ => proto
+            .parse::<u8>()
+            .map_err(|_| format!("Invalid protocol '{}'", proto)),
     }
 }
 
@@ -1558,6 +1564,9 @@ pub fn direction_from_string(direction: &str) -> Result<u8, String> {
         "ingress" | "in" => Ok(0),
         "egress" | "out" => Ok(1),
         "both" | "all" => Ok(2),
-        _ => Err(format!("Invalid direction '{}': must be 'ingress', 'egress', or 'both'", direction)),
+        _ => Err(format!(
+            "Invalid direction '{}': must be 'ingress', 'egress', or 'both'",
+            direction
+        )),
     }
 }

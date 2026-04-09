@@ -27,6 +27,18 @@
 ## 文档
 
 - [用户手册](docs/user-manual.md)
+- [IaaS 网络架构原则与演进路线](docs/iaas-architecture-roadmap.md)
+- [RFC 索引](docs/rfcs/README.md)
+- [eBPF 实现约束](docs/ebpf-implementation-constraints.md)
+- [重构护栏](docs/refactor-guardrails.md)
+
+进入 `Phase 1` 代码开发前，默认必须先遵守 `eBPF 实现约束` 与 `重构护栏`。
+
+## 开发进度
+
+- `2026-04-09`：已新增实验性的 `aria-controller` crate，作为 `RFC-001` 与 `RFC-010` 的第一阶段代码落地。
+- 当前只提供平台级 northbound API 骨架、内存态资源存储和 `/openapi.json` / `/docs`，首批资源覆盖 `Tenant / Node / Network / Port / SecurityGroup / RouteTable`。
+- 当前还没有接入持久化、鉴权审计、southbound 编译或 datapath 联动；这些能力仍按 RFC 路线后续实现。
 
 ## 回归脚本
 
