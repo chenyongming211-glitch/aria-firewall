@@ -1,4 +1,5 @@
 use axum::{
+    middleware,
     routing::{delete, get, post, put},
     Router,
 };
@@ -91,5 +92,8 @@ pub fn build_router(store: SharedStore) -> Router {
             "/api/v1/southbound/nodes/{id}/status",
             get(southbound_handlers::status),
         )
+        .layer(middleware::from_fn(
+            crate::request_id::request_id_middleware,
+        ))
         .with_state(store)
 }

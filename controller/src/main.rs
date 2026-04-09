@@ -1,6 +1,7 @@
 mod api_handlers;
 mod api_routes;
 mod openapi;
+mod request_id;
 mod southbound_handlers;
 mod store;
 

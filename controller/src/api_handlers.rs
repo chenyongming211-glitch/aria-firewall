@@ -19,7 +19,10 @@ use axum::{
     Json,
 };
 
-use crate::store::{SharedStore, StoreError};
+use crate::{
+    request_id,
+    store::{SharedStore, StoreError},
+};
 
 pub(crate) type AppState = SharedStore;
 
@@ -75,7 +78,7 @@ impl IntoResponse for ControllerError {
             Json(PlatformApiError {
                 code,
                 message,
-                request_id: None,
+                request_id: request_id::current_request_id(),
                 details,
             }),
         )
