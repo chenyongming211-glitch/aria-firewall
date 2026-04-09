@@ -294,6 +294,32 @@ struct RuntimeIntent {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeExecutionDomainSummary {
+    domain: String,
+    planned_action: String,
+    execution_status: String,
+    requires_cleanup: bool,
+    changed: bool,
+    input_objects: usize,
+    compiled_objects: usize,
+    failed_objects: usize,
+    warnings: Vec<String>,
+    degraded_reasons: Vec<String>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeExecutionSummary {
+    generation: String,
+    previous_generation: Option<String>,
+    compiled_at: String,
+    observed_at: String,
+    changed_domains: Vec<String>,
+    domain_summaries: Vec<RuntimeExecutionDomainSummary>,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
@@ -302,6 +328,7 @@ struct CompileOutcome {
     runtime_inventory: RuntimeInventory,
     runtime_inventory_diff: RuntimeInventoryDiff,
     runtime_intent: RuntimeIntent,
+    runtime_execution_summary: RuntimeExecutionSummary,
     apply_report: ApplyStatusReport,
 }
 
@@ -366,6 +393,7 @@ impl PlatformAgent {
         let mut runtime_inventory = self.state_store.load_runtime_inventory().await;
         let mut runtime_inventory_diff = self.state_store.load_runtime_inventory_diff().await;
         let mut runtime_intent = self.state_store.load_runtime_intent().await;
+        let mut runtime_execution_summary = self.state_store.load_runtime_execution_summary().await;
         loop {
             interval.tick().await;
 
@@ -444,6 +472,10 @@ impl PlatformAgent {
                 || runtime_intent
                     .as_ref()
                     .map(|intent| intent.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || runtime_execution_summary
+                    .as_ref()
+                    .map(|summary| summary.generation.as_str())
                     != Some(desired_generation.as_str());
 
             let mut last_reconcile_at = compiled_state
@@ -573,6 +605,23 @@ impl PlatformAgent {
                         changed_domains = outcome.runtime_intent.changed_domains.len(),
                         intents = outcome.runtime_intent.intents.len(),
                         "persisted shadow runtime intent"
+                    );
+                }
+
+                if let Err(error) = self
+                    .state_store
+                    .save_runtime_execution_summary(&outcome.runtime_execution_summary)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist runtime execution summary");
+                    heartbeat_error = Some(error);
+                } else {
+                    runtime_execution_summary = Some(outcome.runtime_execution_summary.clone());
+                    info!(
+                        generation = %outcome.runtime_execution_summary.generation,
+                        changed_domains = outcome.runtime_execution_summary.changed_domains.len(),
+                        domain_summaries = outcome.runtime_execution_summary.domain_summaries.len(),
+                        "persisted shadow runtime execution summary"
                     );
                 }
 
@@ -831,6 +880,18 @@ impl LocalPlatformStateStore {
         self.save_json(self.runtime_intent_path(), intent).await
     }
 
+    async fn load_runtime_execution_summary(&self) -> Option<RuntimeExecutionSummary> {
+        self.load_json(self.runtime_execution_summary_path()).await
+    }
+
+    async fn save_runtime_execution_summary(
+        &self,
+        summary: &RuntimeExecutionSummary,
+    ) -> Result<(), String> {
+        self.save_json(self.runtime_execution_summary_path(), summary)
+            .await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
@@ -857,6 +918,10 @@ impl LocalPlatformStateStore {
 
     fn runtime_intent_path(&self) -> PathBuf {
         self.root.join("runtime-intent.json")
+    }
+
+    fn runtime_execution_summary_path(&self) -> PathBuf {
+        self.root.join("runtime-execution-summary.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -1405,18 +1470,6 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         compiled_at: compiled_at.clone(),
         shadow_apply_only: true,
     };
-    let domain_statuses = compiled_state
-        .domain_summaries
-        .iter()
-        .map(|summary| ApplyDomainStatus {
-            domain: summary.domain.clone(),
-            input_objects: summary.input_objects,
-            compiled_objects: summary.compiled_objects,
-            failed_objects: summary.failed_objects,
-            status: summary.status.clone(),
-            shadow_apply_only: summary.shadow_apply_only,
-        })
-        .collect();
     let reconcile_plan = build_reconcile_plan(
         context.previous_compiled_state,
         &compiled_state,
@@ -1436,6 +1489,20 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         build_runtime_inventory_diff(context.previous_runtime_inventory, &runtime_inventory);
     let runtime_intent =
         build_runtime_intent(&reconcile_plan, &runtime_inventory, &runtime_inventory_diff);
+    let runtime_execution_summary =
+        build_runtime_execution_summary(&compiled_state, &reconcile_plan, &runtime_intent);
+    let domain_statuses = runtime_execution_summary
+        .domain_summaries
+        .iter()
+        .map(|summary| ApplyDomainStatus {
+            domain: summary.domain.clone(),
+            input_objects: summary.input_objects,
+            compiled_objects: summary.compiled_objects,
+            failed_objects: summary.failed_objects,
+            status: summary.execution_status.clone(),
+            shadow_apply_only: summary.shadow_apply_only,
+        })
+        .collect();
 
     let status = if failed_objects.is_empty() {
         "partial".to_string()
@@ -1452,6 +1519,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         runtime_inventory,
         runtime_inventory_diff,
         runtime_intent,
+        runtime_execution_summary,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -2400,6 +2468,96 @@ fn build_runtime_intent(
         observed_at: unix_timestamp_string(),
         changed_domains: changed_domains.into_iter().collect(),
         intents,
+        shadow_apply_only: true,
+    }
+}
+
+fn build_runtime_execution_summary(
+    compiled_state: &CompiledNodeState,
+    reconcile_plan: &ReconcilePlan,
+    runtime_intent: &RuntimeIntent,
+) -> RuntimeExecutionSummary {
+    let compile_summary_by_domain = compiled_state
+        .domain_summaries
+        .iter()
+        .map(|summary| (summary.domain.as_str(), summary))
+        .collect::<BTreeMap<_, _>>();
+
+    let reconcile_domains = reconcile_plan
+        .actions
+        .iter()
+        .map(|action| action.domain.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let domain_summaries = runtime_intent
+        .intents
+        .iter()
+        .map(|intent| {
+            let compile_summary = compile_summary_by_domain.get(intent.domain.as_str()).copied();
+            let input_objects = compile_summary.map(|summary| summary.input_objects).unwrap_or(0);
+            let failed_objects = compile_summary
+                .map(|summary| summary.failed_objects)
+                .unwrap_or(intent.failed_objects);
+            let execution_status = if intent.desired_action == "reserve_shadow" {
+                "shadow_reserved".to_string()
+            } else if failed_objects > 0 {
+                "shadow_execute_degraded".to_string()
+            } else if intent.requires_cleanup {
+                "shadow_execute_cleanup".to_string()
+            } else if intent.changed || reconcile_domains.contains(intent.domain.as_str()) {
+                "shadow_execute_planned".to_string()
+            } else {
+                "shadow_execute_stable".to_string()
+            };
+
+            let mut degraded_reasons = Vec::new();
+            if failed_objects > 0 {
+                degraded_reasons.push("compile_or_inventory_failures_present".to_string());
+            }
+            if intent.requires_cleanup {
+                degraded_reasons.push("cleanup_required".to_string());
+            }
+            if reconcile_plan.full_reconcile && intent.full_reconcile {
+                degraded_reasons.push("full_reconcile_required".to_string());
+            }
+
+            let mut warnings = Vec::new();
+            if intent.domain == "services" && intent.changed && intent.compiled_objects > 0 {
+                warnings.push(
+                    "services shadow execution planned; node-local and cross-node LB datapath not materialized yet"
+                        .to_string(),
+                );
+            }
+            if intent.domain == "nat" && intent.desired_action == "reserve_shadow" {
+                warnings.push(
+                    "nat shadow reservation present; snat/dnat/floating-ip datapath not materialized yet"
+                        .to_string(),
+                );
+            }
+
+            RuntimeExecutionDomainSummary {
+                domain: intent.domain.clone(),
+                planned_action: intent.desired_action.clone(),
+                execution_status,
+                requires_cleanup: intent.requires_cleanup,
+                changed: intent.changed,
+                input_objects,
+                compiled_objects: intent.compiled_objects,
+                failed_objects,
+                warnings,
+                degraded_reasons,
+                shadow_apply_only: intent.shadow_apply_only,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    RuntimeExecutionSummary {
+        generation: runtime_intent.generation.clone(),
+        previous_generation: runtime_intent.previous_generation.clone(),
+        compiled_at: runtime_intent.compiled_at.clone(),
+        observed_at: unix_timestamp_string(),
+        changed_domains: runtime_intent.changed_domains.clone(),
+        domain_summaries,
         shadow_apply_only: true,
     }
 }

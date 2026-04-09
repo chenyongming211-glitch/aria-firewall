@@ -421,13 +421,15 @@ Agent 重启时，恢复流程建议为：
 - agent 当前会把第一版 `RuntimeInventory` 缓存到 `${state_path}/platform-agent/runtime-inventory.json`
 - agent 当前会把第一版 `RuntimeInventoryDiff` 缓存到 `${state_path}/platform-agent/runtime-inventory-diff.json`
 - agent 当前会把第一版 `RuntimeIntent` 缓存到 `${state_path}/platform-agent/runtime-intent.json`
+- agent 当前会把第一版 `RuntimeExecutionSummary` 缓存到 `${state_path}/platform-agent/runtime-execution-summary.json`
 - 第一版编译器已开始把 `Tenant / Network / Port / SecurityGroup / RouteTable / HealthCheck / BackendSet / Service` 下沉为节点局部视图
 - `CompiledNodeState` 已开始输出 `identity / ports / security / routes / services / nat` 六个 domain summary，作为后续按编译域分治的第一阶段骨架；其中 `routes` 域对应 routing 预留位，`services` 域对应 `Service / BackendSet / HealthCheck` 的 shadow 编译域，`nat` 域当前仅保留 `SNAT / DNAT / Floating IP` 的 shadow reserved 接口
 - `RuntimeInventory` 已开始按 `identity / ports / security / routes / services / nat` 汇总 shadow attach/map/domain inventory，作为后续本地 runtime reconcile 的恢复基线
 - `RuntimeInventoryDiff` 已开始按编译域汇总 attach/map/domain delta，作为后续 runtime inventory reconcile 与增量 materialization 的轻量差异骨架
 - `RuntimeIntent` 已开始把 `reconcile plan + runtime inventory + runtime inventory diff` 收敛成按域的 shadow runtime intent，作为后续 datapath apply/reconcile 的本地执行入口骨架
-- `ApplyStatusReport` 已开始携带 `domain_statuses`，把 domain-level shadow 结果回报给 controller
-- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + runtime plan + runtime inventory + runtime inventory diff + runtime intent + apply report`，不会直接 materialize 到 datapath
+- `RuntimeExecutionSummary` 已开始把 `compiled state + reconcile plan + runtime intent` 收敛成按域的 shadow execute 摘要，作为后续 runtime apply 结果面和 rollout 观察面的前置骨架
+- `ApplyStatusReport` 已开始携带 `domain_statuses`，把 domain-level shadow execute 结果回报给 controller
+- 编译输出当前仍是 `shadow compile only`：会产出 `compiled state + reconcile plan + runtime plan + runtime inventory + runtime inventory diff + runtime intent + runtime execution summary + apply report`，不会直接 materialize 到 datapath
 - 当前 `apply-status` 主要表达对象校验、降级原因和 shadow compile 结果，尚不代表 datapath 已成功写入
 
 ## 16. 当前缺口
