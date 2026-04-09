@@ -86,6 +86,85 @@ struct CompiledServiceView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct HealthCheckIr {
+    health_check_id: String,
+    tenant_id: String,
+    network_id: Option<String>,
+    probe_protocol: String,
+    interval_seconds: u32,
+    timeout_seconds: u32,
+    healthy_threshold: u32,
+    unhealthy_threshold: u32,
+    target_port: Option<u16>,
+    has_request_template: bool,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackendMemberIr {
+    backend_id: String,
+    target_type: String,
+    target_ref: Option<String>,
+    resolved_ip_hint: Option<String>,
+    service_port: u16,
+    weight: u16,
+    admin_state: String,
+    node_id: Option<String>,
+    declared_locality: Option<String>,
+    resolved_locality: String,
+    forwarding_scope: String,
+    resolution: String,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackendSetIr {
+    backend_set_id: String,
+    tenant_id: String,
+    network_id: String,
+    selection_policy: String,
+    health_check_id: Option<String>,
+    local_backend_count: usize,
+    remote_backend_count: usize,
+    backends: Vec<BackendMemberIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceFrontendPortIr {
+    name: Option<String>,
+    service_port: u16,
+    target_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceFrontendIr {
+    service_id: String,
+    tenant_id: String,
+    network_id: String,
+    vip: String,
+    protocol: String,
+    lb_policy: String,
+    session_affinity: Option<String>,
+    exposure_type: String,
+    listener_ports: Vec<ServiceFrontendPortIr>,
+    node_local_forwarding: bool,
+    cross_node_forwarding: bool,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceProgramIr {
+    service_id: String,
+    backend_set_id: Option<String>,
+    health_check_id: Option<String>,
+    frontend: ServiceFrontendIr,
+    backend_set: Option<BackendSetIr>,
+    health_check: Option<HealthCheckIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CompileDomainSummary {
     domain: String,
     input_objects: usize,
@@ -111,6 +190,8 @@ struct CompiledNodeState {
     health_checks: Vec<CompiledHealthCheckView>,
     backend_sets: Vec<CompiledBackendSetView>,
     services: Vec<CompiledServiceView>,
+    #[serde(default)]
+    service_programs: Vec<ServiceProgramIr>,
     domain_summaries: Vec<CompileDomainSummary>,
     warnings: Vec<String>,
     degraded_reasons: Vec<String>,
@@ -1333,6 +1414,14 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         });
     }
 
+    let service_programs = build_service_programs(
+        context.desired,
+        &compiled_health_checks,
+        &compiled_backend_sets,
+        &compiled_services,
+        context.node_id,
+    );
+
     if context.desired.deletes.is_empty() {
         debug!(
             generation = %context.desired.generation,
@@ -1464,6 +1553,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,
+        service_programs,
         domain_summaries,
         warnings: warnings.clone(),
         degraded_reasons: degraded_reasons.clone(),
@@ -1531,6 +1621,215 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             degraded_reasons,
         },
     }
+}
+
+fn build_service_programs(
+    desired: &DesiredStateEnvelope,
+    compiled_health_checks: &[CompiledHealthCheckView],
+    compiled_backend_sets: &[CompiledBackendSetView],
+    compiled_services: &[CompiledServiceView],
+    node_id: &str,
+) -> Vec<ServiceProgramIr> {
+    let health_check_by_id = desired
+        .health_checks
+        .iter()
+        .map(|health_check| (health_check.metadata.id.as_str(), health_check))
+        .collect::<BTreeMap<_, _>>();
+    let backend_set_by_id = desired
+        .backend_sets
+        .iter()
+        .map(|backend_set| (backend_set.metadata.id.as_str(), backend_set))
+        .collect::<BTreeMap<_, _>>();
+    let service_by_id = desired
+        .services
+        .iter()
+        .map(|service| (service.metadata.id.as_str(), service))
+        .collect::<BTreeMap<_, _>>();
+    let port_by_id = desired
+        .ports
+        .iter()
+        .map(|port| (port.metadata.id.as_str(), port))
+        .collect::<BTreeMap<_, _>>();
+    let compiled_backend_set_by_id = compiled_backend_sets
+        .iter()
+        .map(|backend_set| (backend_set.backend_set_id.as_str(), backend_set))
+        .collect::<BTreeMap<_, _>>();
+    let compiled_health_check_ids = compiled_health_checks
+        .iter()
+        .map(|health_check| health_check.health_check_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    compiled_services
+        .iter()
+        .filter_map(|compiled_service| {
+            let service = service_by_id.get(compiled_service.service_id.as_str())?;
+            let backend_set_ir =
+                compiled_service
+                    .backend_set_id
+                    .as_deref()
+                    .and_then(|backend_set_id| {
+                        let backend_set = backend_set_by_id.get(backend_set_id)?;
+                        let compiled_backend_set =
+                            compiled_backend_set_by_id.get(backend_set_id)?;
+
+                        let backends = backend_set
+                            .spec
+                            .backends
+                            .iter()
+                            .map(|backend| build_backend_member_ir(backend, &port_by_id, node_id))
+                            .collect::<Vec<_>>();
+
+                        Some(BackendSetIr {
+                            backend_set_id: backend_set.metadata.id.clone(),
+                            tenant_id: backend_set.spec.tenant_id.clone(),
+                            network_id: backend_set.spec.network_id.clone(),
+                            selection_policy: backend_set.spec.policy.clone(),
+                            health_check_id: backend_set.spec.health_check_id.clone(),
+                            local_backend_count: compiled_backend_set.local_backend_count,
+                            remote_backend_count: compiled_backend_set.remote_backend_count,
+                            backends,
+                            shadow_apply_only: true,
+                        })
+                    });
+
+            let health_check_ir = backend_set_ir
+                .as_ref()
+                .and_then(|backend_set| backend_set.health_check_id.as_deref())
+                .and_then(|health_check_id| {
+                    let health_check = health_check_by_id.get(health_check_id)?;
+                    if !compiled_health_check_ids.contains(health_check_id) {
+                        return None;
+                    }
+                    Some(HealthCheckIr {
+                        health_check_id: health_check.metadata.id.clone(),
+                        tenant_id: health_check.spec.tenant_id.clone(),
+                        network_id: health_check.spec.network_id.clone(),
+                        probe_protocol: health_check.spec.protocol.clone(),
+                        interval_seconds: health_check.spec.interval_seconds,
+                        timeout_seconds: health_check.spec.timeout_seconds,
+                        healthy_threshold: health_check.spec.healthy_threshold,
+                        unhealthy_threshold: health_check.spec.unhealthy_threshold,
+                        target_port: health_check.spec.target_port,
+                        // Keep the shadow IR bounded; the full probe payload can stay in desired state.
+                        has_request_template: health_check.spec.request_template.is_some(),
+                        shadow_apply_only: true,
+                    })
+                });
+
+            let node_local_forwarding = backend_set_ir
+                .as_ref()
+                .map(|backend_set| backend_set.local_backend_count > 0)
+                .unwrap_or(false);
+            let cross_node_forwarding = backend_set_ir
+                .as_ref()
+                .map(|backend_set| backend_set.remote_backend_count > 0)
+                .unwrap_or(false);
+
+            Some(ServiceProgramIr {
+                service_id: compiled_service.service_id.clone(),
+                backend_set_id: compiled_service.backend_set_id.clone(),
+                health_check_id: health_check_ir
+                    .as_ref()
+                    .map(|health_check| health_check.health_check_id.clone()),
+                frontend: ServiceFrontendIr {
+                    service_id: compiled_service.service_id.clone(),
+                    tenant_id: compiled_service.tenant_id.clone(),
+                    network_id: compiled_service.network_id.clone(),
+                    vip: compiled_service.vip.clone(),
+                    protocol: compiled_service.protocol.clone(),
+                    lb_policy: service.spec.lb_policy.clone(),
+                    session_affinity: service.spec.session_affinity.clone(),
+                    exposure_type: compiled_service.exposure_type.clone(),
+                    listener_ports: service
+                        .spec
+                        .ports
+                        .iter()
+                        .map(|port| ServiceFrontendPortIr {
+                            name: port.name.clone(),
+                            service_port: port.port,
+                            target_port: port.target_port,
+                        })
+                        .collect(),
+                    node_local_forwarding,
+                    cross_node_forwarding,
+                    shadow_apply_only: true,
+                },
+                backend_set: backend_set_ir,
+                health_check: health_check_ir,
+                shadow_apply_only: true,
+            })
+        })
+        .collect()
+}
+
+fn build_backend_member_ir(
+    backend: &aria_api::BackendTargetSpec,
+    port_by_id: &BTreeMap<&str, &aria_api::PortResource>,
+    node_id: &str,
+) -> BackendMemberIr {
+    let mut resolved_ip_hint = backend.ip.clone();
+    let mut resolved_locality = backend
+        .locality
+        .clone()
+        .unwrap_or_else(|| "remote".to_string());
+    let mut resolution = if backend.target_ref.is_some() {
+        "shadow_remote_reference".to_string()
+    } else if backend.ip.is_some() {
+        "direct_ip".to_string()
+    } else {
+        "literal_target".to_string()
+    };
+    let mut resolved_node_id = backend.node_id.clone();
+
+    if let Some(target_ref) = backend.target_ref.as_deref() {
+        if let Some(port) = port_by_id.get(target_ref) {
+            let bound_node_id = port.spec.node_id.as_deref().unwrap_or(node_id);
+            resolved_locality = if bound_node_id == node_id {
+                "local".to_string()
+            } else {
+                "remote".to_string()
+            };
+            resolved_node_id = port
+                .spec
+                .node_id
+                .clone()
+                .or_else(|| backend.node_id.clone());
+            resolved_ip_hint = resolved_ip_hint
+                .or_else(|| port.spec.fixed_ips.first().map(|ip| strip_cidr_suffix(ip)));
+            resolution = "resolved_from_port_ref".to_string();
+        }
+    } else if backend.node_id.as_deref() == Some(node_id) {
+        resolved_locality = "local".to_string();
+    }
+
+    let forwarding_scope = if resolved_locality == "local" {
+        "node_local".to_string()
+    } else {
+        "cross_node".to_string()
+    };
+
+    BackendMemberIr {
+        backend_id: backend.id.clone(),
+        target_type: backend.target_type.clone(),
+        target_ref: backend.target_ref.clone(),
+        resolved_ip_hint,
+        service_port: backend.port,
+        weight: backend.weight,
+        admin_state: backend
+            .admin_state
+            .clone()
+            .unwrap_or_else(|| "enabled".to_string()),
+        node_id: resolved_node_id,
+        declared_locality: backend.locality.clone(),
+        resolved_locality,
+        forwarding_scope,
+        resolution,
+        shadow_apply_only: true,
+    }
+}
+
+fn strip_cidr_suffix(value: &str) -> String {
+    value.split('/').next().unwrap_or(value).to_string()
 }
 
 fn build_reconcile_plan(

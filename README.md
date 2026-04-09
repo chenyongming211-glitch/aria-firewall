@@ -56,6 +56,7 @@
 - `aria-agent` 已新增实验性的可选 southbound client；配置 `southbound_controller_url + southbound_node_id` 后，agent 会执行 `register / desired-state / apply-status / heartbeat`，并在 `${state_path}/platform-agent/` 下维护 `desired-state-cache.json`、`compiled-node-state.json`、`reconcile-plan.json`、`runtime-plan.json`、`runtime-inventory.json`、`runtime-inventory-diff.json`、`runtime-intent.json` 与 `runtime-execution-summary.json`。
 - 当前 agent 侧 southbound 仍是 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，并生成第一版 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)`、`runtime inventory`、`runtime inventory diff` 与 `runtime intent`；`CompiledNodeState` 也已开始提供 `identity / ports / security / routes / nat` 五个编译域的本地摘要。其中 `routes` 域对应 routing 预留位，`nat` 域当前只作为 `SNAT / DNAT / Floating IP` 的 shadow reserved 占位，不会直接 materialize 到 datapath。
 - southbound `desired-state` 现已开始携带 `Service / BackendSet / HealthCheck` 对象；agent 的 shadow compiler 也已开始把它们编译为节点局部 `services` 域摘要、运行计划、运行意图与执行摘要，但仍然不会进入真实 L4 LB datapath。
+- agent 的 `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow 骨架，用于承载节点内转发与跨节点转发的服务局部视图，但仍然只保存在本地影子状态中，不会直接下沉到 datapath。
 - `apply-status` 现在也开始携带按 `identity / ports / security / routes / services / nat` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - `apply-status.domain_statuses` 当前已从“纯 compile 摘要”推进为“shadow execute 摘要”，用于承载 `Service / BackendSet / HealthCheck` 等域的本地执行意图结果。
 - 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
