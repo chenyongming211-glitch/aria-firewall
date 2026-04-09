@@ -348,6 +348,10 @@ impl PlatformStore {
         }
     }
 
+    pub async fn clear_southbound_runtime(&self, node_id: &str) {
+        self.southbound_nodes.write().await.remove(node_id);
+    }
+
     pub async fn desired_state_for_node(
         &self,
         node_id: &str,

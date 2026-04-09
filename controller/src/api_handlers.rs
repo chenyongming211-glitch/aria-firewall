@@ -416,6 +416,7 @@ pub async fn delete_node(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.nodes.delete(&id).await?;
+    store.clear_southbound_runtime(&id).await;
     store.bump_generation();
     Ok(Json(deleted_message("node", &id)))
 }
