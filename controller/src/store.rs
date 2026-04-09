@@ -2,7 +2,7 @@ use aria_api::{
     ApplyStatusReport, DesiredStateEnvelope, DesiredStatePublishRecord, NetworkResource,
     NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource,
     ResourceMetadata, RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse,
-    TenantResource,
+    SouthboundSyncStatus, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -452,6 +452,128 @@ impl InMemoryControllerStore {
         (record, true)
     }
 
+    fn derive_sync_status(
+        desired_generation: &str,
+        last_applied_generation: Option<&str>,
+        last_desired_state: Option<&DesiredStatePublishRecord>,
+        last_apply_status: Option<&ApplyStatusReport>,
+        last_health: Option<&NodeHealthReport>,
+    ) -> SouthboundSyncStatus {
+        let mut reasons = Vec::new();
+
+        if last_desired_state.is_none() {
+            reasons.push("desired_state_not_published".to_string());
+            return SouthboundSyncStatus {
+                state: "pending".to_string(),
+                reconcile_required: true,
+                reasons,
+            };
+        }
+
+        let Some(applied_generation) = last_applied_generation else {
+            reasons.push("desired_generation_not_applied".to_string());
+            return SouthboundSyncStatus {
+                state: "pending".to_string(),
+                reconcile_required: true,
+                reasons,
+            };
+        };
+
+        if applied_generation != desired_generation {
+            reasons.push(format!(
+                "desired_generation_mismatch:{desired_generation}!={applied_generation}"
+            ));
+            return SouthboundSyncStatus {
+                state: "out_of_sync".to_string(),
+                reconcile_required: true,
+                reasons,
+            };
+        }
+
+        if let Some(apply_status) = last_apply_status {
+            if apply_status.status == "failed" {
+                reasons.push("apply_reported_failed".to_string());
+                reasons.extend(
+                    apply_status
+                        .failed_objects
+                        .iter()
+                        .map(|failure| format!("failed:{}:{}", failure.resource_kind, failure.id)),
+                );
+                return SouthboundSyncStatus {
+                    state: "failed".to_string(),
+                    reconcile_required: true,
+                    reasons,
+                };
+            }
+
+            if apply_status.status == "partial" {
+                reasons.push("apply_reported_partial".to_string());
+            }
+
+            reasons.extend(
+                apply_status
+                    .degraded_reasons
+                    .iter()
+                    .map(|reason| format!("degraded:{reason}")),
+            );
+        }
+
+        if let Some(health) = last_health {
+            if !health.datapath_ready {
+                reasons.push("datapath_not_ready".to_string());
+            }
+            if let Some(error) = &health.last_error {
+                reasons.push(format!("node_error:{error}"));
+            }
+        }
+
+        if reasons.is_empty() {
+            SouthboundSyncStatus {
+                state: "in_sync".to_string(),
+                reconcile_required: false,
+                reasons,
+            }
+        } else {
+            SouthboundSyncStatus {
+                state: "degraded".to_string(),
+                reconcile_required: true,
+                reasons,
+            }
+        }
+    }
+
+    fn southbound_status_from_parts(
+        &self,
+        node_id: &str,
+        last_applied_generation: Option<String>,
+        last_seen_at: Option<String>,
+        last_desired_state: Option<DesiredStatePublishRecord>,
+        registration: Option<NodeRegisterRequest>,
+        last_apply_status: Option<ApplyStatusReport>,
+        last_health: Option<NodeHealthReport>,
+    ) -> SouthboundNodeStatusResponse {
+        let desired_generation = self.current_generation_inner();
+        let sync_status = Self::derive_sync_status(
+            &desired_generation,
+            last_applied_generation.as_deref(),
+            last_desired_state.as_ref(),
+            last_apply_status.as_ref(),
+            last_health.as_ref(),
+        );
+
+        SouthboundNodeStatusResponse {
+            node_id: node_id.to_string(),
+            desired_generation,
+            last_applied_generation,
+            last_seen_at,
+            last_desired_state,
+            sync_status,
+            registration,
+            last_apply_status,
+            last_health,
+        }
+    }
+
     async fn snapshot_state(&self) -> PersistedControllerState {
         PersistedControllerState {
             tenants: self.tenants.snapshot().await,
@@ -518,16 +640,15 @@ impl InMemoryControllerStore {
         };
         let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
-        Ok(SouthboundNodeStatusResponse {
-            node_id: node_id.to_string(),
-            desired_generation: self.current_generation_inner(),
+        Ok(self.southbound_status_from_parts(
+            node_id,
             last_applied_generation,
-            last_seen_at: Some(last_seen_at),
+            Some(last_seen_at),
             last_desired_state,
-            registration: Some(registration),
+            Some(registration),
             last_apply_status,
             last_health,
-        })
+        ))
     }
 
     async fn record_apply_status_inner(
@@ -569,16 +690,15 @@ impl InMemoryControllerStore {
         };
         let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
-        Ok(SouthboundNodeStatusResponse {
-            node_id: node_id.to_string(),
-            desired_generation: self.current_generation_inner(),
+        Ok(self.southbound_status_from_parts(
+            node_id,
             last_applied_generation,
-            last_seen_at: Some(last_seen_at),
+            Some(last_seen_at),
             last_desired_state,
             registration,
             last_apply_status,
             last_health,
-        })
+        ))
     }
 
     async fn record_health_inner(
@@ -619,16 +739,15 @@ impl InMemoryControllerStore {
         };
         let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
 
-        Ok(SouthboundNodeStatusResponse {
-            node_id: node_id.to_string(),
-            desired_generation: self.current_generation_inner(),
+        Ok(self.southbound_status_from_parts(
+            node_id,
             last_applied_generation,
-            last_seen_at: Some(last_seen_at),
+            Some(last_seen_at),
             last_desired_state,
             registration,
             last_apply_status,
             last_health,
-        })
+        ))
     }
 
     async fn southbound_status_inner(
@@ -646,27 +765,25 @@ impl InMemoryControllerStore {
         let last_desired_state = self.southbound_publishes.read().await.get(node_id).cloned();
         let states = self.southbound_nodes.read().await;
         if let Some(entry) = states.get(node_id) {
-            Ok(SouthboundNodeStatusResponse {
-                node_id: node_id.to_string(),
-                desired_generation: self.current_generation_inner(),
-                last_applied_generation: entry.last_applied_generation.clone(),
-                last_seen_at: Some(entry.last_seen_at.clone()),
+            Ok(self.southbound_status_from_parts(
+                node_id,
+                entry.last_applied_generation.clone(),
+                Some(entry.last_seen_at.clone()),
                 last_desired_state,
-                registration: entry.registration.clone(),
-                last_apply_status: entry.last_apply_status.clone(),
-                last_health: entry.last_health.clone(),
-            })
+                entry.registration.clone(),
+                entry.last_apply_status.clone(),
+                entry.last_health.clone(),
+            ))
         } else {
-            Ok(SouthboundNodeStatusResponse {
-                node_id: node_id.to_string(),
-                desired_generation: self.current_generation_inner(),
-                last_applied_generation: None,
-                last_seen_at: None,
+            Ok(self.southbound_status_from_parts(
+                node_id,
+                None,
+                None,
                 last_desired_state,
-                registration: None,
-                last_apply_status: None,
-                last_health: None,
-            })
+                None,
+                None,
+                None,
+            ))
         }
     }
 

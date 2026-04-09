@@ -105,6 +105,7 @@ use utoipa::OpenApi;
             aria_api::ApplyStatusResponse,
             aria_api::NodeHealthReport,
             aria_api::HeartbeatResponse,
+            aria_api::SouthboundSyncStatus,
             aria_api::SouthboundNodeStatusResponse
         )
     ),
@@ -167,6 +168,9 @@ mod tests {
             .pointer("/components/schemas/DesiredStatePublishRecord")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/SouthboundSyncStatus")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/NodeRegisterRequest")
             .is_some());
         assert!(doc
@@ -219,6 +223,9 @@ mod tests {
             .pointer(
                 "/components/schemas/SouthboundNodeStatusResponse/properties/last_desired_state"
             )
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/SouthboundNodeStatusResponse/properties/sync_status")
             .is_some());
     }
 }

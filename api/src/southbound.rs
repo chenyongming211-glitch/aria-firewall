@@ -366,6 +366,23 @@ pub struct HeartbeatResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
+    "state": "in_sync",
+    "reconcile_required": false,
+    "reasons": []
+}))]
+pub struct SouthboundSyncStatus {
+    /// Derived controller-side sync state for this node.
+    #[schema(example = "in_sync")]
+    pub state: String,
+    /// Whether the controller expects the node to reconcile again.
+    pub reconcile_required: bool,
+    /// Operator-facing reasons that explain the derived state.
+    #[serde(default)]
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
     "node_id": "node-0001",
     "desired_generation": "5",
     "last_applied_generation": "5",
@@ -382,6 +399,11 @@ pub struct HeartbeatResponse {
             "route_tables": 1,
             "deletes": 0
         }
+    },
+    "sync_status": {
+        "state": "in_sync",
+        "reconcile_required": false,
+        "reasons": []
     },
     "registration": {
         "info": {
@@ -427,6 +449,8 @@ pub struct SouthboundNodeStatusResponse {
     /// Latest desired-state publication recorded by the controller, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_desired_state: Option<DesiredStatePublishRecord>,
+    /// Derived controller-side sync summary for this node.
+    pub sync_status: SouthboundSyncStatus,
     /// Latest registration payload, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registration: Option<NodeRegisterRequest>,
