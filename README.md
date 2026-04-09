@@ -58,6 +58,7 @@
 - southbound `desired-state` 现已开始携带 `Service / BackendSet / HealthCheck` 对象；agent 的 shadow compiler 也已开始把它们编译为节点局部 `services` 域摘要、运行计划、运行意图与执行摘要，但仍然不会进入真实 L4 LB datapath。
 - agent 的 `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow 骨架，用于承载节点内转发与跨节点转发的服务局部视图，但仍然只保存在本地影子状态中，不会直接下沉到 datapath。
 - `services` 域的 `RuntimePlan / RuntimeInventory` 现已开始把 shadow map family 细化为 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection`，为后续节点内与跨节点 L4 转发实现预留更稳定的 runtime 规划边界。
+- agent 本地的 `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分节点内与跨节点转发方向，但仍然只用于 shadow 执行视图。
 - `apply-status` 现在也开始携带按 `identity / ports / security / routes / services / nat` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - `apply-status.domain_statuses` 当前已从“纯 compile 摘要”推进为“shadow execute 摘要”，用于承载 `Service / BackendSet / HealthCheck` 等域的本地执行意图结果。
 - 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。

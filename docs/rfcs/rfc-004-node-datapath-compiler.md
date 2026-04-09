@@ -426,6 +426,7 @@ Agent 重启时，恢复流程建议为：
 - `CompiledNodeState` 已开始输出 `identity / ports / security / routes / services / nat` 六个 domain summary，作为后续按编译域分治的第一阶段骨架；其中 `routes` 域对应 routing 预留位，`services` 域对应 `Service / BackendSet / HealthCheck` 的 shadow 编译域，`nat` 域当前仅保留 `SNAT / DNAT / Floating IP` 的 shadow reserved 接口
 - `CompiledNodeState` 现已开始在 `services` 域内额外保留第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达节点内转发、跨节点转发、frontend listener 和 backend member 的局部视图，但仍不会直接 materialize 到 datapath
 - `RuntimePlan / RuntimeInventory` 现已开始把 `services` 域细化成 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection` 等 shadow map family，为后续 L4 datapath 的局部更新和 runtime diff 提供更稳定的规划边界
+- `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分节点内与跨节点转发方向，作为后续 runtime apply 和 rollout 观察面的前置骨架
 - `RuntimeInventory` 已开始按 `identity / ports / security / routes / services / nat` 汇总 shadow attach/map/domain inventory，作为后续本地 runtime reconcile 的恢复基线
 - `RuntimeInventoryDiff` 已开始按编译域汇总 attach/map/domain delta，作为后续 runtime inventory reconcile 与增量 materialization 的轻量差异骨架
 - `RuntimeIntent` 已开始把 `reconcile plan + runtime inventory + runtime inventory diff` 收敛成按域的 shadow runtime intent，作为后续 datapath apply/reconcile 的本地执行入口骨架

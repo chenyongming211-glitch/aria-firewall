@@ -365,6 +365,20 @@ struct RuntimeDomainIntent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceRuntimeIntentSummary {
+    service_count: usize,
+    frontend_listener_count: usize,
+    backend_member_count: usize,
+    forwarding_projection_count: usize,
+    node_local_service_count: usize,
+    cross_node_service_count: usize,
+    desired_action: String,
+    requires_cleanup: bool,
+    changed: bool,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeIntent {
     generation: String,
     previous_generation: Option<String>,
@@ -372,6 +386,8 @@ struct RuntimeIntent {
     observed_at: String,
     changed_domains: Vec<String>,
     intents: Vec<RuntimeDomainIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service_intent: Option<ServiceRuntimeIntentSummary>,
     shadow_apply_only: bool,
 }
 
@@ -391,6 +407,20 @@ struct RuntimeExecutionDomainSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ServiceRuntimeExecutionSummary {
+    service_count: usize,
+    frontend_listener_count: usize,
+    backend_member_count: usize,
+    forwarding_projection_count: usize,
+    node_local_service_count: usize,
+    cross_node_service_count: usize,
+    execution_status: String,
+    planned_action: String,
+    warnings: Vec<String>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct RuntimeExecutionSummary {
     generation: String,
     previous_generation: Option<String>,
@@ -398,6 +428,8 @@ struct RuntimeExecutionSummary {
     observed_at: String,
     changed_domains: Vec<String>,
     domain_summaries: Vec<RuntimeExecutionDomainSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service_execution: Option<ServiceRuntimeExecutionSummary>,
     shadow_apply_only: bool,
 }
 
@@ -1577,8 +1609,12 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     );
     let runtime_inventory_diff =
         build_runtime_inventory_diff(context.previous_runtime_inventory, &runtime_inventory);
-    let runtime_intent =
-        build_runtime_intent(&reconcile_plan, &runtime_inventory, &runtime_inventory_diff);
+    let runtime_intent = build_runtime_intent(
+        &compiled_state,
+        &reconcile_plan,
+        &runtime_inventory,
+        &runtime_inventory_diff,
+    );
     let runtime_execution_summary =
         build_runtime_execution_summary(&compiled_state, &reconcile_plan, &runtime_intent);
     let domain_statuses = runtime_execution_summary
@@ -2724,6 +2760,7 @@ fn build_runtime_inventory_diff(
 }
 
 fn build_runtime_intent(
+    compiled_state: &CompiledNodeState,
     reconcile_plan: &ReconcilePlan,
     runtime_inventory: &RuntimeInventory,
     runtime_inventory_diff: &RuntimeInventoryDiff,
@@ -2811,6 +2848,22 @@ fn build_runtime_intent(
         })
         .collect::<Vec<_>>();
 
+    let service_intent = intents
+        .iter()
+        .find(|intent| intent.domain == "services")
+        .map(|intent| ServiceRuntimeIntentSummary {
+            service_count: compiled_state.service_programs.len(),
+            frontend_listener_count: total_service_listener_ports(compiled_state),
+            backend_member_count: total_service_backend_members(compiled_state),
+            forwarding_projection_count: total_service_forwarding_projections(compiled_state),
+            node_local_service_count: total_node_local_service_programs(compiled_state),
+            cross_node_service_count: total_cross_node_service_programs(compiled_state),
+            desired_action: intent.desired_action.clone(),
+            requires_cleanup: intent.requires_cleanup,
+            changed: intent.changed,
+            shadow_apply_only: true,
+        });
+
     RuntimeIntent {
         generation: runtime_inventory.generation.clone(),
         previous_generation: runtime_inventory
@@ -2821,6 +2874,7 @@ fn build_runtime_intent(
         observed_at: unix_timestamp_string(),
         changed_domains: changed_domains.into_iter().collect(),
         intents,
+        service_intent,
         shadow_apply_only: true,
     }
 }
@@ -2904,6 +2958,41 @@ fn build_runtime_execution_summary(
         })
         .collect::<Vec<_>>();
 
+    let service_execution = runtime_intent.service_intent.as_ref().map(|service_intent| {
+        let execution_status = domain_summaries
+            .iter()
+            .find(|summary| summary.domain == "services")
+            .map(|summary| summary.execution_status.clone())
+            .unwrap_or_else(|| "shadow_execute_stable".to_string());
+
+        let mut warnings = Vec::new();
+        if service_intent.node_local_service_count > 0 {
+            warnings.push(
+                "node-local service forwarding is still shadow planned; lb datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.cross_node_service_count > 0 {
+            warnings.push(
+                "cross-node service forwarding is still shadow planned; handoff datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+
+        ServiceRuntimeExecutionSummary {
+            service_count: service_intent.service_count,
+            frontend_listener_count: service_intent.frontend_listener_count,
+            backend_member_count: service_intent.backend_member_count,
+            forwarding_projection_count: service_intent.forwarding_projection_count,
+            node_local_service_count: service_intent.node_local_service_count,
+            cross_node_service_count: service_intent.cross_node_service_count,
+            execution_status,
+            planned_action: service_intent.desired_action.clone(),
+            warnings,
+            shadow_apply_only: true,
+        }
+    });
+
     RuntimeExecutionSummary {
         generation: runtime_intent.generation.clone(),
         previous_generation: runtime_intent.previous_generation.clone(),
@@ -2911,6 +3000,7 @@ fn build_runtime_execution_summary(
         observed_at: unix_timestamp_string(),
         changed_domains: runtime_intent.changed_domains.clone(),
         domain_summaries,
+        service_execution,
         shadow_apply_only: true,
     }
 }
@@ -2946,6 +3036,22 @@ fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
                 + usize::from(program.frontend.cross_node_forwarding)
         })
         .sum()
+}
+
+fn total_node_local_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.node_local_forwarding)
+        .count()
+}
+
+fn total_cross_node_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.cross_node_forwarding)
+        .count()
 }
 
 fn inventory_domain_from_scope(scope: &str) -> String {
