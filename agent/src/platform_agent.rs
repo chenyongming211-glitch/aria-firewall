@@ -142,11 +142,15 @@ struct ServiceFrontendIr {
     service_id: String,
     tenant_id: String,
     network_id: String,
+    #[serde(default = "default_service_route_mode")]
+    route_mode: String,
     vip: String,
     protocol: String,
     lb_policy: String,
     session_affinity: Option<String>,
     exposure_type: String,
+    #[serde(default = "default_service_forwarding_mode")]
+    forwarding_mode: String,
     listener_ports: Vec<ServiceFrontendPortIr>,
     node_local_forwarding: bool,
     cross_node_forwarding: bool,
@@ -372,6 +376,18 @@ struct ServiceRuntimeIntentSummary {
     forwarding_projection_count: usize,
     node_local_service_count: usize,
     cross_node_service_count: usize,
+    #[serde(default)]
+    cross_node_native_service_count: usize,
+    #[serde(default)]
+    cross_node_overlay_service_count: usize,
+    #[serde(default)]
+    cross_node_hybrid_service_count: usize,
+    #[serde(default)]
+    revnat_reservation_count: usize,
+    #[serde(default)]
+    affinity_reservation_count: usize,
+    #[serde(default)]
+    maglev_reservation_count: usize,
     desired_action: String,
     requires_cleanup: bool,
     changed: bool,
@@ -414,6 +430,18 @@ struct ServiceRuntimeExecutionSummary {
     forwarding_projection_count: usize,
     node_local_service_count: usize,
     cross_node_service_count: usize,
+    #[serde(default)]
+    cross_node_native_service_count: usize,
+    #[serde(default)]
+    cross_node_overlay_service_count: usize,
+    #[serde(default)]
+    cross_node_hybrid_service_count: usize,
+    #[serde(default)]
+    revnat_reservation_count: usize,
+    #[serde(default)]
+    affinity_reservation_count: usize,
+    #[serde(default)]
+    maglev_reservation_count: usize,
     execution_status: String,
     planned_action: String,
     warnings: Vec<String>,
@@ -1666,6 +1694,11 @@ fn build_service_programs(
     compiled_services: &[CompiledServiceView],
     node_id: &str,
 ) -> Vec<ServiceProgramIr> {
+    let network_by_id = desired
+        .networks
+        .iter()
+        .map(|network| (network.metadata.id.as_str(), network))
+        .collect::<BTreeMap<_, _>>();
     let health_check_by_id = desired
         .health_checks
         .iter()
@@ -1760,6 +1793,12 @@ fn build_service_programs(
                 .as_ref()
                 .map(|backend_set| backend_set.remote_backend_count > 0)
                 .unwrap_or(false);
+            let route_mode = network_by_id
+                .get(compiled_service.network_id.as_str())
+                .map(|network| network.spec.route_mode.clone())
+                .unwrap_or_else(default_service_route_mode);
+            let forwarding_mode =
+                derive_service_forwarding_mode(&route_mode, cross_node_forwarding);
 
             Some(ServiceProgramIr {
                 service_id: compiled_service.service_id.clone(),
@@ -1771,11 +1810,13 @@ fn build_service_programs(
                     service_id: compiled_service.service_id.clone(),
                     tenant_id: compiled_service.tenant_id.clone(),
                     network_id: compiled_service.network_id.clone(),
+                    route_mode,
                     vip: compiled_service.vip.clone(),
                     protocol: compiled_service.protocol.clone(),
                     lb_policy: service.spec.lb_policy.clone(),
                     session_affinity: service.spec.session_affinity.clone(),
                     exposure_type: compiled_service.exposure_type.clone(),
+                    forwarding_mode,
                     listener_ports: service
                         .spec
                         .ports
@@ -1866,6 +1907,26 @@ fn build_backend_member_ir(
 
 fn strip_cidr_suffix(value: &str) -> String {
     value.split('/').next().unwrap_or(value).to_string()
+}
+
+fn default_service_route_mode() -> String {
+    "native".to_string()
+}
+
+fn default_service_forwarding_mode() -> String {
+    "node_local_only".to_string()
+}
+
+fn derive_service_forwarding_mode(route_mode: &str, cross_node_forwarding: bool) -> String {
+    if !cross_node_forwarding {
+        return default_service_forwarding_mode();
+    }
+
+    match route_mode {
+        "overlay" => "cross_node_overlay".to_string(),
+        "hybrid" => "cross_node_hybrid".to_string(),
+        _ => "cross_node_native".to_string(),
+    }
 }
 
 fn build_reconcile_plan(
@@ -2215,6 +2276,18 @@ fn build_runtime_plan(
         .map(total_service_forwarding_projections)
         .unwrap_or_default();
     let next_forwarding_projection_count = total_service_forwarding_projections(next_state);
+    let previous_service_revnat_count = previous_state
+        .map(total_service_revnat_entries)
+        .unwrap_or_default();
+    let next_service_revnat_count = total_service_revnat_entries(next_state);
+    let previous_service_affinity_count = previous_state
+        .map(total_affinity_service_programs)
+        .unwrap_or_default();
+    let next_service_affinity_count = total_affinity_service_programs(next_state);
+    let previous_service_maglev_count = previous_state
+        .map(total_maglev_service_programs)
+        .unwrap_or_default();
+    let next_service_maglev_count = total_maglev_service_programs(next_state);
 
     let mut bindings = Vec::new();
     if capability.supports_tc && !next_state.port_bindings.is_empty() {
@@ -2380,6 +2453,27 @@ fn build_runtime_plan(
             object_count: next_forwarding_projection_count,
         });
     }
+    if next_service_revnat_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_revnat_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_service_revnat_count,
+        });
+    }
+    if next_service_affinity_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_affinity_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_service_affinity_count,
+        });
+    }
+    if next_service_maglev_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_maglev_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_service_maglev_count,
+        });
+    }
     if health_checks_removed > 0 {
         entries.push(MapPlanEntry {
             map_family: "health_check_catalog".to_string(),
@@ -2420,6 +2514,27 @@ fn build_runtime_plan(
             map_family: "service_forwarding_projection".to_string(),
             operation: "cleanup_shadow".to_string(),
             object_count: previous_forwarding_projection_count - next_forwarding_projection_count,
+        });
+    }
+    if previous_service_revnat_count > next_service_revnat_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_revnat_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_service_revnat_count - next_service_revnat_count,
+        });
+    }
+    if previous_service_affinity_count > next_service_affinity_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_affinity_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_service_affinity_count - next_service_affinity_count,
+        });
+    }
+    if previous_service_maglev_count > next_service_maglev_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_maglev_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_service_maglev_count - next_service_maglev_count,
         });
     }
 
@@ -2858,6 +2973,18 @@ fn build_runtime_intent(
             forwarding_projection_count: total_service_forwarding_projections(compiled_state),
             node_local_service_count: total_node_local_service_programs(compiled_state),
             cross_node_service_count: total_cross_node_service_programs(compiled_state),
+            cross_node_native_service_count: total_cross_node_native_service_programs(
+                compiled_state,
+            ),
+            cross_node_overlay_service_count: total_cross_node_overlay_service_programs(
+                compiled_state,
+            ),
+            cross_node_hybrid_service_count: total_cross_node_hybrid_service_programs(
+                compiled_state,
+            ),
+            revnat_reservation_count: total_service_revnat_entries(compiled_state),
+            affinity_reservation_count: total_affinity_service_programs(compiled_state),
+            maglev_reservation_count: total_maglev_service_programs(compiled_state),
             desired_action: intent.desired_action.clone(),
             requires_cleanup: intent.requires_cleanup,
             changed: intent.changed,
@@ -2978,6 +3105,42 @@ fn build_runtime_execution_summary(
                     .to_string(),
             );
         }
+        if service_intent.cross_node_native_service_count > 0 {
+            warnings.push(
+                "native cross-node service forwarding is still shadow planned; route handoff datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.cross_node_overlay_service_count > 0 {
+            warnings.push(
+                "overlay cross-node service forwarding is still shadow planned; vxlan/geneve handoff datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.cross_node_hybrid_service_count > 0 {
+            warnings.push(
+                "hybrid cross-node service forwarding is still shadow planned; overlay/native policy handoff not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.revnat_reservation_count > 0 {
+            warnings.push(
+                "service revnat runtime family is still shadow reserved; packet return-path datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.affinity_reservation_count > 0 {
+            warnings.push(
+                "service affinity runtime family is still shadow reserved; session stickiness datapath not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.maglev_reservation_count > 0 {
+            warnings.push(
+                "service maglev runtime family is still shadow reserved; consistent-hash datapath not materialized yet"
+                    .to_string(),
+            );
+        }
 
         ServiceRuntimeExecutionSummary {
             service_count: service_intent.service_count,
@@ -2986,6 +3149,13 @@ fn build_runtime_execution_summary(
             forwarding_projection_count: service_intent.forwarding_projection_count,
             node_local_service_count: service_intent.node_local_service_count,
             cross_node_service_count: service_intent.cross_node_service_count,
+            cross_node_native_service_count: service_intent.cross_node_native_service_count,
+            cross_node_overlay_service_count: service_intent
+                .cross_node_overlay_service_count,
+            cross_node_hybrid_service_count: service_intent.cross_node_hybrid_service_count,
+            revnat_reservation_count: service_intent.revnat_reservation_count,
+            affinity_reservation_count: service_intent.affinity_reservation_count,
+            maglev_reservation_count: service_intent.maglev_reservation_count,
             execution_status,
             planned_action: service_intent.desired_action.clone(),
             warnings,
@@ -3054,6 +3224,57 @@ fn total_cross_node_service_programs(state: &CompiledNodeState) -> usize {
         .count()
 }
 
+fn total_cross_node_native_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.forwarding_mode == "cross_node_native")
+        .count()
+}
+
+fn total_cross_node_overlay_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.forwarding_mode == "cross_node_overlay")
+        .count()
+}
+
+fn total_cross_node_hybrid_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.forwarding_mode == "cross_node_hybrid")
+        .count()
+}
+
+fn total_service_revnat_entries(state: &CompiledNodeState) -> usize {
+    state.service_programs.len()
+}
+
+fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| {
+            program
+                .frontend
+                .session_affinity
+                .as_deref()
+                .map(|value| value != "none")
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.lb_policy == "maglev")
+        .count()
+}
+
 fn inventory_domain_from_scope(scope: &str) -> String {
     match scope {
         "port-bindings" | "anti-spoof-fastpath" => "ports".to_string(),
@@ -3073,7 +3294,10 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         | "service_catalog"
         | "service_frontend_catalog"
         | "backend_member_catalog"
-        | "service_forwarding_projection" => "services".to_string(),
+        | "service_forwarding_projection"
+        | "service_revnat_map"
+        | "service_affinity_map"
+        | "service_maglev_map" => "services".to_string(),
         "nat_program" => "nat".to_string(),
         _ => "runtime".to_string(),
     }

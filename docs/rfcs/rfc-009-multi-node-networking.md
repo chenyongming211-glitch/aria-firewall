@@ -151,6 +151,13 @@ datapath 负责：
 - remote node redirect
 - 基本隧道元数据校验
 
+对于 Service/L4 LB 的跨节点 handoff，overlay datapath 应能够承接至少两种目标模式：
+
+- `cross_node_overlay_vxlan`
+- `cross_node_overlay_geneve`
+
+当前在 service shadow compiler 阶段，可以先统一折叠为 `cross_node_overlay`，等 `TunnelEndpoint / encap type` 正式进入节点局部编译输入后，再展开到具体封装类型。
+
 ### 7.3 控制面责任
 
 控制面负责：
@@ -185,6 +192,10 @@ datapath 负责：
 - next-hop redirect
 - optional policy route
 - event emission
+
+对于 Service/L4 LB 的跨节点 handoff，native routing datapath 应对应：
+
+- `cross_node_native`
 
 ## 9. 多节点安全边界
 
