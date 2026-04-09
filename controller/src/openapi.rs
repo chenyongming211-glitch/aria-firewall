@@ -215,6 +215,14 @@ mod tests {
             param.get("name").and_then(|value| value.as_str()) == Some("label_selector")
         }));
 
+        let node_params = doc
+            .pointer("/paths/~1api~1v1~1nodes/get/parameters")
+            .and_then(|value| value.as_array())
+            .expect("node list parameters should exist");
+        assert!(node_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("sync_state")
+        }));
+
         let port_params = doc
             .pointer("/paths/~1api~1v1~1ports/get/parameters")
             .and_then(|value| value.as_array())

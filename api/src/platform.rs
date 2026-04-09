@@ -153,6 +153,9 @@ pub struct NodeListQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(example = "registered")]
     pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "out_of_sync")]
+    pub sync_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]

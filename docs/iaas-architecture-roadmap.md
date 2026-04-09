@@ -41,6 +41,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 提供 `/openapi.json` 与 `/docs`
 - 首批资源覆盖 `Tenant / Node / Network / Port / SecurityGroup / RouteTable`
 - northbound 列表接口已提供第一版分页/过滤骨架：`limit / page_token / label_selector` + 基础对象过滤
+- `Node` 列表已开始支持按 `sync_state` 过滤，可直接筛选 `pending / out_of_sync / in_sync / failed / degraded` 节点
 - northbound 已提供 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 与响应头对齐
 - controller 已提供第一版对象关系校验与删除保护：校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`
 - 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`

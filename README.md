@@ -39,6 +39,7 @@
 - `2026-04-09`：已新增实验性的 `aria-controller` crate，作为 `RFC-001` 与 `RFC-010` 的第一阶段代码落地。
 - 当前只提供平台级 northbound API 骨架、默认内存态资源存储和 `/openapi.json` / `/docs`，首批资源覆盖 `Tenant / Node / Network / Port / SecurityGroup / RouteTable`。
 - northbound 列表接口已提供第一版分页/过滤骨架，支持 `limit / page_token / label_selector` 以及按资源维度的基础过滤字段。
+- `GET /api/v1/nodes` 现已支持按 `sync_state` 过滤，便于直接筛选 `pending / out_of_sync / in_sync / failed / degraded` 节点。
 - northbound 现已支持 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 会与响应头保持一致。
 - controller 已补第一版对象关系校验与删除保护，当前会校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`。
 - 已新增第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`，作为 `RFC-003` 的过渡实现。

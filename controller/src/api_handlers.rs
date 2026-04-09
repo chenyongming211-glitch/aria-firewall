@@ -883,9 +883,22 @@ pub async fn list_nodes(
                 && optional_eq(query.status.as_deref(), &node.status.phase)
         })
         .collect::<Vec<_>>();
+    let items = enrich_node_resources(&store, items)
+        .await?
+        .into_iter()
+        .filter(|node| {
+            optional_eq(
+                query.sync_state.as_deref(),
+                node.status
+                    .sync_status
+                    .as_ref()
+                    .map(|status| status.state.as_str())
+                    .unwrap_or(""),
+            )
+        })
+        .collect::<Vec<_>>();
     let (items, next_page_token, total_count) =
         paginate(items, query.limit, query.page_token.as_deref())?;
-    let items = enrich_node_resources(&store, items).await?;
     Ok(Json(NodeListResponse {
         items,
         next_page_token,
