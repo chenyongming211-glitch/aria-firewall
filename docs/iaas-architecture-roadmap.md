@@ -13,6 +13,8 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 
 另外，后续所有新增能力都必须持续关注产品性能，优先选择有界、可预测的开销模型；热路径与主控制面响应默认优先输出摘要和聚合结果，而不是高基数明细。
 
+另外，后续对 `routing / NAT / Floating IP` 的接口预留和 shadow 骨架推进，不得挤占或阻塞 `L4 负载均衡` 与 `service chain` 主能力的实现路线。对平台能力优先级的判断必须服从这一原则。
+
 当前已落地的第一批 RFC：
 
 - [RFC-001 资源模型 v1](rfcs/rfc-001-resource-model.md)
@@ -513,8 +515,9 @@ Southbound API 面向：
 
 - 目标：提供节点级和平台级服务入口能力
 - 产出：Service、BackendSet、HealthCheck、LB datapath、动态服务链
+- 关键约束：L4 负载均衡必须同时覆盖节点内转发和跨节点转发；service chain 不得因为 `routing / NAT / Floating IP` 预留位推进而延后主路径闭环
 - 参考： [RFC-008 Service / Backend / HealthCheck 模型 v1](rfcs/rfc-008-service-backend-healthcheck.md)
-- 验收：VIP、后端调度、链路引流和事件追踪完整闭环
+- 验收：VIP、后端调度、节点内转发、跨节点转发、链路引流和事件追踪完整闭环
 
 ### Phase 7：多节点织网
 

@@ -69,6 +69,16 @@ Routing / NAT 是未来 datapath 最容易推高复杂度的部分。实现时�
 
 具体门槛见 [Aria eBPF 实现约束](../ebpf-implementation-constraints.md)。
 
+### 3.6 Routing / NAT / FloatingIP 预留位不得阻塞 L4 LB 与 Service Chain
+
+在 `routing / NAT / FloatingIP` 仍处于接口预留、shadow 骨架或单节点实现阶段时，不得以它们为前置条件阻塞 `L4 负载均衡` 与 `service chain` 的主路径推进。
+
+换句话说：
+
+- `Route / NAT / FIP` 的预留位可以先存在
+- 但 `Service / Backend / Chain` 的对象层和 datapath 主路径必须保持独立推进能力
+- 特别是 L4 负载均衡的节点内转发与跨节点转发语义，不应被迫等待 NAT/FIP 功能“完全做完”
+
 ## 4. 数据面目标场景
 
 ### 4.1 场景 A：实例互通

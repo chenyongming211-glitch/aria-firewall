@@ -48,6 +48,16 @@ VIP、后端、健康和策略必须围绕 `Service` 对象表达，而不是用
 
 v1 先支持 TCP / UDP 级别服务，不把 L7 网关复杂性引入本 RFC。
 
+### 3.5 L4 负载均衡必须同时覆盖节点内与跨节点转发
+
+Service datapath 的第一版目标不能只停留在“节点内 VIP 命中”。
+v1 必须把以下两类路径同时作为正式目标：
+
+- 节点内转发：请求和被选中的 backend 位于同一节点
+- 跨节点转发：请求命中本节点 service 入口，但 backend 位于其他节点
+
+因此，后续 `routing / NAT / FloatingIP` 的接口预留和 shadow 骨架，只能作为不阻塞 L4 主路径的前置准备，不能反向改变 Service/LB 的优先级。
+
 ## 4. 资源模型
 
 ### 4.1 Service
@@ -185,6 +195,7 @@ Agent 编译后应能生成：
 - backend selection map
 - session affinity state
 - health-filtered backend view
+- 节点内转发与跨节点转发所需的 service forwarding projection
 
 ## 9. 与 NAT 和 Route 的关系
 
@@ -193,6 +204,7 @@ Service 抽象与路由、NAT 需要明确边界：
 - 外部访问可先经 Route/FIP，再命中 Service
 - 内部流量可直接命中 Service
 - Service 本身不替代 RouteTable
+- NAT / Route / FIP 的接口预留不得改变 Service datapath 的主优先级；L4 负载均衡必须按自身路径独立成立
 
 ## 10. 与 Chain 的关系
 
@@ -243,7 +255,7 @@ Service datapath 相关事件至少应输出：
 
 ### 13.2 第二阶段
 
-实现节点级 service 编译与 backend 选择。
+实现节点级 service 编译与 backend 选择，至少覆盖节点内转发和跨节点转发的统一 service 语义。
 
 ### 13.3 第三阶段
 
@@ -258,6 +270,10 @@ Service datapath 相关事件至少应输出：
 Service 模型 v1 的验收标准：
 
 - northbound 能表达 VIP、后端、健康检查
+- Agent 能把 Service 编译成节点局部 service state
+- L4 负载均衡能同时覆盖节点内转发和跨节点转发
+- 能输出 backend 选择与健康相关事件
+- Diagnose 能基于 Service 维度查询和解释故障
 - Agent 能把 Service 编译成节点局部 service state
 - datapath 能输出稳定的 backend 选择证据
 - Diagnose 能基于 Service 维度查询和解释故障
