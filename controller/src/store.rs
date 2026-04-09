@@ -1,8 +1,9 @@
 use aria_api::{
-    ApplyStatusReport, DesiredStateEnvelope, DesiredStatePublishRecord, NetworkResource,
-    NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource,
-    ResourceMetadata, RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse,
-    SouthboundSyncStatus, TenantResource,
+    ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
+    HealthCheckResource, NetworkResource, NodeCapability, NodeHealthReport, NodeInfo,
+    NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata, RouteTableResource,
+    SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus,
+    TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,9 @@ impl_stored_resource!(NetworkResource);
 impl_stored_resource!(PortResource);
 impl_stored_resource!(SecurityGroupResource);
 impl_stored_resource!(RouteTableResource);
+impl_stored_resource!(HealthCheckResource);
+impl_stored_resource!(BackendSetResource);
+impl_stored_resource!(ServiceResource);
 
 #[derive(Debug, Clone)]
 pub enum StoreError {
@@ -130,6 +134,9 @@ struct PersistedControllerState {
     ports: PersistedResourceStore<PortResource>,
     security_groups: PersistedResourceStore<SecurityGroupResource>,
     route_tables: PersistedResourceStore<RouteTableResource>,
+    health_checks: PersistedResourceStore<HealthCheckResource>,
+    backend_sets: PersistedResourceStore<BackendSetResource>,
+    services: PersistedResourceStore<ServiceResource>,
     generation: u64,
     #[serde(default)]
     southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
@@ -208,6 +215,45 @@ pub trait ControllerStore: Send + Sync {
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError>;
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError>;
+
+    async fn list_health_checks(&self) -> Vec<HealthCheckResource>;
+    async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource>;
+    async fn create_health_check(
+        &self,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError>;
+    async fn update_health_check(
+        &self,
+        id: &str,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError>;
+    async fn delete_health_check(&self, id: &str) -> Result<HealthCheckResource, StoreError>;
+
+    async fn list_backend_sets(&self) -> Vec<BackendSetResource>;
+    async fn get_backend_set(&self, id: &str) -> Option<BackendSetResource>;
+    async fn create_backend_set(
+        &self,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError>;
+    async fn update_backend_set(
+        &self,
+        id: &str,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError>;
+    async fn delete_backend_set(&self, id: &str) -> Result<BackendSetResource, StoreError>;
+
+    async fn list_services(&self) -> Vec<ServiceResource>;
+    async fn get_service(&self, id: &str) -> Option<ServiceResource>;
+    async fn create_service(
+        &self,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError>;
+    async fn update_service(
+        &self,
+        id: &str,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError>;
+    async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError>;
 
     async fn record_registration(
         &self,
@@ -352,6 +398,9 @@ pub struct InMemoryControllerStore {
     pub ports: ResourceStore<PortResource>,
     pub security_groups: ResourceStore<SecurityGroupResource>,
     pub route_tables: ResourceStore<RouteTableResource>,
+    pub health_checks: ResourceStore<HealthCheckResource>,
+    pub backend_sets: ResourceStore<BackendSetResource>,
+    pub services: ResourceStore<ServiceResource>,
     generation: AtomicU64,
     // High-frequency southbound runtime stays in memory so heartbeat/status
     // updates do not rewrite the controller snapshot on every report.
@@ -369,6 +418,9 @@ impl InMemoryControllerStore {
             ports: ResourceStore::new("port", "port"),
             security_groups: ResourceStore::new("security_group", "sg"),
             route_tables: ResourceStore::new("route_table", "rt"),
+            health_checks: ResourceStore::new("health_check", "hc"),
+            backend_sets: ResourceStore::new("backend_set", "bset"),
+            services: ResourceStore::new("service", "svc"),
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
             southbound_publishes: RwLock::new(BTreeMap::new()),
@@ -387,6 +439,12 @@ impl InMemoryControllerStore {
             self.security_groups.count().await,
         );
         counts.insert("route_tables".to_string(), self.route_tables.count().await);
+        counts.insert(
+            "health_checks".to_string(),
+            self.health_checks.count().await,
+        );
+        counts.insert("backend_sets".to_string(), self.backend_sets.count().await);
+        counts.insert("services".to_string(), self.services.count().await);
         counts
     }
 
@@ -517,6 +575,40 @@ impl InMemoryControllerStore {
             })
     }
 
+    async fn ensure_health_check_exists_inner(
+        &self,
+        health_check_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<HealthCheckResource, StoreError> {
+        self.health_checks
+            .get(health_check_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: health_check_id.to_string(),
+                referenced_resource: "health_check",
+            })
+    }
+
+    async fn ensure_backend_set_exists_inner(
+        &self,
+        backend_set_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<BackendSetResource, StoreError> {
+        self.backend_sets
+            .get(backend_set_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: backend_set_id.to_string(),
+                referenced_resource: "backend_set",
+            })
+    }
+
     async fn validate_network_resource_inner(
         &self,
         resource: &NetworkResource,
@@ -541,6 +633,105 @@ impl InMemoryControllerStore {
     ) -> Result<(), StoreError> {
         self.ensure_network_exists_inner(&resource.spec.network_id, "route_table", "network_id")
             .await?;
+        Ok(())
+    }
+
+    async fn validate_health_check_resource_inner(
+        &self,
+        resource: &HealthCheckResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "health_check", "tenant_id")
+            .await?;
+
+        if let Some(network_id) = resource.spec.network_id.as_deref() {
+            let network = self
+                .ensure_network_exists_inner(network_id, "health_check", "network_id")
+                .await?;
+            if network.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "health_check tenant_id '{}' must match network '{}' tenant '{}'",
+                    resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn validate_backend_set_resource_inner(
+        &self,
+        resource: &BackendSetResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "backend_set", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "backend_set", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::BadRequest(format!(
+                "backend_set tenant_id '{}' must match network '{}' tenant '{}'",
+                resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+            )));
+        }
+
+        if let Some(health_check_id) = resource.spec.health_check_id.as_deref() {
+            let health_check = self
+                .ensure_health_check_exists_inner(health_check_id, "backend_set", "health_check_id")
+                .await?;
+            if health_check.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "backend_set health_check '{}' belongs to tenant '{}' but backend_set belongs to tenant '{}'",
+                    health_check.metadata.id, health_check.spec.tenant_id, resource.spec.tenant_id
+                )));
+            }
+
+            if let Some(health_check_network_id) = health_check.spec.network_id.as_deref() {
+                if health_check_network_id != resource.spec.network_id {
+                    return Err(StoreError::BadRequest(format!(
+                        "backend_set health_check '{}' is scoped to network '{}' but backend_set targets network '{}'",
+                        health_check.metadata.id, health_check_network_id, resource.spec.network_id
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn validate_service_resource_inner(
+        &self,
+        resource: &ServiceResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "service", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "service", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::BadRequest(format!(
+                "service tenant_id '{}' must match network '{}' tenant '{}'",
+                resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+            )));
+        }
+
+        if let Some(backend_set_id) = resource.spec.backend_set_id.as_deref() {
+            let backend_set = self
+                .ensure_backend_set_exists_inner(backend_set_id, "service", "backend_set_id")
+                .await?;
+            if backend_set.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "service backend_set '{}' belongs to tenant '{}' but service belongs to tenant '{}'",
+                    backend_set.metadata.id, backend_set.spec.tenant_id, resource.spec.tenant_id
+                )));
+            }
+            if backend_set.spec.network_id != resource.spec.network_id {
+                return Err(StoreError::BadRequest(format!(
+                    "service backend_set '{}' targets network '{}' but service targets network '{}'",
+                    backend_set.metadata.id, backend_set.spec.network_id, resource.spec.network_id
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -626,6 +817,51 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(health_check) = self
+            .health_checks
+            .list()
+            .await
+            .into_iter()
+            .find(|health_check| health_check.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "health_check",
+                dependent_id: health_check.metadata.id,
+            });
+        }
+
+        if let Some(backend_set) = self
+            .backend_sets
+            .list()
+            .await
+            .into_iter()
+            .find(|backend_set| backend_set.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "backend_set",
+                dependent_id: backend_set.metadata.id,
+            });
+        }
+
+        if let Some(service) = self
+            .services
+            .list()
+            .await
+            .into_iter()
+            .find(|service| service.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "service",
+                dependent_id: service.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -682,6 +918,51 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(health_check) = self
+            .health_checks
+            .list()
+            .await
+            .into_iter()
+            .find(|health_check| health_check.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "health_check",
+                dependent_id: health_check.metadata.id,
+            });
+        }
+
+        if let Some(backend_set) = self
+            .backend_sets
+            .list()
+            .await
+            .into_iter()
+            .find(|backend_set| backend_set.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "backend_set",
+                dependent_id: backend_set.metadata.id,
+            });
+        }
+
+        if let Some(service) = self
+            .services
+            .list()
+            .await
+            .into_iter()
+            .find(|service| service.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "service",
+                dependent_id: service.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -704,6 +985,51 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(health_check) = self
+            .health_checks
+            .list()
+            .await
+            .into_iter()
+            .find(|health_check| health_check.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "health_check",
+                dependent_id: health_check.metadata.id,
+            });
+        }
+
+        if let Some(backend_set) = self
+            .backend_sets
+            .list()
+            .await
+            .into_iter()
+            .find(|backend_set| backend_set.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "backend_set",
+                dependent_id: backend_set.metadata.id,
+            });
+        }
+
+        if let Some(service) = self
+            .services
+            .list()
+            .await
+            .into_iter()
+            .find(|service| service.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "service",
+                dependent_id: service.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -722,6 +1048,52 @@ impl InMemoryControllerStore {
                 id: security_group_id.to_string(),
                 dependent_resource: "port",
                 dependent_id: port.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_health_check_delete_allowed_inner(
+        &self,
+        health_check_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(backend_set) = self
+            .backend_sets
+            .list()
+            .await
+            .into_iter()
+            .find(|backend_set| {
+                backend_set.spec.health_check_id.as_deref() == Some(health_check_id)
+            })
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "health_check",
+                id: health_check_id.to_string(),
+                dependent_resource: "backend_set",
+                dependent_id: backend_set.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_backend_set_delete_allowed_inner(
+        &self,
+        backend_set_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(service) = self
+            .services
+            .list()
+            .await
+            .into_iter()
+            .find(|service| service.spec.backend_set_id.as_deref() == Some(backend_set_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "backend_set",
+                id: backend_set_id.to_string(),
+                dependent_resource: "service",
+                dependent_id: service.metadata.id,
             });
         }
 
@@ -976,6 +1348,9 @@ impl InMemoryControllerStore {
             ports: self.ports.snapshot().await,
             security_groups: self.security_groups.snapshot().await,
             route_tables: self.route_tables.snapshot().await,
+            health_checks: self.health_checks.snapshot().await,
+            backend_sets: self.backend_sets.snapshot().await,
+            services: self.services.snapshot().await,
             generation: self.generation.load(Ordering::Relaxed),
             southbound_publishes: self.southbound_publishes.read().await.clone(),
         }
@@ -988,6 +1363,9 @@ impl InMemoryControllerStore {
         self.ports.restore(snapshot.ports).await;
         self.security_groups.restore(snapshot.security_groups).await;
         self.route_tables.restore(snapshot.route_tables).await;
+        self.health_checks.restore(snapshot.health_checks).await;
+        self.backend_sets.restore(snapshot.backend_sets).await;
+        self.services.restore(snapshot.services).await;
         self.generation
             .store(snapshot.generation, Ordering::Relaxed);
         *self.southbound_publishes.write().await = snapshot.southbound_publishes;
@@ -1682,6 +2060,164 @@ impl ControllerStore for InMemoryControllerStore {
         .await
     }
 
+    async fn list_health_checks(&self) -> Vec<HealthCheckResource> {
+        self.list_resource(&self.health_checks).await
+    }
+
+    async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource> {
+        self.get_resource(&self.health_checks, id).await
+    }
+
+    async fn create_health_check(
+        &self,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .validate_health_check_resource_inner(&resource)
+                .await?;
+            inner.create_resource(&inner.health_checks, resource).await
+        })
+        .await
+    }
+
+    async fn update_health_check(
+        &self,
+        id: &str,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            let existing =
+                inner
+                    .health_checks
+                    .get(id)
+                    .await
+                    .ok_or_else(|| StoreError::NotFound {
+                        resource: "health_check",
+                        id: id.to_string(),
+                    })?;
+            inner
+                .validate_health_check_resource_inner(&resource)
+                .await?;
+            if existing.spec.tenant_id != resource.spec.tenant_id
+                || existing.spec.network_id != resource.spec.network_id
+            {
+                inner.ensure_health_check_delete_allowed_inner(id).await?;
+            }
+            inner
+                .update_resource(&inner.health_checks, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_health_check(&self, id: &str) -> Result<HealthCheckResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_health_check_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.health_checks, id).await
+        })
+        .await
+    }
+
+    async fn list_backend_sets(&self) -> Vec<BackendSetResource> {
+        self.list_resource(&self.backend_sets).await
+    }
+
+    async fn get_backend_set(&self, id: &str) -> Option<BackendSetResource> {
+        self.get_resource(&self.backend_sets, id).await
+    }
+
+    async fn create_backend_set(
+        &self,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_backend_set_resource_inner(&resource).await?;
+            inner.create_resource(&inner.backend_sets, resource).await
+        })
+        .await
+    }
+
+    async fn update_backend_set(
+        &self,
+        id: &str,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            let existing =
+                inner
+                    .backend_sets
+                    .get(id)
+                    .await
+                    .ok_or_else(|| StoreError::NotFound {
+                        resource: "backend_set",
+                        id: id.to_string(),
+                    })?;
+            inner.validate_backend_set_resource_inner(&resource).await?;
+            if existing.spec.tenant_id != resource.spec.tenant_id
+                || existing.spec.network_id != resource.spec.network_id
+            {
+                inner.ensure_backend_set_delete_allowed_inner(id).await?;
+            }
+            inner
+                .update_resource(&inner.backend_sets, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_backend_set(&self, id: &str) -> Result<BackendSetResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_backend_set_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.backend_sets, id).await
+        })
+        .await
+    }
+
+    async fn list_services(&self) -> Vec<ServiceResource> {
+        self.list_resource(&self.services).await
+    }
+
+    async fn get_service(&self, id: &str) -> Option<ServiceResource> {
+        self.get_resource(&self.services, id).await
+    }
+
+    async fn create_service(
+        &self,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_service_resource_inner(&resource).await?;
+            inner.create_resource(&inner.services, resource).await
+        })
+        .await
+    }
+
+    async fn update_service(
+        &self,
+        id: &str,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .services
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "service",
+                    id: id.to_string(),
+                })?;
+            inner.validate_service_resource_inner(&resource).await?;
+            inner.update_resource(&inner.services, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
+        self.run_mutation(|inner| async move { inner.delete_resource(&inner.services, id).await })
+            .await
+    }
+
     // `node` keeps a hand-written delete path because removing a node must
     // also purge any cached southbound runtime state keyed by the same ID.
     async fn list_nodes(&self) -> Vec<NodeResource> {
@@ -1938,6 +2474,95 @@ impl ControllerStore for FileBackedControllerStore {
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
         self.run_persisted(|inner| inner.delete_route_table(id))
             .await
+    }
+
+    async fn list_health_checks(&self) -> Vec<HealthCheckResource> {
+        self.inner.list_health_checks().await
+    }
+
+    async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource> {
+        self.inner.get_health_check(id).await
+    }
+
+    async fn create_health_check(
+        &self,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError> {
+        self.run_persisted(|inner| inner.create_health_check(resource))
+            .await
+    }
+
+    async fn update_health_check(
+        &self,
+        id: &str,
+        resource: HealthCheckResource,
+    ) -> Result<HealthCheckResource, StoreError> {
+        self.run_persisted(|inner| inner.update_health_check(id, resource))
+            .await
+    }
+
+    async fn delete_health_check(&self, id: &str) -> Result<HealthCheckResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_health_check(id))
+            .await
+    }
+
+    async fn list_backend_sets(&self) -> Vec<BackendSetResource> {
+        self.inner.list_backend_sets().await
+    }
+
+    async fn get_backend_set(&self, id: &str) -> Option<BackendSetResource> {
+        self.inner.get_backend_set(id).await
+    }
+
+    async fn create_backend_set(
+        &self,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError> {
+        self.run_persisted(|inner| inner.create_backend_set(resource))
+            .await
+    }
+
+    async fn update_backend_set(
+        &self,
+        id: &str,
+        resource: BackendSetResource,
+    ) -> Result<BackendSetResource, StoreError> {
+        self.run_persisted(|inner| inner.update_backend_set(id, resource))
+            .await
+    }
+
+    async fn delete_backend_set(&self, id: &str) -> Result<BackendSetResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_backend_set(id))
+            .await
+    }
+
+    async fn list_services(&self) -> Vec<ServiceResource> {
+        self.inner.list_services().await
+    }
+
+    async fn get_service(&self, id: &str) -> Option<ServiceResource> {
+        self.inner.get_service(id).await
+    }
+
+    async fn create_service(
+        &self,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.create_service(resource))
+            .await
+    }
+
+    async fn update_service(
+        &self,
+        id: &str,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.update_service(id, resource))
+            .await
+    }
+
+    async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_service(id)).await
     }
 
     async fn record_registration(

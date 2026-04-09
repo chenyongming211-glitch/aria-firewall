@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use aria_api::{
-    ControllerHealthResponse, CreateNetworkRequest, CreateNodeRequest, CreatePortRequest,
-    CreateRouteTableRequest, CreateSecurityGroupRequest, CreateTenantRequest, MessageResponse,
+    BackendSetListQuery, BackendSetListResponse, BackendSetResource, BackendSetStatus,
+    ControllerHealthResponse, CreateBackendSetRequest, CreateHealthCheckRequest,
+    CreateNetworkRequest, CreateNodeRequest, CreatePortRequest, CreateRouteTableRequest,
+    CreateSecurityGroupRequest, CreateServiceRequest, CreateTenantRequest, HealthCheckListQuery,
+    HealthCheckListResponse, HealthCheckResource, HealthCheckStatus, MessageResponse,
     NetworkListQuery, NetworkListResponse, NetworkResource, NetworkStatus, NodeCapability,
     NodeListQuery, NodeListResponse, NodeResource, NodeStatus, PlatformApiError, PortListQuery,
     PortListResponse, PortResource, PortStatus, ResourceCreateMetadata, ResourceMetadata,
     ResourceUpdateMetadata, RouteTableListQuery, RouteTableListResponse, RouteTableResource,
     RouteTableStatus, SecurityGroupListQuery, SecurityGroupListResponse, SecurityGroupResource,
-    SecurityGroupStatus, SouthboundNodeStatusResponse, TenantListQuery, TenantListResponse,
-    TenantResource, TenantStatus, UpdateNetworkRequest, UpdateNodeRequest, UpdatePortRequest,
-    UpdateRouteTableRequest, UpdateSecurityGroupRequest, UpdateTenantRequest,
+    SecurityGroupStatus, ServiceListQuery, ServiceListResponse, ServiceResource, ServiceStatus,
+    SouthboundNodeStatusResponse, TenantListQuery, TenantListResponse, TenantResource,
+    TenantStatus, UpdateBackendSetRequest, UpdateHealthCheckRequest, UpdateNetworkRequest,
+    UpdateNodeRequest, UpdatePortRequest, UpdateRouteTableRequest, UpdateSecurityGroupRequest,
+    UpdateServiceRequest, UpdateTenantRequest,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -316,6 +321,13 @@ fn optional_eq(filter: Option<&str>, value: &str) -> bool {
     }
 }
 
+fn optional_option_eq(filter: Option<&str>, value: Option<&str>) -> bool {
+    match filter {
+        Some(filter) => value == Some(filter),
+        None => true,
+    }
+}
+
 fn paginate<T>(
     items: Vec<T>,
     limit: Option<usize>,
@@ -386,6 +398,27 @@ fn security_group_status(rule_count: usize) -> SecurityGroupStatus {
 fn route_table_status() -> RouteTableStatus {
     RouteTableStatus {
         phase: "ready".to_string(),
+    }
+}
+
+fn health_check_status() -> HealthCheckStatus {
+    HealthCheckStatus {
+        phase: "ready".to_string(),
+    }
+}
+
+fn backend_set_status(backend_count: usize) -> BackendSetStatus {
+    BackendSetStatus {
+        phase: "ready".to_string(),
+        backend_count,
+        healthy_backends: 0,
+    }
+}
+
+fn service_status() -> ServiceStatus {
+    ServiceStatus {
+        phase: "ready".to_string(),
+        exposure_state: Some("reserved".to_string()),
     }
 }
 
@@ -1353,4 +1386,449 @@ pub async fn delete_route_table(
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_route_table(&id).await?;
     Ok(Json(deleted_message("route_table", &id)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/health-checks",
+    operation_id = "listHealthChecks",
+    tag = "health-checks",
+    params(HealthCheckListQuery),
+    responses(
+        (status = 200, description = "List health checks", body = HealthCheckListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
+)]
+pub async fn list_health_checks(
+    State(store): State<AppState>,
+    Query(query): Query<HealthCheckListQuery>,
+) -> Result<Json<HealthCheckListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_health_checks()
+        .await
+        .into_iter()
+        .filter(|health_check| {
+            labels_match(&health_check.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &health_check.spec.tenant_id)
+                && optional_option_eq(
+                    query.network_id.as_deref(),
+                    health_check.spec.network_id.as_deref(),
+                )
+                && optional_eq(query.protocol.as_deref(), &health_check.spec.protocol)
+                && optional_eq(query.status.as_deref(), &health_check.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(HealthCheckListResponse {
+        items,
+        next_page_token,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/health-checks",
+    operation_id = "createHealthCheck",
+    tag = "health-checks",
+    request_body = CreateHealthCheckRequest,
+    responses(
+        (status = 201, description = "Create health check", body = HealthCheckResource),
+        (status = 400, description = "Invalid health check references", body = PlatformApiError),
+        (status = 409, description = "Health check already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn create_health_check(
+    State(store): State<AppState>,
+    Json(request): Json<CreateHealthCheckRequest>,
+) -> Result<(StatusCode, Json<HealthCheckResource>), ControllerError> {
+    let resource = HealthCheckResource {
+        metadata: metadata_from_create(request.metadata),
+        spec: request.spec,
+        status: health_check_status(),
+    };
+    let created = store.create_health_check(resource).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/health-checks/{id}",
+    operation_id = "getHealthCheck",
+    tag = "health-checks",
+    params(("id" = String, Path, description = "Health check ID")),
+    responses(
+        (status = 200, description = "Get health check", body = HealthCheckResource),
+        (status = 404, description = "Health check not found", body = PlatformApiError)
+    )
+)]
+pub async fn get_health_check(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<HealthCheckResource>, ControllerError> {
+    let resource = store
+        .get_health_check(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "health_check",
+            id,
+        })?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/health-checks/{id}",
+    operation_id = "updateHealthCheck",
+    tag = "health-checks",
+    params(("id" = String, Path, description = "Health check ID")),
+    request_body = UpdateHealthCheckRequest,
+    responses(
+        (status = 200, description = "Update health check", body = HealthCheckResource),
+        (status = 400, description = "Invalid health check references", body = PlatformApiError),
+        (status = 404, description = "Health check not found", body = PlatformApiError),
+        (status = 409, description = "Health check still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn update_health_check(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateHealthCheckRequest>,
+) -> Result<Json<HealthCheckResource>, ControllerError> {
+    let existing = store
+        .get_health_check(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "health_check",
+            id: id.clone(),
+        })?;
+    let resource = HealthCheckResource {
+        metadata: metadata_from_update(&existing.metadata, request.metadata),
+        spec: request.spec,
+        status: existing.status,
+    };
+    let updated = store.update_health_check(&id, resource).await?;
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/health-checks/{id}",
+    operation_id = "deleteHealthCheck",
+    tag = "health-checks",
+    params(("id" = String, Path, description = "Health check ID")),
+    responses(
+        (status = 200, description = "Delete health check", body = MessageResponse),
+        (status = 404, description = "Health check not found", body = PlatformApiError),
+        (status = 409, description = "Health check still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn delete_health_check(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ControllerError> {
+    store.delete_health_check(&id).await?;
+    Ok(Json(deleted_message("health_check", &id)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/backend-sets",
+    operation_id = "listBackendSets",
+    tag = "backend-sets",
+    params(BackendSetListQuery),
+    responses(
+        (status = 200, description = "List backend sets", body = BackendSetListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
+)]
+pub async fn list_backend_sets(
+    State(store): State<AppState>,
+    Query(query): Query<BackendSetListQuery>,
+) -> Result<Json<BackendSetListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_backend_sets()
+        .await
+        .into_iter()
+        .filter(|backend_set| {
+            labels_match(&backend_set.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &backend_set.spec.tenant_id)
+                && optional_eq(query.network_id.as_deref(), &backend_set.spec.network_id)
+                && optional_option_eq(
+                    query.health_check_id.as_deref(),
+                    backend_set.spec.health_check_id.as_deref(),
+                )
+                && optional_eq(query.status.as_deref(), &backend_set.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(BackendSetListResponse {
+        items,
+        next_page_token,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/backend-sets",
+    operation_id = "createBackendSet",
+    tag = "backend-sets",
+    request_body = CreateBackendSetRequest,
+    responses(
+        (status = 201, description = "Create backend set", body = BackendSetResource),
+        (status = 400, description = "Invalid backend set references", body = PlatformApiError),
+        (status = 409, description = "Backend set already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn create_backend_set(
+    State(store): State<AppState>,
+    Json(request): Json<CreateBackendSetRequest>,
+) -> Result<(StatusCode, Json<BackendSetResource>), ControllerError> {
+    let backend_count = request.spec.backends.len();
+    let resource = BackendSetResource {
+        metadata: metadata_from_create(request.metadata),
+        spec: request.spec,
+        status: backend_set_status(backend_count),
+    };
+    let created = store.create_backend_set(resource).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/backend-sets/{id}",
+    operation_id = "getBackendSet",
+    tag = "backend-sets",
+    params(("id" = String, Path, description = "Backend set ID")),
+    responses(
+        (status = 200, description = "Get backend set", body = BackendSetResource),
+        (status = 404, description = "Backend set not found", body = PlatformApiError)
+    )
+)]
+pub async fn get_backend_set(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<BackendSetResource>, ControllerError> {
+    let resource = store
+        .get_backend_set(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "backend_set",
+            id,
+        })?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/backend-sets/{id}",
+    operation_id = "updateBackendSet",
+    tag = "backend-sets",
+    params(("id" = String, Path, description = "Backend set ID")),
+    request_body = UpdateBackendSetRequest,
+    responses(
+        (status = 200, description = "Update backend set", body = BackendSetResource),
+        (status = 400, description = "Invalid backend set references", body = PlatformApiError),
+        (status = 404, description = "Backend set not found", body = PlatformApiError),
+        (status = 409, description = "Backend set still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn update_backend_set(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateBackendSetRequest>,
+) -> Result<Json<BackendSetResource>, ControllerError> {
+    let existing = store
+        .get_backend_set(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "backend_set",
+            id: id.clone(),
+        })?;
+    let backend_count = request.spec.backends.len();
+    let resource = BackendSetResource {
+        metadata: metadata_from_update(&existing.metadata, request.metadata),
+        spec: request.spec,
+        status: backend_set_status(backend_count),
+    };
+    let updated = store.update_backend_set(&id, resource).await?;
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/backend-sets/{id}",
+    operation_id = "deleteBackendSet",
+    tag = "backend-sets",
+    params(("id" = String, Path, description = "Backend set ID")),
+    responses(
+        (status = 200, description = "Delete backend set", body = MessageResponse),
+        (status = 404, description = "Backend set not found", body = PlatformApiError),
+        (status = 409, description = "Backend set still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn delete_backend_set(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ControllerError> {
+    store.delete_backend_set(&id).await?;
+    Ok(Json(deleted_message("backend_set", &id)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/services",
+    operation_id = "listServices",
+    tag = "services",
+    params(ServiceListQuery),
+    responses(
+        (status = 200, description = "List services", body = ServiceListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
+)]
+pub async fn list_services(
+    State(store): State<AppState>,
+    Query(query): Query<ServiceListQuery>,
+) -> Result<Json<ServiceListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_services()
+        .await
+        .into_iter()
+        .filter(|service| {
+            labels_match(&service.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &service.spec.tenant_id)
+                && optional_eq(query.network_id.as_deref(), &service.spec.network_id)
+                && optional_option_eq(
+                    query.backend_set_id.as_deref(),
+                    service.spec.backend_set_id.as_deref(),
+                )
+                && optional_eq(query.exposure_type.as_deref(), &service.spec.exposure_type)
+                && optional_eq(query.status.as_deref(), &service.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(ServiceListResponse {
+        items,
+        next_page_token,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/services",
+    operation_id = "createService",
+    tag = "services",
+    request_body = CreateServiceRequest,
+    responses(
+        (status = 201, description = "Create service", body = ServiceResource),
+        (status = 400, description = "Invalid service references", body = PlatformApiError),
+        (status = 409, description = "Service already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn create_service(
+    State(store): State<AppState>,
+    Json(request): Json<CreateServiceRequest>,
+) -> Result<(StatusCode, Json<ServiceResource>), ControllerError> {
+    let resource = ServiceResource {
+        metadata: metadata_from_create(request.metadata),
+        spec: request.spec,
+        status: service_status(),
+    };
+    let created = store.create_service(resource).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/services/{id}",
+    operation_id = "getService",
+    tag = "services",
+    params(("id" = String, Path, description = "Service ID")),
+    responses(
+        (status = 200, description = "Get service", body = ServiceResource),
+        (status = 404, description = "Service not found", body = PlatformApiError)
+    )
+)]
+pub async fn get_service(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ServiceResource>, ControllerError> {
+    let resource = store
+        .get_service(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "service",
+            id,
+        })?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/services/{id}",
+    operation_id = "updateService",
+    tag = "services",
+    params(("id" = String, Path, description = "Service ID")),
+    request_body = UpdateServiceRequest,
+    responses(
+        (status = 200, description = "Update service", body = ServiceResource),
+        (status = 400, description = "Invalid service references", body = PlatformApiError),
+        (status = 404, description = "Service not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn update_service(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateServiceRequest>,
+) -> Result<Json<ServiceResource>, ControllerError> {
+    let existing = store
+        .get_service(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "service",
+            id: id.clone(),
+        })?;
+    let resource = ServiceResource {
+        metadata: metadata_from_update(&existing.metadata, request.metadata),
+        spec: request.spec,
+        status: existing.status,
+    };
+    let updated = store.update_service(&id, resource).await?;
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/services/{id}",
+    operation_id = "deleteService",
+    tag = "services",
+    params(("id" = String, Path, description = "Service ID")),
+    responses(
+        (status = 200, description = "Delete service", body = MessageResponse),
+        (status = 404, description = "Service not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn delete_service(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ControllerError> {
+    store.delete_service(&id).await?;
+    Ok(Json(deleted_message("service", &id)))
 }

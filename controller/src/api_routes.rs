@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 use utoipa::OpenApi;
@@ -71,6 +71,36 @@ pub fn build_router(store: SharedStore) -> Router {
             get(api_handlers::get_route_table)
                 .put(api_handlers::update_route_table)
                 .delete(api_handlers::delete_route_table),
+        )
+        .route(
+            "/api/v1/health-checks",
+            get(api_handlers::list_health_checks).post(api_handlers::create_health_check),
+        )
+        .route(
+            "/api/v1/health-checks/{id}",
+            get(api_handlers::get_health_check)
+                .put(api_handlers::update_health_check)
+                .delete(api_handlers::delete_health_check),
+        )
+        .route(
+            "/api/v1/backend-sets",
+            get(api_handlers::list_backend_sets).post(api_handlers::create_backend_set),
+        )
+        .route(
+            "/api/v1/backend-sets/{id}",
+            get(api_handlers::get_backend_set)
+                .put(api_handlers::update_backend_set)
+                .delete(api_handlers::delete_backend_set),
+        )
+        .route(
+            "/api/v1/services",
+            get(api_handlers::list_services).post(api_handlers::create_service),
+        )
+        .route(
+            "/api/v1/services/{id}",
+            get(api_handlers::get_service)
+                .put(api_handlers::update_service)
+                .delete(api_handlers::delete_service),
         )
         .route(
             "/api/v1/southbound/nodes/{id}/register",

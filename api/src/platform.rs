@@ -43,7 +43,10 @@ pub struct PlatformApiError {
         "networks": 3,
         "ports": 12,
         "security_groups": 4,
-        "route_tables": 3
+        "route_tables": 3,
+        "services": 2,
+        "backend_sets": 2,
+        "health_checks": 1
     }
 }))]
 pub struct ControllerHealthResponse {
@@ -240,6 +243,87 @@ pub struct RouteTableListQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(example = "network-0001")]
     pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct HealthCheckListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tcp")]
+    pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct BackendSetListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "hc-0001")]
+    pub health_check_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct ServiceListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "bset-0001")]
+    pub backend_set_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "internal")]
+    pub exposure_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(example = "ready")]
     pub status: Option<String>,
@@ -998,6 +1082,430 @@ pub struct UpdateRouteTableRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RouteTableListResponse {
     pub items: Vec<RouteTableResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "tenant_id": "tenant-0001",
+    "network_id": "network-0001",
+    "name": "tcp-ready",
+    "protocol": "tcp",
+    "interval_seconds": 5,
+    "timeout_seconds": 2,
+    "healthy_threshold": 3,
+    "unhealthy_threshold": 2,
+    "target_port": 443,
+    "request_template": null
+}))]
+pub struct HealthCheckSpec {
+    /// Owning tenant for the health check policy.
+    #[schema(example = "tenant-0001")]
+    pub tenant_id: String,
+    /// Optional network scope. Omit for tenant-global reusable checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "network-0001")]
+    pub network_id: Option<String>,
+    /// Human-readable health check name.
+    #[schema(example = "tcp-ready")]
+    pub name: String,
+    /// Active probe protocol.
+    #[schema(example = "tcp")]
+    pub protocol: String,
+    /// Probe interval in seconds.
+    #[schema(example = 5)]
+    pub interval_seconds: u32,
+    /// Probe timeout in seconds.
+    #[schema(example = 2)]
+    pub timeout_seconds: u32,
+    /// Consecutive successes required to mark a backend healthy.
+    #[schema(example = 3)]
+    pub healthy_threshold: u32,
+    /// Consecutive failures required to mark a backend unhealthy.
+    #[schema(example = 2)]
+    pub unhealthy_threshold: u32,
+    /// Optional override target port for the probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 443)]
+    pub target_port: Option<u16>,
+    /// Optional request template for future HTTP/TLS probes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "GET /healthz HTTP/1.1\\r\\nHost: app.internal\\r\\n\\r\\n")]
+    pub request_template: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "phase": "ready"
+}))]
+pub struct HealthCheckStatus {
+    /// Lifecycle phase as observed by the platform.
+    #[schema(example = "ready")]
+    pub phase: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "metadata": {
+        "id": "hc-0001",
+        "resource_version": "1",
+        "created_at": "1712649600",
+        "updated_at": "1712649600",
+        "labels": {"scope": "prod"}
+    },
+    "spec": {
+        "tenant_id": "tenant-0001",
+        "network_id": "network-0001",
+        "name": "tcp-ready",
+        "protocol": "tcp",
+        "interval_seconds": 5,
+        "timeout_seconds": 2,
+        "healthy_threshold": 3,
+        "unhealthy_threshold": 2,
+        "target_port": 443,
+        "request_template": null
+    },
+    "status": {
+        "phase": "ready"
+    }
+}))]
+pub struct HealthCheckResource {
+    pub metadata: ResourceMetadata,
+    pub spec: HealthCheckSpec,
+    pub status: HealthCheckStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateHealthCheckRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceCreateMetadata>,
+    pub spec: HealthCheckSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateHealthCheckRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceUpdateMetadata>,
+    pub spec: HealthCheckSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HealthCheckListResponse {
+    pub items: Vec<HealthCheckResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "id": "backend-0001",
+    "target_type": "port_ref",
+    "target_ref": "port-0002",
+    "ip": null,
+    "node_id": "node-0002",
+    "port": 443,
+    "weight": 100,
+    "admin_state": "enabled",
+    "locality": "remote"
+}))]
+pub struct BackendTargetSpec {
+    /// Stable backend member identifier within the backend set.
+    #[schema(example = "backend-0001")]
+    pub id: String,
+    /// Backend target form such as `port_ref` or `ip`.
+    #[schema(example = "port_ref")]
+    pub target_type: String,
+    /// Optional reference to a platform object such as a Port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "port-0002")]
+    pub target_ref: Option<String>,
+    /// Optional direct IP target for legacy or external backends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "10.0.2.15")]
+    pub ip: Option<String>,
+    /// Optional node hint for cross-node forwarding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "node-0002")]
+    pub node_id: Option<String>,
+    /// Backend service port.
+    #[schema(example = 443)]
+    pub port: u16,
+    /// Relative scheduling weight.
+    #[schema(example = 100)]
+    pub weight: u16,
+    /// Operator-facing administrative state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "enabled")]
+    pub admin_state: Option<String>,
+    /// Placement hint for node-local vs cross-node forwarding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "remote")]
+    pub locality: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "tenant_id": "tenant-0001",
+    "network_id": "network-0001",
+    "name": "api-backends",
+    "health_check_id": "hc-0001",
+    "policy": "maglev",
+    "backends": [
+        {
+            "id": "backend-0001",
+            "target_type": "port_ref",
+            "target_ref": "port-0002",
+            "ip": null,
+            "node_id": "node-0002",
+            "port": 443,
+            "weight": 100,
+            "admin_state": "enabled",
+            "locality": "remote"
+        }
+    ]
+}))]
+pub struct BackendSetSpec {
+    /// Owning tenant for the backend set.
+    #[schema(example = "tenant-0001")]
+    pub tenant_id: String,
+    /// Network scope for the backend set.
+    #[schema(example = "network-0001")]
+    pub network_id: String,
+    /// Human-readable backend set name.
+    #[schema(example = "api-backends")]
+    pub name: String,
+    /// Optional health check policy reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "hc-0001")]
+    pub health_check_id: Option<String>,
+    /// Backend selection policy such as `round_robin` or `maglev`.
+    #[schema(example = "maglev")]
+    pub policy: String,
+    /// Ordered backend members available to the scheduler.
+    #[serde(default)]
+    pub backends: Vec<BackendTargetSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "phase": "ready",
+    "backend_count": 2,
+    "healthy_backends": 0
+}))]
+pub struct BackendSetStatus {
+    /// Lifecycle phase as observed by the platform.
+    #[schema(example = "ready")]
+    pub phase: String,
+    /// Total number of configured backends.
+    #[schema(example = 2)]
+    pub backend_count: usize,
+    /// Number of backends currently reported healthy.
+    #[schema(example = 0)]
+    pub healthy_backends: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "metadata": {
+        "id": "bset-0001",
+        "resource_version": "1",
+        "created_at": "1712649600",
+        "updated_at": "1712649600",
+        "labels": {"scope": "prod"}
+    },
+    "spec": {
+        "tenant_id": "tenant-0001",
+        "network_id": "network-0001",
+        "name": "api-backends",
+        "health_check_id": "hc-0001",
+        "policy": "maglev",
+        "backends": [
+            {
+                "id": "backend-0001",
+                "target_type": "port_ref",
+                "target_ref": "port-0002",
+                "ip": null,
+                "node_id": "node-0002",
+                "port": 443,
+                "weight": 100,
+                "admin_state": "enabled",
+                "locality": "remote"
+            }
+        ]
+    },
+    "status": {
+        "phase": "ready",
+        "backend_count": 1,
+        "healthy_backends": 0
+    }
+}))]
+pub struct BackendSetResource {
+    pub metadata: ResourceMetadata,
+    pub spec: BackendSetSpec,
+    pub status: BackendSetStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateBackendSetRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceCreateMetadata>,
+    pub spec: BackendSetSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateBackendSetRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceUpdateMetadata>,
+    pub spec: BackendSetSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct BackendSetListResponse {
+    pub items: Vec<BackendSetResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "name": "https",
+    "port": 443,
+    "target_port": 8443
+}))]
+pub struct ServicePortSpec {
+    /// Optional listener name for multi-port services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "https")]
+    pub name: Option<String>,
+    /// Frontend service port exposed on the VIP.
+    #[schema(example = 443)]
+    pub port: u16,
+    /// Optional backend target port override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 8443)]
+    pub target_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "tenant_id": "tenant-0001",
+    "network_id": "network-0001",
+    "name": "api-service",
+    "vip": "10.0.10.20",
+    "protocol": "tcp",
+    "ports": [
+        {"name": "https", "port": 443, "target_port": 8443}
+    ],
+    "backend_set_id": "bset-0001",
+    "session_affinity": "client_ip",
+    "lb_policy": "maglev",
+    "exposure_type": "internal"
+}))]
+pub struct ServiceSpec {
+    /// Owning tenant for the service.
+    #[schema(example = "tenant-0001")]
+    pub tenant_id: String,
+    /// Network scope for the VIP.
+    #[schema(example = "network-0001")]
+    pub network_id: String,
+    /// Human-readable service name.
+    #[schema(example = "api-service")]
+    pub name: String,
+    /// Virtual IP exposed by the service.
+    #[schema(example = "10.0.10.20")]
+    pub vip: String,
+    /// Service protocol, initially `tcp` or `udp`.
+    #[schema(example = "tcp")]
+    pub protocol: String,
+    /// Listener ports exposed by the service.
+    #[serde(default)]
+    pub ports: Vec<ServicePortSpec>,
+    /// Optional backend set reference bound to the VIP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "bset-0001")]
+    pub backend_set_id: Option<String>,
+    /// Optional session affinity policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "client_ip")]
+    pub session_affinity: Option<String>,
+    /// Load-balancing policy used by the service.
+    #[schema(example = "maglev")]
+    pub lb_policy: String,
+    /// Exposure type such as `internal` or `floating-ip-backed`.
+    #[schema(example = "internal")]
+    pub exposure_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "phase": "ready",
+    "exposure_state": "reserved"
+}))]
+pub struct ServiceStatus {
+    /// Lifecycle phase as observed by the platform.
+    #[schema(example = "ready")]
+    pub phase: String,
+    /// Current exposure state for the VIP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "reserved")]
+    pub exposure_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "metadata": {
+        "id": "svc-0001",
+        "resource_version": "1",
+        "created_at": "1712649600",
+        "updated_at": "1712649600",
+        "labels": {"scope": "prod"}
+    },
+    "spec": {
+        "tenant_id": "tenant-0001",
+        "network_id": "network-0001",
+        "name": "api-service",
+        "vip": "10.0.10.20",
+        "protocol": "tcp",
+        "ports": [
+            {"name": "https", "port": 443, "target_port": 8443}
+        ],
+        "backend_set_id": "bset-0001",
+        "session_affinity": "client_ip",
+        "lb_policy": "maglev",
+        "exposure_type": "internal"
+    },
+    "status": {
+        "phase": "ready",
+        "exposure_state": "reserved"
+    }
+}))]
+pub struct ServiceResource {
+    pub metadata: ResourceMetadata,
+    pub spec: ServiceSpec,
+    pub status: ServiceStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateServiceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceCreateMetadata>,
+    pub spec: ServiceSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateServiceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceUpdateMetadata>,
+    pub spec: ServiceSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ServiceListResponse {
+    pub items: Vec<ServiceResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
     pub total_count: usize,

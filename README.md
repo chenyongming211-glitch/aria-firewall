@@ -45,6 +45,7 @@
 - northbound 现已支持 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 会与响应头保持一致。
 - controller 已补第一版对象关系校验与删除保护，当前会校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`。
 - 一阶引用校验与删除保护现已下沉到 store mutation 边界内，避免 northbound handler 校验与写入之间的 TOCTOU 窗口。
+- controller 现已新增实验性的 `Service / BackendSet / HealthCheck` 平台对象与 northbound API 骨架，包含 CRUD、OpenAPI、基础分页/过滤、引用校验与删除依赖保护，为后续 `L4 负载均衡 + service chain` 主线路预留稳定对象层。
 - 已新增第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`，作为 `RFC-003` 的过渡实现。
 - southbound 现已记录每个 node 最近一次已发布的 desired-state 摘要，包含 `generation / issued_at / full_sync / object_counts`；相同 generation 的重复拉取会复用同一发布时间。
 - southbound `status` 现已提供派生的 `sync_status`，会综合 `desired_generation / last_applied_generation / apply-status / health` 判断节点是否 `pending / out_of_sync / in_sync / failed / degraded`。
@@ -56,6 +57,7 @@
 - 当前 agent 侧 southbound 仍是 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，并生成第一版 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)`、`runtime inventory`、`runtime inventory diff` 与 `runtime intent`；`CompiledNodeState` 也已开始提供 `identity / ports / security / routes / nat` 五个编译域的本地摘要。其中 `routes` 域对应 routing 预留位，`nat` 域当前只作为 `SNAT / DNAT / Floating IP` 的 shadow reserved 占位，不会直接 materialize 到 datapath。
 - `apply-status` 现在也开始携带按 `identity / ports / security / routes / nat` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
+- `Service / BackendSet / HealthCheck` 当前仍停留在控制面对象层，尚未进入 southbound 发布、agent 编译、健康检查执行器或 L4 LB datapath materialization。
 
 ## 回归脚本
 

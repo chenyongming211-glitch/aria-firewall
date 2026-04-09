@@ -49,6 +49,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - northbound 已提供 `X-Request-Id` 透传/自动生成，错误响应中的 `request_id` 与响应头对齐
 - controller 已提供第一版对象关系校验与删除保护：校验 `tenant/network/node/security_group/route_table` 的一阶引用，并阻止删除仍有依赖的 `tenant/node/network/security-group`
 - 一阶引用校验与删除保护现已收进 store mutation 边界内，避免 northbound handler 先校验、再写入的 TOCTOU 窗口
+- controller 现已新增 `Service / BackendSet / HealthCheck` 平台对象与 northbound API 骨架，包含 CRUD、基础分页/过滤、引用校验与删除依赖保护，为 `RFC-008` 的第一阶段代码落地提供稳定对象层
 - 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`
 - southbound 已开始记录 per-node desired-state publish 摘要，可作为后续 apply/reconcile 的控制面对照基线
 - southbound `status` 已开始派生 node 级 `sync_status`，为后续 reconcile / rollout 判断提供统一状态面
@@ -68,6 +69,7 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 认证、授权与审计
 - southbound 增量协议
 - datapath 下发与恢复闭环
+- `Service / BackendSet / HealthCheck` 的 southbound 发布、agent 编译、健康检查执行与 L4 LB datapath materialization
 
 因此当前实现只能视为平台控制面的启动骨架，而不是完整的 Phase 1 完成态。
 
