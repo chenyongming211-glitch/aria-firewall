@@ -2167,6 +2167,18 @@ fn build_runtime_plan(
         .difference(&next_backend_set_ids)
         .count();
     let services_removed = previous_service_ids.difference(&next_service_ids).count();
+    let previous_service_listener_count = previous_state
+        .map(total_service_listener_ports)
+        .unwrap_or_default();
+    let next_service_listener_count = total_service_listener_ports(next_state);
+    let previous_backend_member_count = previous_state
+        .map(total_service_backend_members)
+        .unwrap_or_default();
+    let next_backend_member_count = total_service_backend_members(next_state);
+    let previous_forwarding_projection_count = previous_state
+        .map(total_service_forwarding_projections)
+        .unwrap_or_default();
+    let next_forwarding_projection_count = total_service_forwarding_projections(next_state);
 
     let mut bindings = Vec::new();
     if capability.supports_tc && !next_state.port_bindings.is_empty() {
@@ -2311,6 +2323,27 @@ fn build_runtime_plan(
             object_count: next_state.services.len(),
         });
     }
+    if next_service_listener_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_frontend_catalog".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_service_listener_count,
+        });
+    }
+    if next_backend_member_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "backend_member_catalog".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_backend_member_count,
+        });
+    }
+    if next_forwarding_projection_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_forwarding_projection".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_forwarding_projection_count,
+        });
+    }
     if health_checks_removed > 0 {
         entries.push(MapPlanEntry {
             map_family: "health_check_catalog".to_string(),
@@ -2330,6 +2363,27 @@ fn build_runtime_plan(
             map_family: "service_catalog".to_string(),
             operation: "cleanup_shadow".to_string(),
             object_count: services_removed,
+        });
+    }
+    if previous_service_listener_count > next_service_listener_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_frontend_catalog".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_service_listener_count - next_service_listener_count,
+        });
+    }
+    if previous_backend_member_count > next_backend_member_count {
+        entries.push(MapPlanEntry {
+            map_family: "backend_member_catalog".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_backend_member_count - next_backend_member_count,
+        });
+    }
+    if previous_forwarding_projection_count > next_forwarding_projection_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_forwarding_projection".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_forwarding_projection_count - next_forwarding_projection_count,
         });
     }
 
@@ -2861,6 +2915,39 @@ fn build_runtime_execution_summary(
     }
 }
 
+fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .map(|program| program.frontend.listener_ports.len())
+        .sum()
+}
+
+fn total_service_backend_members(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .map(|program| {
+            program
+                .backend_set
+                .as_ref()
+                .map(|backend_set| backend_set.backends.len())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
+    state
+        .service_programs
+        .iter()
+        .map(|program| {
+            usize::from(program.frontend.node_local_forwarding)
+                + usize::from(program.frontend.cross_node_forwarding)
+        })
+        .sum()
+}
+
 fn inventory_domain_from_scope(scope: &str) -> String {
     match scope {
         "port-bindings" | "anti-spoof-fastpath" => "ports".to_string(),
@@ -2875,9 +2962,12 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         "security_program" => "security".to_string(),
         "port_bindings" => "ports".to_string(),
         "route_program" => "routes".to_string(),
-        "health_check_catalog" | "backend_set_catalog" | "service_catalog" => {
-            "services".to_string()
-        }
+        "health_check_catalog"
+        | "backend_set_catalog"
+        | "service_catalog"
+        | "service_frontend_catalog"
+        | "backend_member_catalog"
+        | "service_forwarding_projection" => "services".to_string(),
         "nat_program" => "nat".to_string(),
         _ => "runtime".to_string(),
     }

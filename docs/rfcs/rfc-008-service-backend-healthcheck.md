@@ -295,6 +295,7 @@ Service 模型 v1 的验收标准：
 - `southbound desired-state` 现已开始按节点相关网络投影 `Service / BackendSet / HealthCheck`
 - `aria-agent` 现已开始在 `services` shadow 域中编译 `Service / BackendSet / HealthCheck`，并把结果写入 `compiled state / reconcile plan / runtime inventory / runtime intent`
 - `aria-agent` 当前还会把 `Service / BackendSet / HealthCheck` 进一步收敛成第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达 frontend listener、backend member 以及节点内/跨节点转发方向，但仍然不会进入真实 L4 LB datapath
+- `services` shadow 域当前还会把 runtime map 规划进一步细化为 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection`，作为后续节点内与跨节点转发统一 service datapath 的前置边界
 
 当前仍未实现：
 
