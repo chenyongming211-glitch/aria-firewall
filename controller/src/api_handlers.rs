@@ -26,6 +26,7 @@ pub(crate) type AppState = SharedStore;
 pub(crate) enum ControllerError {
     BadRequest(String),
     Conflict { resource: &'static str, id: String },
+    Internal(String),
     NotFound { resource: &'static str, id: String },
 }
 
@@ -33,6 +34,7 @@ impl From<StoreError> for ControllerError {
     fn from(value: StoreError) -> Self {
         match value {
             StoreError::AlreadyExists { resource, id } => Self::Conflict { resource, id },
+            StoreError::Internal(message) => Self::Internal(message),
             StoreError::NotFound { resource, id } => Self::NotFound { resource, id },
         }
     }
@@ -52,6 +54,12 @@ impl IntoResponse for ControllerError {
                 "resource_conflict".to_string(),
                 format!("{resource} '{id}' already exists"),
                 Some(error_details(resource, &id)),
+            ),
+            Self::Internal(message) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error".to_string(),
+                message,
+                None,
             ),
             Self::NotFound { resource, id } => (
                 StatusCode::NOT_FOUND,
@@ -200,7 +208,8 @@ pub async fn list_tenants(State(store): State<AppState>) -> Json<TenantListRespo
     request_body = CreateTenantRequest,
     responses(
         (status = 201, description = "Create tenant", body = TenantResource),
-        (status = 409, description = "Tenant already exists", body = PlatformApiError)
+        (status = 409, description = "Tenant already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_tenant(
@@ -213,7 +222,6 @@ pub async fn create_tenant(
         status: tenant_status(),
     };
     let created = store.create_tenant(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -251,7 +259,8 @@ pub async fn get_tenant(
     request_body = UpdateTenantRequest,
     responses(
         (status = 200, description = "Update tenant", body = TenantResource),
-        (status = 404, description = "Tenant not found", body = PlatformApiError)
+        (status = 404, description = "Tenant not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_tenant(
@@ -272,7 +281,6 @@ pub async fn update_tenant(
         status: existing.status,
     };
     let updated = store.update_tenant(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -284,7 +292,8 @@ pub async fn update_tenant(
     params(("id" = String, Path, description = "Tenant ID")),
     responses(
         (status = 200, description = "Delete tenant", body = MessageResponse),
-        (status = 404, description = "Tenant not found", body = PlatformApiError)
+        (status = 404, description = "Tenant not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_tenant(
@@ -292,7 +301,6 @@ pub async fn delete_tenant(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_tenant(&id).await?;
-    store.bump_generation();
     Ok(Json(deleted_message("tenant", &id)))
 }
 
@@ -320,7 +328,8 @@ pub async fn list_nodes(State(store): State<AppState>) -> Json<NodeListResponse>
     request_body = CreateNodeRequest,
     responses(
         (status = 201, description = "Create node", body = NodeResource),
-        (status = 409, description = "Node already exists", body = PlatformApiError)
+        (status = 409, description = "Node already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_node(
@@ -333,7 +342,6 @@ pub async fn create_node(
         status: node_status(),
     };
     let created = store.create_node(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -368,7 +376,8 @@ pub async fn get_node(
     request_body = UpdateNodeRequest,
     responses(
         (status = 200, description = "Update node", body = NodeResource),
-        (status = 404, description = "Node not found", body = PlatformApiError)
+        (status = 404, description = "Node not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_node(
@@ -386,7 +395,6 @@ pub async fn update_node(
         status: existing.status,
     };
     let updated = store.update_node(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -398,7 +406,8 @@ pub async fn update_node(
     params(("id" = String, Path, description = "Node ID")),
     responses(
         (status = 200, description = "Delete node", body = MessageResponse),
-        (status = 404, description = "Node not found", body = PlatformApiError)
+        (status = 404, description = "Node not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_node(
@@ -406,8 +415,6 @@ pub async fn delete_node(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_node(&id).await?;
-    store.clear_southbound_runtime(&id).await;
-    store.bump_generation();
     Ok(Json(deleted_message("node", &id)))
 }
 
@@ -435,7 +442,8 @@ pub async fn list_networks(State(store): State<AppState>) -> Json<NetworkListRes
     request_body = CreateNetworkRequest,
     responses(
         (status = 201, description = "Create network", body = NetworkResource),
-        (status = 409, description = "Network already exists", body = PlatformApiError)
+        (status = 409, description = "Network already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_network(
@@ -448,7 +456,6 @@ pub async fn create_network(
         status: network_status(),
     };
     let created = store.create_network(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -486,7 +493,8 @@ pub async fn get_network(
     request_body = UpdateNetworkRequest,
     responses(
         (status = 200, description = "Update network", body = NetworkResource),
-        (status = 404, description = "Network not found", body = PlatformApiError)
+        (status = 404, description = "Network not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_network(
@@ -507,7 +515,6 @@ pub async fn update_network(
         status: existing.status,
     };
     let updated = store.update_network(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -519,7 +526,8 @@ pub async fn update_network(
     params(("id" = String, Path, description = "Network ID")),
     responses(
         (status = 200, description = "Delete network", body = MessageResponse),
-        (status = 404, description = "Network not found", body = PlatformApiError)
+        (status = 404, description = "Network not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_network(
@@ -527,7 +535,6 @@ pub async fn delete_network(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_network(&id).await?;
-    store.bump_generation();
     Ok(Json(deleted_message("network", &id)))
 }
 
@@ -555,7 +562,8 @@ pub async fn list_ports(State(store): State<AppState>) -> Json<PortListResponse>
     request_body = CreatePortRequest,
     responses(
         (status = 201, description = "Create port", body = PortResource),
-        (status = 409, description = "Port already exists", body = PlatformApiError)
+        (status = 409, description = "Port already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_port(
@@ -568,7 +576,6 @@ pub async fn create_port(
         status: port_status(),
     };
     let created = store.create_port(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -603,7 +610,8 @@ pub async fn get_port(
     request_body = UpdatePortRequest,
     responses(
         (status = 200, description = "Update port", body = PortResource),
-        (status = 404, description = "Port not found", body = PlatformApiError)
+        (status = 404, description = "Port not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_port(
@@ -621,7 +629,6 @@ pub async fn update_port(
         status: existing.status,
     };
     let updated = store.update_port(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -633,7 +640,8 @@ pub async fn update_port(
     params(("id" = String, Path, description = "Port ID")),
     responses(
         (status = 200, description = "Delete port", body = MessageResponse),
-        (status = 404, description = "Port not found", body = PlatformApiError)
+        (status = 404, description = "Port not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_port(
@@ -641,7 +649,6 @@ pub async fn delete_port(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_port(&id).await?;
-    store.bump_generation();
     Ok(Json(deleted_message("port", &id)))
 }
 
@@ -671,7 +678,8 @@ pub async fn list_security_groups(
     request_body = CreateSecurityGroupRequest,
     responses(
         (status = 201, description = "Create security group", body = SecurityGroupResource),
-        (status = 409, description = "Security group already exists", body = PlatformApiError)
+        (status = 409, description = "Security group already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_security_group(
@@ -685,7 +693,6 @@ pub async fn create_security_group(
         status: security_group_status(rule_count),
     };
     let created = store.create_security_group(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -723,7 +730,8 @@ pub async fn get_security_group(
     request_body = UpdateSecurityGroupRequest,
     responses(
         (status = 200, description = "Update security group", body = SecurityGroupResource),
-        (status = 404, description = "Security group not found", body = PlatformApiError)
+        (status = 404, description = "Security group not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_security_group(
@@ -748,7 +756,6 @@ pub async fn update_security_group(
         },
     };
     let updated = store.update_security_group(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -760,7 +767,8 @@ pub async fn update_security_group(
     params(("id" = String, Path, description = "Security group ID")),
     responses(
         (status = 200, description = "Delete security group", body = MessageResponse),
-        (status = 404, description = "Security group not found", body = PlatformApiError)
+        (status = 404, description = "Security group not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_security_group(
@@ -768,7 +776,6 @@ pub async fn delete_security_group(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_security_group(&id).await?;
-    store.bump_generation();
     Ok(Json(deleted_message("security_group", &id)))
 }
 
@@ -796,7 +803,8 @@ pub async fn list_route_tables(State(store): State<AppState>) -> Json<RouteTable
     request_body = CreateRouteTableRequest,
     responses(
         (status = 201, description = "Create route table", body = RouteTableResource),
-        (status = 409, description = "Route table already exists", body = PlatformApiError)
+        (status = 409, description = "Route table already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn create_route_table(
@@ -809,7 +817,6 @@ pub async fn create_route_table(
         status: route_table_status(),
     };
     let created = store.create_route_table(resource).await?;
-    store.bump_generation();
     Ok((StatusCode::CREATED, Json(created)))
 }
 
@@ -847,7 +854,8 @@ pub async fn get_route_table(
     request_body = UpdateRouteTableRequest,
     responses(
         (status = 200, description = "Update route table", body = RouteTableResource),
-        (status = 404, description = "Route table not found", body = PlatformApiError)
+        (status = 404, description = "Route table not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn update_route_table(
@@ -868,7 +876,6 @@ pub async fn update_route_table(
         status: existing.status,
     };
     let updated = store.update_route_table(&id, resource).await?;
-    store.bump_generation();
     Ok(Json(updated))
 }
 
@@ -880,7 +887,8 @@ pub async fn update_route_table(
     params(("id" = String, Path, description = "Route table ID")),
     responses(
         (status = 200, description = "Delete route table", body = MessageResponse),
-        (status = 404, description = "Route table not found", body = PlatformApiError)
+        (status = 404, description = "Route table not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn delete_route_table(
@@ -888,6 +896,5 @@ pub async fn delete_route_table(
     Path(id): Path<String>,
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_route_table(&id).await?;
-    store.bump_generation();
     Ok(Json(deleted_message("route_table", &id)))
 }

@@ -4,15 +4,20 @@ use aria_api::{
     RouteTableResource, SecurityGroupResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::RwLock;
+use tokio::{
+    fs,
+    sync::{Mutex, RwLock},
+};
 
 pub type SharedStore = Arc<dyn ControllerStore>;
 
@@ -46,9 +51,24 @@ impl_stored_resource!(RouteTableResource);
 pub enum StoreError {
     AlreadyExists { resource: &'static str, id: String },
     NotFound { resource: &'static str, id: String },
+    Internal(String),
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyExists { resource, id } => {
+                write!(f, "{resource} '{id}' already exists")
+            }
+            Self::NotFound { resource, id } => write!(f, "{resource} '{id}' was not found"),
+            Self::Internal(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SouthboundNodeRuntime {
     pub registration: Option<NodeRegisterRequest>,
     pub last_apply_status: Option<ApplyStatusReport>,
@@ -57,11 +77,28 @@ pub struct SouthboundNodeRuntime {
     pub last_seen_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedResourceStore<T> {
+    counter: u64,
+    items: BTreeMap<String, T>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct PersistedControllerState {
+    tenants: PersistedResourceStore<TenantResource>,
+    nodes: PersistedResourceStore<NodeResource>,
+    networks: PersistedResourceStore<NetworkResource>,
+    ports: PersistedResourceStore<PortResource>,
+    security_groups: PersistedResourceStore<SecurityGroupResource>,
+    route_tables: PersistedResourceStore<RouteTableResource>,
+    generation: u64,
+    southbound_nodes: BTreeMap<String, SouthboundNodeRuntime>,
+}
+
 #[async_trait]
 pub trait ControllerStore: Send + Sync {
     async fn resource_counts(&self) -> BTreeMap<String, usize>;
     fn current_generation(&self) -> String;
-    fn bump_generation(&self);
 
     async fn list_tenants(&self) -> Vec<TenantResource>;
     async fn get_tenant(&self, id: &str) -> Option<TenantResource>;
@@ -152,7 +189,7 @@ pub trait ControllerStore: Send + Sync {
         &self,
         node_id: &str,
     ) -> Result<SouthboundNodeStatusResponse, StoreError>;
-    async fn clear_southbound_runtime(&self, node_id: &str);
+    async fn clear_southbound_runtime(&self, node_id: &str) -> Result<(), StoreError>;
     async fn desired_state_for_node(
         &self,
         node_id: &str,
@@ -254,6 +291,18 @@ where
                 id: id.to_string(),
             })
     }
+
+    async fn snapshot(&self) -> PersistedResourceStore<T> {
+        PersistedResourceStore {
+            counter: self.counter.load(Ordering::Relaxed),
+            items: self.items.read().await.clone(),
+        }
+    }
+
+    async fn restore(&self, snapshot: PersistedResourceStore<T>) {
+        self.counter.store(snapshot.counter, Ordering::Relaxed);
+        *self.items.write().await = snapshot.items;
+    }
 }
 
 pub struct InMemoryControllerStore {
@@ -295,59 +344,54 @@ impl InMemoryControllerStore {
         counts
     }
 
-    fn list_resource<T>(
-        &self,
-        store: &ResourceStore<T>,
-    ) -> impl std::future::Future<Output = Vec<T>> + '_
+    async fn list_resource<T>(&self, store: &ResourceStore<T>) -> Vec<T>
     where
         T: StoredResource,
     {
-        store.list()
+        store.list().await
     }
 
-    fn get_resource<T>(
-        &self,
-        store: &ResourceStore<T>,
-        id: &str,
-    ) -> impl std::future::Future<Output = Option<T>> + '_
+    async fn get_resource<T>(&self, store: &ResourceStore<T>, id: &str) -> Option<T>
     where
         T: StoredResource,
     {
-        store.get(id)
+        store.get(id).await
     }
 
-    fn create_resource<T>(
+    async fn create_resource<T>(
         &self,
         store: &ResourceStore<T>,
         resource: T,
-    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    ) -> Result<T, StoreError>
     where
         T: StoredResource,
     {
-        store.create(resource)
+        let created = store.create(resource).await?;
+        self.bump_generation_inner();
+        Ok(created)
     }
 
-    fn update_resource<T>(
+    async fn update_resource<T>(
         &self,
         store: &ResourceStore<T>,
         id: &str,
         resource: T,
-    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    ) -> Result<T, StoreError>
     where
         T: StoredResource,
     {
-        store.replace(id, resource)
+        let updated = store.replace(id, resource).await?;
+        self.bump_generation_inner();
+        Ok(updated)
     }
 
-    fn delete_resource<T>(
-        &self,
-        store: &ResourceStore<T>,
-        id: &str,
-    ) -> impl std::future::Future<Output = Result<T, StoreError>> + '_
+    async fn delete_resource<T>(&self, store: &ResourceStore<T>, id: &str) -> Result<T, StoreError>
     where
         T: StoredResource,
     {
-        store.delete(id)
+        let deleted = store.delete(id).await?;
+        self.bump_generation_inner();
+        Ok(deleted)
     }
 
     fn current_generation_inner(&self) -> String {
@@ -356,6 +400,31 @@ impl InMemoryControllerStore {
 
     fn bump_generation_inner(&self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn snapshot_state(&self) -> PersistedControllerState {
+        PersistedControllerState {
+            tenants: self.tenants.snapshot().await,
+            nodes: self.nodes.snapshot().await,
+            networks: self.networks.snapshot().await,
+            ports: self.ports.snapshot().await,
+            security_groups: self.security_groups.snapshot().await,
+            route_tables: self.route_tables.snapshot().await,
+            generation: self.generation.load(Ordering::Relaxed),
+            southbound_nodes: self.southbound_nodes.read().await.clone(),
+        }
+    }
+
+    async fn restore_state(&self, snapshot: PersistedControllerState) {
+        self.tenants.restore(snapshot.tenants).await;
+        self.nodes.restore(snapshot.nodes).await;
+        self.networks.restore(snapshot.networks).await;
+        self.ports.restore(snapshot.ports).await;
+        self.security_groups.restore(snapshot.security_groups).await;
+        self.route_tables.restore(snapshot.route_tables).await;
+        self.generation
+            .store(snapshot.generation, Ordering::Relaxed);
+        *self.southbound_nodes.write().await = snapshot.southbound_nodes;
     }
 
     async fn record_registration_inner(
@@ -596,6 +665,112 @@ impl InMemoryControllerStore {
     }
 }
 
+pub struct FileBackedControllerStore {
+    inner: InMemoryControllerStore,
+    snapshot_path: PathBuf,
+    mutation_lock: Mutex<()>,
+}
+
+impl FileBackedControllerStore {
+    pub async fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let store = Self {
+            inner: InMemoryControllerStore::new(),
+            snapshot_path: path.into(),
+            mutation_lock: Mutex::new(()),
+        };
+        store.load_snapshot().await?;
+        Ok(store)
+    }
+
+    async fn load_snapshot(&self) -> Result<(), StoreError> {
+        match fs::read(&self.snapshot_path).await {
+            Ok(bytes) => {
+                let snapshot =
+                    serde_json::from_slice::<PersistedControllerState>(&bytes).map_err(|err| {
+                        StoreError::Internal(format!(
+                            "failed to decode controller snapshot {}: {err}",
+                            self.snapshot_path.display()
+                        ))
+                    })?;
+                self.inner.restore_state(snapshot).await;
+                Ok(())
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(StoreError::Internal(format!(
+                "failed to read controller snapshot {}: {err}",
+                self.snapshot_path.display()
+            ))),
+        }
+    }
+
+    async fn persist_snapshot_locked(
+        &self,
+        snapshot: &PersistedControllerState,
+    ) -> Result<(), StoreError> {
+        let bytes = serde_json::to_vec_pretty(snapshot).map_err(|err| {
+            StoreError::Internal(format!(
+                "failed to encode controller snapshot {}: {err}",
+                self.snapshot_path.display()
+            ))
+        })?;
+
+        if let Some(parent) = self.snapshot_path.parent() {
+            fs::create_dir_all(parent).await.map_err(|err| {
+                StoreError::Internal(format!(
+                    "failed to create controller state directory {}: {err}",
+                    parent.display()
+                ))
+            })?;
+        }
+
+        let tmp_path = temp_snapshot_path(&self.snapshot_path);
+        fs::write(&tmp_path, bytes).await.map_err(|err| {
+            StoreError::Internal(format!(
+                "failed to write controller snapshot {}: {err}",
+                tmp_path.display()
+            ))
+        })?;
+        fs::rename(&tmp_path, &self.snapshot_path)
+            .await
+            .map_err(|err| {
+                StoreError::Internal(format!(
+                    "failed to replace controller snapshot {}: {err}",
+                    self.snapshot_path.display()
+                ))
+            })?;
+        Ok(())
+    }
+
+    async fn run_persisted<T, F, Fut>(&self, op: F) -> Result<T, StoreError>
+    where
+        F: FnOnce(&InMemoryControllerStore) -> Fut,
+        Fut: std::future::Future<Output = Result<T, StoreError>>,
+    {
+        let _guard = self.mutation_lock.lock().await;
+        let before = self.inner.snapshot_state().await;
+        let value = op(&self.inner).await?;
+        let after = self.inner.snapshot_state().await;
+
+        if let Err(err) = self.persist_snapshot_locked(&after).await {
+            self.inner.restore_state(before).await;
+            return Err(err);
+        }
+
+        Ok(value)
+    }
+}
+
+fn temp_snapshot_path(path: &Path) -> PathBuf {
+    let mut tmp = path.to_path_buf();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|ext| format!("{ext}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    tmp.set_extension(extension);
+    tmp
+}
+
 macro_rules! impl_resource_methods {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $ty:ty, $field:ident) => {
         async fn $list(&self) -> Vec<$ty> {
@@ -620,6 +795,31 @@ macro_rules! impl_resource_methods {
     };
 }
 
+macro_rules! impl_file_backed_resource_methods {
+    ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $ty:ty) => {
+        async fn $list(&self) -> Vec<$ty> {
+            self.inner.$list().await
+        }
+
+        async fn $get(&self, id: &str) -> Option<$ty> {
+            self.inner.$get(id).await
+        }
+
+        async fn $create(&self, resource: $ty) -> Result<$ty, StoreError> {
+            self.run_persisted(|inner| inner.$create(resource)).await
+        }
+
+        async fn $update(&self, id: &str, resource: $ty) -> Result<$ty, StoreError> {
+            self.run_persisted(|inner| inner.$update(id, resource))
+                .await
+        }
+
+        async fn $delete(&self, id: &str) -> Result<$ty, StoreError> {
+            self.run_persisted(|inner| inner.$delete(id)).await
+        }
+    };
+}
+
 #[async_trait]
 impl ControllerStore for InMemoryControllerStore {
     async fn resource_counts(&self) -> BTreeMap<String, usize> {
@@ -630,10 +830,6 @@ impl ControllerStore for InMemoryControllerStore {
         self.current_generation_inner()
     }
 
-    fn bump_generation(&self) {
-        self.bump_generation_inner()
-    }
-
     impl_resource_methods!(
         list_tenants,
         get_tenant,
@@ -642,15 +838,6 @@ impl ControllerStore for InMemoryControllerStore {
         delete_tenant,
         TenantResource,
         tenants
-    );
-    impl_resource_methods!(
-        list_nodes,
-        get_node,
-        create_node,
-        update_node,
-        delete_node,
-        NodeResource,
-        nodes
     );
     impl_resource_methods!(
         list_networks,
@@ -689,6 +876,33 @@ impl ControllerStore for InMemoryControllerStore {
         route_tables
     );
 
+    async fn list_nodes(&self) -> Vec<NodeResource> {
+        self.list_resource(&self.nodes).await
+    }
+
+    async fn get_node(&self, id: &str) -> Option<NodeResource> {
+        self.get_resource(&self.nodes, id).await
+    }
+
+    async fn create_node(&self, resource: NodeResource) -> Result<NodeResource, StoreError> {
+        self.create_resource(&self.nodes, resource).await
+    }
+
+    async fn update_node(
+        &self,
+        id: &str,
+        resource: NodeResource,
+    ) -> Result<NodeResource, StoreError> {
+        self.update_resource(&self.nodes, id, resource).await
+    }
+
+    async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
+        let deleted = self.nodes.delete(id).await?;
+        self.clear_southbound_runtime_inner(id).await;
+        self.bump_generation_inner();
+        Ok(deleted)
+    }
+
     async fn record_registration(
         &self,
         node_id: &str,
@@ -722,8 +936,9 @@ impl ControllerStore for InMemoryControllerStore {
         self.southbound_status_inner(node_id).await
     }
 
-    async fn clear_southbound_runtime(&self, node_id: &str) {
+    async fn clear_southbound_runtime(&self, node_id: &str) -> Result<(), StoreError> {
         self.clear_southbound_runtime_inner(node_id).await;
+        Ok(())
     }
 
     async fn desired_state_for_node(
@@ -731,6 +946,116 @@ impl ControllerStore for InMemoryControllerStore {
         node_id: &str,
     ) -> Result<DesiredStateEnvelope, StoreError> {
         self.desired_state_for_node_inner(node_id).await
+    }
+}
+
+#[async_trait]
+impl ControllerStore for FileBackedControllerStore {
+    async fn resource_counts(&self) -> BTreeMap<String, usize> {
+        self.inner.resource_counts().await
+    }
+
+    fn current_generation(&self) -> String {
+        self.inner.current_generation()
+    }
+
+    impl_file_backed_resource_methods!(
+        list_tenants,
+        get_tenant,
+        create_tenant,
+        update_tenant,
+        delete_tenant,
+        TenantResource
+    );
+    impl_file_backed_resource_methods!(
+        list_nodes,
+        get_node,
+        create_node,
+        update_node,
+        delete_node,
+        NodeResource
+    );
+    impl_file_backed_resource_methods!(
+        list_networks,
+        get_network,
+        create_network,
+        update_network,
+        delete_network,
+        NetworkResource
+    );
+    impl_file_backed_resource_methods!(
+        list_ports,
+        get_port,
+        create_port,
+        update_port,
+        delete_port,
+        PortResource
+    );
+    impl_file_backed_resource_methods!(
+        list_security_groups,
+        get_security_group,
+        create_security_group,
+        update_security_group,
+        delete_security_group,
+        SecurityGroupResource
+    );
+    impl_file_backed_resource_methods!(
+        list_route_tables,
+        get_route_table,
+        create_route_table,
+        update_route_table,
+        delete_route_table,
+        RouteTableResource
+    );
+
+    async fn record_registration(
+        &self,
+        node_id: &str,
+        info: NodeInfo,
+        capability: NodeCapability,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.run_persisted(|inner| inner.record_registration(node_id, info, capability))
+            .await
+    }
+
+    async fn record_apply_status(
+        &self,
+        node_id: &str,
+        report: ApplyStatusReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.run_persisted(|inner| inner.record_apply_status(node_id, report))
+            .await
+    }
+
+    async fn record_health(
+        &self,
+        node_id: &str,
+        report: NodeHealthReport,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.run_persisted(|inner| inner.record_health(node_id, report))
+            .await
+    }
+
+    async fn southbound_status(
+        &self,
+        node_id: &str,
+    ) -> Result<SouthboundNodeStatusResponse, StoreError> {
+        self.inner.southbound_status(node_id).await
+    }
+
+    async fn clear_southbound_runtime(&self, node_id: &str) -> Result<(), StoreError> {
+        self.run_persisted(|inner| async move {
+            inner.clear_southbound_runtime(node_id).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn desired_state_for_node(
+        &self,
+        node_id: &str,
+    ) -> Result<DesiredStateEnvelope, StoreError> {
+        self.inner.desired_state_for_node(node_id).await
     }
 }
 

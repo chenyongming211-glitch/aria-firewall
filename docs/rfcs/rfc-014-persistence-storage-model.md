@@ -293,8 +293,10 @@ Persistence model v1 的验收标准：
 当前仓库已经落下持久化模型的第一步代码骨架：
 
 - `controller` 已通过 store trait 隔离存储边界
+- 已新增可选的文件快照 backend，允许通过 `ARIA_CONTROLLER_STATE_PATH` 持久化平台对象、generation 和 southbound runtime 摘要
 - 默认实现仍为内存态 backend
 - northbound / southbound handler 已只依赖抽象边界，不再直接依赖具体内存实现
+- northbound 对象写入当前以“store 内部 mutation + generation bump”为 durability 边界，再写入文件快照
 
 当前仍未实现：
 

@@ -18,9 +18,10 @@ use crate::api_handlers::{AppState, ControllerError};
     params(("id" = String, Path, description = "Node ID")),
     request_body = NodeRegisterRequest,
     responses(
-        (status = 400, description = "Path node ID and payload node ID mismatch", body = PlatformApiError),
         (status = 200, description = "Register node and capability profile", body = NodeRegisterResponse),
-        (status = 404, description = "Node not found", body = PlatformApiError)
+        (status = 400, description = "Path node ID and payload node ID mismatch", body = PlatformApiError),
+        (status = 404, description = "Node not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn register_node(
@@ -74,7 +75,8 @@ pub async fn desired_state(
     request_body = ApplyStatusReport,
     responses(
         (status = 200, description = "Report apply result", body = ApplyStatusResponse),
-        (status = 404, description = "Node not found", body = PlatformApiError)
+        (status = 404, description = "Node not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn apply_status(
@@ -100,7 +102,8 @@ pub async fn apply_status(
     request_body = NodeHealthReport,
     responses(
         (status = 200, description = "Report node heartbeat", body = HeartbeatResponse),
-        (status = 404, description = "Node not found", body = PlatformApiError)
+        (status = 404, description = "Node not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
     )
 )]
 pub async fn heartbeat(
