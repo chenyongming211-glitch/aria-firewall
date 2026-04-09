@@ -353,6 +353,8 @@ pub struct NodeSpec {
     "last_reconcile_at": "1712649915",
     "last_error": null,
     "pending_object_counts": {},
+    "changed_kinds": [],
+    "has_deletes": false,
     "sync_status": {
         "state": "in_sync",
         "reconcile_required": false,
@@ -397,6 +399,12 @@ pub struct NodeStatus {
     /// Lightweight per-kind object counts that still need reconcile for the current desired generation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pending_object_counts: BTreeMap<String, usize>,
+    /// Lightweight per-kind change summary derived from pending reconcile work for the current generation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_kinds: Vec<String>,
+    /// Whether the current desired generation includes explicit deletes.
+    #[serde(default)]
+    pub has_deletes: bool,
     /// Derived controller-side sync summary mirrored from the southbound status plane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_status: Option<SouthboundSyncStatus>,
@@ -425,6 +433,8 @@ pub struct NodeStatus {
         "last_applied_generation": "7",
         "last_seen_at": "1712649915",
         "pending_object_counts": {},
+        "changed_kinds": [],
+        "has_deletes": false,
         "sync_status": {
             "state": "in_sync",
             "reconcile_required": false,

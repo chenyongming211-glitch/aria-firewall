@@ -388,6 +388,8 @@ pub struct SouthboundSyncStatus {
     "last_applied_generation": "5",
     "last_seen_at": "1712649915",
     "pending_object_counts": {},
+    "changed_kinds": [],
+    "has_deletes": false,
     "last_desired_state": {
         "generation": "5",
         "issued_at": "1712649900",
@@ -450,6 +452,12 @@ pub struct SouthboundNodeStatusResponse {
     /// Lightweight per-kind object counts that still need reconcile for the current desired generation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pending_object_counts: BTreeMap<String, usize>,
+    /// Lightweight per-kind change summary derived from pending reconcile work for the current generation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_kinds: Vec<String>,
+    /// Whether the current desired generation includes explicit deletes.
+    #[serde(default)]
+    pub has_deletes: bool,
     /// Latest desired-state publication recorded by the controller, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_desired_state: Option<DesiredStatePublishRecord>,

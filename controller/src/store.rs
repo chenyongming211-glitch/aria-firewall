@@ -573,6 +573,23 @@ impl InMemoryControllerStore {
             .collect()
     }
 
+    fn change_summary(
+        last_desired_state: Option<&DesiredStatePublishRecord>,
+        pending_object_counts: &BTreeMap<String, usize>,
+    ) -> (Vec<String>, bool) {
+        let changed_kinds = pending_object_counts
+            .keys()
+            .filter(|kind| kind.as_str() != "deletes")
+            .cloned()
+            .collect::<Vec<_>>();
+        let has_deletes = last_desired_state
+            .and_then(|state| state.object_counts.get("deletes"))
+            .copied()
+            .unwrap_or(0)
+            > 0;
+        (changed_kinds, has_deletes)
+    }
+
     fn southbound_status_from_parts(
         &self,
         node_id: &str,
@@ -596,6 +613,8 @@ impl InMemoryControllerStore {
             last_desired_state.as_ref(),
             last_apply_status.as_ref(),
         );
+        let (changed_kinds, has_deletes) =
+            Self::change_summary(last_desired_state.as_ref(), &pending_object_counts);
 
         SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
@@ -603,6 +622,8 @@ impl InMemoryControllerStore {
             last_applied_generation,
             last_seen_at,
             pending_object_counts,
+            changed_kinds,
+            has_deletes,
             last_desired_state,
             sync_status,
             registration,

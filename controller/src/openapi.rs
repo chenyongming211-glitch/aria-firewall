@@ -160,6 +160,12 @@ mod tests {
             .pointer("/components/schemas/NodeStatus/properties/pending_object_counts")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/changed_kinds")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/has_deletes")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/NodeStatus/properties/sync_status")
             .is_some());
         assert!(doc.pointer("/components/schemas/NetworkResource").is_some());
@@ -245,6 +251,12 @@ mod tests {
             .pointer(
                 "/components/schemas/SouthboundNodeStatusResponse/properties/pending_object_counts"
             )
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/SouthboundNodeStatusResponse/properties/changed_kinds")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/SouthboundNodeStatusResponse/properties/has_deletes")
             .is_some());
         assert!(doc
             .pointer("/components/schemas/SouthboundNodeStatusResponse/properties/sync_status")

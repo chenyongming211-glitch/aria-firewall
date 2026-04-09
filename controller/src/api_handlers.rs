@@ -334,6 +334,8 @@ fn node_status() -> NodeStatus {
         last_reconcile_at: None,
         last_error: None,
         pending_object_counts: BTreeMap::new(),
+        changed_kinds: Vec::new(),
+        has_deletes: false,
         sync_status: None,
     }
 }
@@ -395,6 +397,8 @@ fn apply_southbound_node_status(status: &mut NodeStatus, southbound: SouthboundN
     status.last_applied_generation = southbound.last_applied_generation;
     status.last_seen_at = southbound.last_seen_at;
     status.pending_object_counts = southbound.pending_object_counts;
+    status.changed_kinds = southbound.changed_kinds;
+    status.has_deletes = southbound.has_deletes;
     status.sync_status = Some(southbound.sync_status);
 
     if let Some(registration) = southbound.registration {
