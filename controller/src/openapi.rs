@@ -157,6 +157,9 @@ mod tests {
             .pointer("/components/schemas/NodeStatus/properties/desired_generation")
             .is_some());
         assert!(doc
+            .pointer("/components/schemas/NodeStatus/properties/pending_object_counts")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/NodeStatus/properties/sync_status")
             .is_some());
         assert!(doc.pointer("/components/schemas/NetworkResource").is_some());
@@ -236,6 +239,11 @@ mod tests {
         assert!(doc
             .pointer(
                 "/components/schemas/SouthboundNodeStatusResponse/properties/last_desired_state"
+            )
+            .is_some());
+        assert!(doc
+            .pointer(
+                "/components/schemas/SouthboundNodeStatusResponse/properties/pending_object_counts"
             )
             .is_some());
         assert!(doc

@@ -387,6 +387,7 @@ pub struct SouthboundSyncStatus {
     "desired_generation": "5",
     "last_applied_generation": "5",
     "last_seen_at": "1712649915",
+    "pending_object_counts": {},
     "last_desired_state": {
         "generation": "5",
         "issued_at": "1712649900",
@@ -446,6 +447,9 @@ pub struct SouthboundNodeStatusResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "1712649915")]
     pub last_seen_at: Option<String>,
+    /// Lightweight per-kind object counts that still need reconcile for the current desired generation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_object_counts: BTreeMap<String, usize>,
     /// Latest desired-state publication recorded by the controller, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_desired_state: Option<DesiredStatePublishRecord>,

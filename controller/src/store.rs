@@ -542,6 +542,37 @@ impl InMemoryControllerStore {
         }
     }
 
+    fn pending_object_counts(
+        desired_generation: &str,
+        last_desired_state: Option<&DesiredStatePublishRecord>,
+        last_apply_status: Option<&ApplyStatusReport>,
+    ) -> BTreeMap<String, usize> {
+        let Some(last_desired_state) = last_desired_state else {
+            return BTreeMap::new();
+        };
+
+        let Some(last_apply_status) =
+            last_apply_status.filter(|report| report.generation == desired_generation)
+        else {
+            return last_desired_state
+                .object_counts
+                .iter()
+                .filter_map(|(kind, count)| (*count > 0).then(|| (kind.clone(), *count)))
+                .collect();
+        };
+
+        let applied_counts = &last_apply_status.compiled_objects;
+        last_desired_state
+            .object_counts
+            .iter()
+            .filter_map(|(kind, desired_count)| {
+                let applied = applied_counts.get(kind).copied().unwrap_or(0);
+                let pending = desired_count.saturating_sub(applied);
+                (pending > 0).then(|| (kind.clone(), pending))
+            })
+            .collect()
+    }
+
     fn southbound_status_from_parts(
         &self,
         node_id: &str,
@@ -560,12 +591,18 @@ impl InMemoryControllerStore {
             last_apply_status.as_ref(),
             last_health.as_ref(),
         );
+        let pending_object_counts = Self::pending_object_counts(
+            &desired_generation,
+            last_desired_state.as_ref(),
+            last_apply_status.as_ref(),
+        );
 
         SouthboundNodeStatusResponse {
             node_id: node_id.to_string(),
             desired_generation,
             last_applied_generation,
             last_seen_at,
+            pending_object_counts,
             last_desired_state,
             sync_status,
             registration,

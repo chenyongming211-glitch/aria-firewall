@@ -352,6 +352,7 @@ pub struct NodeSpec {
     "last_seen_at": "1712649915",
     "last_reconcile_at": "1712649915",
     "last_error": null,
+    "pending_object_counts": {},
     "sync_status": {
         "state": "in_sync",
         "reconcile_required": false,
@@ -393,6 +394,9 @@ pub struct NodeStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "wal_replay_failed")]
     pub last_error: Option<String>,
+    /// Lightweight per-kind object counts that still need reconcile for the current desired generation.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pending_object_counts: BTreeMap<String, usize>,
     /// Derived controller-side sync summary mirrored from the southbound status plane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_status: Option<SouthboundSyncStatus>,
@@ -420,6 +424,7 @@ pub struct NodeStatus {
         "desired_generation": "7",
         "last_applied_generation": "7",
         "last_seen_at": "1712649915",
+        "pending_object_counts": {},
         "sync_status": {
             "state": "in_sync",
             "reconcile_required": false,

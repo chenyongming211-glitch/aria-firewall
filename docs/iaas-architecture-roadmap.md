@@ -11,6 +11,8 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 
 以上两份约束文档与下游 RFC 一起，构成进入 `Phase 1` 前必须遵守的实施红线，不是可选建议。
 
+另外，后续所有新增能力都必须持续关注产品性能，优先选择有界、可预测的开销模型；热路径与主控制面响应默认优先输出摘要和聚合结果，而不是高基数明细。
+
 当前已落地的第一批 RFC：
 
 - [RFC-001 资源模型 v1](rfcs/rfc-001-resource-model.md)
@@ -47,7 +49,8 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - 提供第一阶段 southbound HTTP 骨架，覆盖 `register / desired-state / apply-status / heartbeat / status`
 - southbound 已开始记录 per-node desired-state publish 摘要，可作为后续 apply/reconcile 的控制面对照基线
 - southbound `status` 已开始派生 node 级 `sync_status`，为后续 reconcile / rollout 判断提供统一状态面
-- northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / sync_status`
+- southbound `status` 已开始提供轻量差异摘要 `pending_object_counts`，按对象类型展示当前 generation 仍待 reconcile 的数量
+- northbound `Node.status` 已开始镜像 southbound 的关键运行态，node 资源视图可直接展示 `desired_generation / last_applied_generation / last_seen_at / pending_object_counts / sync_status`
 - controller 已通过 store trait 隔离存储边界，并新增可选的文件快照 backend；默认实现仍为内存版
 
 当前实现仍不包含：
@@ -164,6 +167,17 @@ Aria 不只输出流量统计，还应输出一致的决策与证据：
 - Service
 - Route
 - Security Group
+
+### 2.8 性能优先于功能堆叠
+
+Aria 在新增能力时，必须始终把产品性能当成一等约束，而不是“功能先做出来，后面再优化”。
+
+要求：
+
+- 控制面与数据面都必须优先选择有界、可预测的开销模型
+- 热路径默认优先返回摘要、计数和聚合结果，而不是高基数明细
+- 新能力设计时必须同时回答延迟、CPU、内存、map 规模和事件量的预算
+- 如果某项能力会显著放大 datapath 成本或 observability 成本，必须先提供降级、采样或裁剪方案
 
 ## 3. 技术边界
 
