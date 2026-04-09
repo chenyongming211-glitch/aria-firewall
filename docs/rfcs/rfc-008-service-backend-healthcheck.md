@@ -288,6 +288,27 @@ Service 模型 v1 的验收标准：
 
 为避免在 L4 LB 上重复踩坑，Aria 的 service datapath 设计应显式借鉴 Cilium 已验证的分层模式。
 
+### 16.1 借鉴边界
+
+本 RFC 借鉴 Cilium 的目的，是提炼稳定的 L4 LB datapath 拆分方式，而不是把 Aria 已完成的对象层和 shadow compiler 推倒重来。
+
+因此必须坚持：
+
+- 已经完成的 `Service / BackendSet / HealthCheck` 控制面对象层、southbound 投影和 agent shadow 编译链继续保留
+- Aria 不复制 Kubernetes `Service` / `NodePort` / `ClusterIP` API 语义，也不复制 kube-proxy replacement 的部署前提
+- Aria 只选择性借鉴 Cilium 在 L4 datapath 上已经验证过的状态拆分和执行路径
+- `routing / NAT / Floating IP` 仍是协同能力，不得因为参考 Cilium 的实现而反向挤占 `L4 LB + service chain` 主线
+
+### 16.2 本 RFC 以 Cilium 为主参考，而不是 Calico
+
+本 RFC 聚焦 L4 service datapath，因此主参考是 Cilium，而不是 Calico。
+
+原因：
+
+- Cilium 在 `frontend/backend/revnat/affinity/maglev` 这些 L4 LB 核心状态上有更直接的 eBPF 数据面实现
+- Cilium 已明确区分 `socket lb path` 与 `packet lb path`，这与 Aria 的下一阶段落地顺序直接对应
+- Calico 更适合作为后续 `BGP / service IP advertisement / host endpoint / tiered policy` 的参考实现，相关边界应放到 `RFC-009` 等后续 RFC 中讨论
+
 参考入口：
 
 - [Cilium kube-proxy-free 文档](https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/)
@@ -534,3 +555,9 @@ Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler�
 - 健康检查执行器
 - session affinity 状态
 - 节点内转发与跨节点转发的 L4 LB datapath
+
+当前也不打算做的事情包括：
+
+- 为了贴近 Cilium 而重写已完成的 northbound / southbound / shadow compiler 骨架
+- 把 L4 LB 直接建模成 Kubernetes `Service` / `NodePort` 兼容层
+- 在 L4 LB 尚未落地前，提前让 `routing / NAT / Floating IP` 反客为主

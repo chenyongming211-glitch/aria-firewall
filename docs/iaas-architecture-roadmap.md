@@ -195,6 +195,18 @@ Aria 在新增能力时，必须始终把产品性能当成一等约束，而不
 - 新能力设计时必须同时回答延迟、CPU、内存、map 规模和事件量的预算
 - 如果某项能力会显著放大 datapath 成本或 observability 成本，必须先提供降级、采样或裁剪方案
 
+### 2.9 选择性参考成熟实现，而不是照搬外部产品
+
+Aria 可以系统借鉴成熟项目，但必须坚持“选择性参考、保持本项目主模型稳定”的原则。
+
+要求：
+
+- 已完成的 `controller / northbound / southbound / agent shadow compiler` 骨架，不因对标 Cilium 或 Calico 而整体返工
+- `L4 负载均衡 / service datapath` 优先借鉴 Cilium 已验证的数据面拆分方式，重点参考 `frontend / backend / revnat / affinity / maglev` 以及 `socket lb path / packet lb path`
+- `BGP / service IP advertisement / host endpoint policy / tiered policy` 等后续能力，优先借鉴 Calico 的边界划分与运维模型
+- 借鉴的对象是职责拆分、状态结构和运行边界，而不是直接复制外部项目的 Kubernetes API、CRD 或控制器组织方式
+- 如果参考实现与当前已冻结的 RFC 或已落地骨架冲突，默认保持 Aria 现有对象模型与 southbound/compiler 契约，除非先更新 RFC
+
 ## 3. 技术边界
 
 ### 3.1 适合进入 eBPF 快路径的能力

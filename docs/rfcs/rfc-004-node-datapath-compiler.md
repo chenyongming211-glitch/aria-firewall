@@ -71,6 +71,16 @@
 
 具体门槛见 [Aria eBPF 实现约束](../ebpf-implementation-constraints.md)。
 
+### 3.7 外部实现只做选择性借鉴，不重写已完成骨架
+
+Node datapath 编译模型允许借鉴成熟项目，但借鉴边界必须清晰：
+
+- 当前已落地的 `controller / northbound / southbound / desired_state_cache / compiled_state / runtime_plan / runtime_inventory / runtime_intent` 骨架，默认继续沿 Aria 自身模型演进，不因对标外部项目而整体返工
+- `Service Domain` 后续优先借鉴 Cilium 在 `frontend / backend / revnat / affinity / maglev / socket lb / packet lb` 上的职责拆分
+- `Route Domain / 多节点 reachability / service IP advertisement / host endpoint policy` 等后续能力，可在对应 RFC 中优先借鉴 Calico 的边界划分
+- 借鉴的重点是 datapath 状态拆分、执行路径和运维边界，不是复制外部项目的 Kubernetes API、CRD 结构或控制器拓扑
+- 若参考实现与当前已冻结的编译契约冲突，应先更新 RFC，再调整代码
+
 ## 4. 输入与输出
 
 ### 4.1 编译输入

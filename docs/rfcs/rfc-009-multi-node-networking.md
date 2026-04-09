@@ -247,7 +247,35 @@ datapath 负责：
 
 这一步是增强项，不应阻塞 overlay 与 native 两条主路径的交付验收。
 
-## 13. 当前代码映射与缺口
+## 13. 参考实现研究（Calico）
+
+多节点织网、BGP 协同和 service 地址外宣，不应只从 datapath 角度思考，还要参考成熟项目在控制边界与运维模型上的经验。
+
+本 RFC 当前优先参考 Calico 的方向包括：
+
+- [Advertise Kubernetes service IP addresses](https://docs.tigera.io/calico/latest/networking/configuring/advertise-service-ips)
+- [Configure BGP peering](https://docs.tigera.io/calico/latest/networking/configuring/bgp)
+- [Global network policy](https://docs.tigera.io/calico/latest/reference/resources/globalnetworkpolicy)
+
+### 13.1 借鉴范围
+
+Aria 后续在以下方面优先借鉴 Calico：
+
+- `BGP peering / route reflector` 的职责边界
+- `service IP advertisement` 的平台控制面语义
+- `host endpoint / global or tiered policy` 的隔离与运维边界
+
+### 13.2 不照搬的部分
+
+本 RFC 不要求 Aria 复制 Calico 的 Kubernetes CRD 结构、Felix/BIRD 部署形态或既有资源命名。
+
+应坚持：
+
+- 继续沿用 `RFC-001` 冻结的平台对象模型
+- 继续沿用已完成的 controller / southbound / agent shadow compiler 骨架
+- 只选择性借鉴 Calico 在路由控制、服务地址通告和主机策略上的边界设计
+
+## 14. 当前代码映射与缺口
 
 当前仓库主要仍是单节点 / 节点本地视角。
 
