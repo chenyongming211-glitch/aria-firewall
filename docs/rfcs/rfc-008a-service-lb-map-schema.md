@@ -80,8 +80,8 @@ pub struct SvcFrontendKey {
 #[derive(Copy, Clone, Debug)]
 pub struct SvcFrontendValue {
     pub service_id: u32,     // 本地分配的 service 数字 ID
-    pub backend_count: u16,  // 当前有效后端数量
-    pub flags: u16,          // bit0=has_affinity, bit1=use_maglev, bit2=local_only
+    pub backend_count: u16,  // 当前有效后端数量（不含 disabled，slot 紧凑排列）
+    pub flags: u16,          // bit0=has_affinity, bit1=use_maglev, bit2=local_only, bit3=has_remote
     pub lb_algo: u8,         // 0=random, 1=maglev, 2=hash_src_ip
     pub pad: [u8; 3],
 }
@@ -115,7 +115,7 @@ pub struct SvcBackendValue {
     pub address: [u8; 16],   // 后端 IP（v4-mapped-v6）
     pub port: u16,
     pub weight: u16,
-    pub flags: u16,          // bit0=local, bit1=remote, bit2=disabled
+    pub flags: u16,          // bit0=local, bit1=remote, bit2=disabled, bit3=draining
     pub pad: [u8; 2],
 }
 // 大小：24 字节
@@ -149,9 +149,9 @@ pub struct SvcRevNatKey {
 pub struct SvcRevNatValue {
     pub service_address: [u8; 16],  // 原始 VIP
     pub service_port: u16,
-    pub pad: [u8; 2],
+    pub pad: [u8; 6],
 }
-// 大小：20 字节
+// 大小：24 字节（8 字节对齐）
 ```
 
 说明：
@@ -266,13 +266,48 @@ Agent 从 `CompiledNodeState.service_programs` 生成 map 写入：
 5. 为每个 (backend_ip, backend_port, proto) 写入 `SVC_REVNAT_MAP`
 6. 如果 has_affinity：`SVC_AFFINITY_MAP` 由 eBPF 运行时自动填充，agent 不预写
 
-## 9. ID 分配策略
+### 8.1 Slot 紧凑排列规则
+
+`SVC_BACKEND_MAP` 的 slot 必须紧凑排列（0..backend_count-1），不允许空洞：
+
+- Agent 在写入时，只写入 `admin_state != disabled` 的后端
+- `backend_count` 等于实际写入的有效后端数量
+- 删除后端时，agent 必须重新压缩 slot 列表（把最后一个 slot 移到被删除的位置）
+- 这样 `bpf_get_prandom_u32() % backend_count` 永远命中有效条目
+
+### 8.2 健康检查与 disabled 后端
+
+Phase B 策略：disabled 后端直接从 slot 列表中物理删除，不保留 disabled 标记。
+
+Phase C 扩展：如果需要优雅排干（draining），可以保留 `flags.draining` 标记，但 `backend_count` 仍然只计算可调度后端。draining 后端通过 affinity 命中，不参与新连接的 random 选择。
+
+## 9. Flags 位定义
+
+### 9.1 SvcFrontendValue.flags
+
+| Bit | 名称 | 说明 |
+|-----|------|------|
+| 0 | `has_affinity` | 启用 session affinity，查找 SVC_AFFINITY_MAP |
+| 1 | `use_maglev` | 使用 maglev 一致性哈希，查找 SVC_MAGLEV_MAP |
+| 2 | `local_only` | 所有后端都在本节点，无需 handoff |
+| 3 | `has_remote` | 存在跨节点后端，可能需要 handoff |
+
+### 9.2 SvcBackendValue.flags
+
+| Bit | 名称 | 说明 |
+|-----|------|------|
+| 0 | `local` | 后端在本节点 |
+| 1 | `remote` | 后端在其他节点 |
+| 2 | `disabled` | 后端被管理员禁用（Phase B 不写入 map） |
+| 3 | `draining` | 后端正在排干（Phase C，仅 affinity 命中） |
+
+## 10. ID 分配策略
 
 - `service_id`：agent 本地分配，从 1 开始递增，generation 内稳定
 - `slot`：0-based，按 backend 顺序排列，权重展开在 Phase C 实现
 - `tap_id`：复用现有共享 runtime 的 tap_id 分配机制
 
-## 10. 与现有 map 的关系
+## 11. 与现有 map 的关系
 
 Service Domain 的 map 与现有防火墙 map 完全独立：
 
@@ -281,7 +316,7 @@ Service Domain 的 map 与现有防火墙 map 完全独立：
 - 不复用 `CT_TABLE_V4/V6`（但 packet LB 路径会写入 conntrack）
 - pin 在同一个共享 namespace 下（`/sys/fs/bpf/aria/global-v2/`）
 
-## 11. 验收标准
+## 12. 验收标准
 
 - `repr(C)` 结构体在 `ebpf/src/common.rs` 和 `core/src/common.rs` 同时定义
 - agent 能正确写入和读取所有 map
@@ -289,7 +324,7 @@ Service Domain 的 map 与现有防火墙 map 完全独立：
 - node-local random LB 端到端可验证
 - map schema 变更需要 pin namespace 迁移
 
-## 12. Phase B 实施范围
+## 13. Phase B 实施范围
 
 Phase B 只实现：
 
