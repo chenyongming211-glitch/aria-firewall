@@ -3640,10 +3640,11 @@ fn materialize_service_maps(
     tap_id: u32,
     service_programs: &[ServiceProgramIr],
 ) -> Result<(usize, usize, usize), String> {
-    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_LB_ALGO_RANDOM};
+    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_FRONTEND_FLAG_USE_MAGLEV, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM};
     use aria_core::svc_ops::{
-        clear_service_maps_for_tap, ipv4_to_v4mapped, write_service_backends,
-        write_service_frontends, write_service_revnats, SvcBackendEntry, SvcFrontendEntry,
+        clear_service_maps_for_tap, compute_maglev_table, ipv4_to_v4mapped,
+        write_maglev_table, write_service_backends, write_service_frontends,
+        write_service_revnats, SvcBackendEntry, SvcFrontendEntry, SvcMaglevTableEntry,
         SvcRevNatEntry,
     };
 
@@ -3653,6 +3654,7 @@ fn materialize_service_maps(
     let mut frontend_entries = Vec::new();
     let mut backend_entries = Vec::new();
     let mut revnat_entries = Vec::new();
+    let mut maglev_entries = Vec::new();
     let mut service_id_counter: u32 = 1;
 
     for program in service_programs {
@@ -3684,7 +3686,17 @@ fn materialize_service_maps(
             _ => continue,
         };
 
+        let is_maglev = program.frontend.lb_policy == "maglev";
+        let lb_algo = if is_maglev { SVC_LB_ALGO_MAGLEV } else { SVC_LB_ALGO_RANDOM };
+
         for listener in &program.frontend.listener_ports {
+            let mut flags = SVC_FRONTEND_FLAG_LOCAL_ONLY;
+            if program.frontend.session_affinity.as_deref() == Some("client_ip") {
+                flags |= SVC_FRONTEND_FLAG_HAS_AFFINITY;
+            }
+            if is_maglev {
+                flags |= SVC_FRONTEND_FLAG_USE_MAGLEV;
+            }
             frontend_entries.push(SvcFrontendEntry {
                 tap_id,
                 address: vip_addr,
@@ -3693,13 +3705,8 @@ fn materialize_service_maps(
                 scope: 0,
                 service_id,
                 backend_count,
-                flags: SVC_FRONTEND_FLAG_LOCAL_ONLY
-                    | if program.frontend.session_affinity.as_deref() == Some("client_ip") {
-                        SVC_FRONTEND_FLAG_HAS_AFFINITY
-                    } else {
-                        0
-                    },
-                lb_algo: SVC_LB_ALGO_RANDOM,
+                flags,
+                lb_algo,
             });
         }
 
@@ -3740,6 +3747,27 @@ fn materialize_service_maps(
                 service_port,
             });
         }
+
+        // Compute and store Maglev table if lb_policy is maglev.
+        if is_maglev && !local_backends.is_empty() {
+            let backend_ids: Vec<(String, u16)> = local_backends
+                .iter()
+                .filter_map(|b| {
+                    b.resolved_ip_hint
+                        .as_deref()
+                        .map(|ip| (ip.to_string(), b.service_port))
+                })
+                .collect();
+            let table = compute_maglev_table(&backend_ids);
+            for (idx, &slot) in table.iter().enumerate() {
+                maglev_entries.push(SvcMaglevTableEntry {
+                    tap_id,
+                    service_id,
+                    table_index: idx as u16,
+                    backend_slot: slot,
+                });
+            }
+        }
     }
 
     let frontends = write_service_frontends(pin_path, &frontend_entries)
@@ -3748,6 +3776,10 @@ fn materialize_service_maps(
         .map_err(|e| format!("write backends: {}", e))?;
     let revnats = write_service_revnats(pin_path, &revnat_entries)
         .map_err(|e| format!("write revnats: {}", e))?;
+    if !maglev_entries.is_empty() {
+        write_maglev_table(pin_path, &maglev_entries)
+            .map_err(|e| format!("write maglev: {}", e))?;
+    }
 
     Ok((frontends, backends, revnats))
 }

@@ -10,10 +10,13 @@ use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_s
 
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
-    SvcFrontendValue, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT, SVC_BACKEND_FLAG_LOCAL,
-    SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_RANDOM,
+    SvcFrontendValue, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT,
+    MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY,
+    SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
 };
-use crate::maps::{SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_REVNAT_MAP};
+use crate::maps::{
+    SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_MAGLEV_MAP, SVC_REVNAT_MAP,
+};
 use crate::parser::PacketInfo;
 use crate::PipelineCtx;
 
@@ -320,6 +323,70 @@ unsafe fn svc_snat_v6(
 // ---------------------------------------------------------------------------
 // Phase entry points — called from TC pipeline in lib.rs
 // ---------------------------------------------------------------------------
+// 5-tuple hash for Maglev (#[inline(always)])
+// ---------------------------------------------------------------------------
+
+#[inline(always)]
+fn hash_5tuple_v4(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, proto: u8) -> u32 {
+    // Simple xor-rotate hash, sufficient for Maglev table distribution.
+    let mut h: u32 = 0x9e37_79b9; // golden ratio seed
+    h = h.wrapping_add(src_ip);
+    h ^= h.rotate_left(13);
+    h = h.wrapping_add(dst_ip);
+    h ^= h.rotate_left(7);
+    h = h.wrapping_add((src_port as u32) << 16 | dst_port as u32);
+    h ^= h.rotate_left(17);
+    h = h.wrapping_add(proto as u32);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h
+}
+
+#[inline(always)]
+fn hash_5tuple_v6(src_ip: [u8; 16], dst_ip: [u8; 16], src_port: u16, dst_port: u16, proto: u8) -> u32 {
+    let mut h: u32 = 0x9e37_79b9;
+    let mut i = 0usize;
+    while i < 16 {
+        let w = u32::from_be_bytes([src_ip[i], src_ip[i+1], src_ip[i+2], src_ip[i+3]]);
+        h = h.wrapping_add(w);
+        h ^= h.rotate_left(13);
+        i += 4;
+    }
+    i = 0;
+    while i < 16 {
+        let w = u32::from_be_bytes([dst_ip[i], dst_ip[i+1], dst_ip[i+2], dst_ip[i+3]]);
+        h = h.wrapping_add(w);
+        h ^= h.rotate_left(7);
+        i += 4;
+    }
+    h = h.wrapping_add((src_port as u32) << 16 | dst_port as u32);
+    h ^= h.rotate_left(17);
+    h = h.wrapping_add(proto as u32);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 13;
+    h
+}
+
+/// Maglev table lookup: hash → table_index → backend_slot.
+#[inline(always)]
+unsafe fn maglev_select(
+    tap_id: u32,
+    service_id: u32,
+    hash: u32,
+) -> Option<u16> {
+    let table_index = (hash % MAGLEV_TABLE_SIZE) as u16;
+    let key = SvcMaglevKey {
+        tap_id,
+        service_id,
+        table_index,
+        pad: [0; 2],
+    };
+    SVC_MAGLEV_MAP.get(&key).map(|entry| entry.backend_slot)
+}
+
+// ---------------------------------------------------------------------------
 // Affinity helpers (#[inline(always)])
 // ---------------------------------------------------------------------------
 
@@ -373,21 +440,21 @@ pub unsafe fn phase_lb_ingress_v4(
         None => return,
     };
 
-    if frontend.backend_count == 0 || frontend.lb_algo != SVC_LB_ALGO_RANDOM {
+    if frontend.backend_count == 0 {
         return;
     }
 
     let has_affinity = (frontend.flags & SVC_FRONTEND_FLAG_HAS_AFFINITY) != 0;
     let client_addr = ipv4_to_v4mapped_raw(info.src_ip);
 
-    // Determine backend slot: affinity hit or random.
+    // Determine backend slot: affinity → maglev/random.
     let slot = if has_affinity {
         match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
             Some(s) if s < frontend.backend_count => s,
-            _ => (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16,
+            _ => select_slot_by_algo(p.tap_id, frontend, info),
         }
     } else {
-        (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16
+        select_slot_by_algo(p.tap_id, frontend, info)
     };
 
     let bkey = SvcBackendKey {
@@ -409,6 +476,29 @@ pub unsafe fn phase_lb_ingress_v4(
     }
 }
 
+/// Select backend slot based on lb_algo: maglev or random. IPv4 variant.
+#[inline(always)]
+unsafe fn select_slot_by_algo(
+    tap_id: u32,
+    frontend: &SvcFrontendValue,
+    info: &PacketInfo,
+) -> u16 {
+    if frontend.lb_algo == SVC_LB_ALGO_MAGLEV {
+        let hash = if info.is_ipv6 {
+            hash_5tuple_v6(info.src_ip_v6, info.dst_ip_v6, info.src_port, info.dst_port, info.proto)
+        } else {
+            hash_5tuple_v4(info.src_ip, info.dst_ip, info.src_port, info.dst_port, info.proto)
+        };
+        if let Some(slot) = maglev_select(tap_id, frontend.service_id, hash) {
+            if slot < frontend.backend_count {
+                return slot;
+            }
+        }
+    }
+    // Fallback: random.
+    (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16
+}
+
 /// TC ingress LB phase for IPv6.
 #[inline(never)]
 pub unsafe fn phase_lb_ingress_v6(
@@ -421,7 +511,7 @@ pub unsafe fn phase_lb_ingress_v6(
         None => return,
     };
 
-    if frontend.backend_count == 0 || frontend.lb_algo != SVC_LB_ALGO_RANDOM {
+    if frontend.backend_count == 0 {
         return;
     }
 
@@ -431,10 +521,10 @@ pub unsafe fn phase_lb_ingress_v6(
     let slot = if has_affinity {
         match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
             Some(s) if s < frontend.backend_count => s,
-            _ => (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16,
+            _ => select_slot_by_algo(p.tap_id, frontend, info),
         }
     } else {
-        (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16
+        select_slot_by_algo(p.tap_id, frontend, info)
     };
 
     let bkey = SvcBackendKey {

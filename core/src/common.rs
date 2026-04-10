@@ -693,3 +693,25 @@ pub struct SvcAffinityValue {
     pub last_used_ns: u64,
 }
 unsafe impl Pod for SvcAffinityValue {}
+
+// --- Maglev consistent hashing ---
+
+pub const MAGLEV_TABLE_SIZE: u32 = 251;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcMaglevKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub table_index: u16,
+    pub pad: [u8; 2],
+}
+unsafe impl Pod for SvcMaglevKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcMaglevEntry {
+    pub backend_slot: u16,
+    pub pad: [u8; 2],
+}
+unsafe impl Pod for SvcMaglevEntry {}

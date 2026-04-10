@@ -293,3 +293,9 @@ pub static SVC_REVNAT_MAP: HashMap<SvcRevNatKey, SvcRevNatValue> =
 #[map(name = "SVC_AFFINITY_MAP")]
 pub static SVC_AFFINITY_MAP: LruHashMap<SvcAffinityKey, SvcAffinityValue> =
     LruHashMap::with_max_entries(65536, 0);
+
+pub use crate::common::{SvcMaglevEntry, SvcMaglevKey};
+
+#[map(name = "SVC_MAGLEV_MAP")]
+pub static SVC_MAGLEV_MAP: HashMap<SvcMaglevKey, SvcMaglevEntry> =
+    HashMap::with_max_entries(65536, 0);
