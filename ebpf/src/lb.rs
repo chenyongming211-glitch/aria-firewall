@@ -10,12 +10,13 @@ use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_s
 
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
-    SvcFrontendValue, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT,
+    SvcFrontendValue, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT,
     MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY,
     SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
 };
 use crate::maps::{
-    SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_MAGLEV_MAP, SVC_REVNAT_MAP,
+    SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_LB_STATS, SVC_LB_STATS_BUF,
+    SVC_MAGLEV_MAP, SVC_REVNAT_MAP,
 };
 use crate::parser::PacketInfo;
 use crate::PipelineCtx;
@@ -387,6 +388,40 @@ unsafe fn maglev_select(
 }
 
 // ---------------------------------------------------------------------------
+// LB stats update (#[inline(always)])
+// ---------------------------------------------------------------------------
+
+#[inline(always)]
+unsafe fn update_lb_stats(
+    tap_id: u32,
+    service_id: u32,
+    backend_slot: u16,
+    lb_algo: u8,
+    affinity_hit: u8,
+    pkt_len: u32,
+) {
+    let key = SvcLbStatsKey {
+        tap_id,
+        service_id,
+        backend_slot,
+        lb_algo,
+        affinity_hit,
+    };
+    if let Some(val) = SVC_LB_STATS.get_ptr_mut(&key) {
+        (*val).packets += 1;
+        (*val).bytes += pkt_len as u64;
+    } else {
+        let val = match SVC_LB_STATS_BUF.get_ptr_mut(0) {
+            Some(v) => v,
+            None => return,
+        };
+        (*val).packets = 1;
+        (*val).bytes = pkt_len as u64;
+        let _ = SVC_LB_STATS.insert(&key, &*val, 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Affinity helpers (#[inline(always)])
 // ---------------------------------------------------------------------------
 
@@ -448,13 +483,13 @@ pub unsafe fn phase_lb_ingress_v4(
     let client_addr = ipv4_to_v4mapped_raw(info.src_ip);
 
     // Determine backend slot: affinity → maglev/random.
-    let slot = if has_affinity {
+    let (slot, aff_hit) = if has_affinity {
         match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
-            Some(s) if s < frontend.backend_count => s,
-            _ => select_slot_by_algo(p.tap_id, frontend, info),
+            Some(s) if s < frontend.backend_count => (s, 1u8),
+            _ => (select_slot_by_algo(p.tap_id, frontend, info), 0u8),
         }
     } else {
-        select_slot_by_algo(p.tap_id, frontend, info)
+        (select_slot_by_algo(p.tap_id, frontend, info), 0u8)
     };
 
     let bkey = SvcBackendKey {
@@ -470,6 +505,7 @@ pub unsafe fn phase_lb_ingress_v4(
 
     if svc_dnat_v4(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        update_lb_stats(p.tap_id, frontend.service_id, slot, frontend.lb_algo, aff_hit, p.pkt_len);
         if has_affinity {
             affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
         }
@@ -518,13 +554,13 @@ pub unsafe fn phase_lb_ingress_v6(
     let has_affinity = (frontend.flags & SVC_FRONTEND_FLAG_HAS_AFFINITY) != 0;
     let client_addr = info.src_ip_v6;
 
-    let slot = if has_affinity {
+    let (slot, aff_hit) = if has_affinity {
         match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
-            Some(s) if s < frontend.backend_count => s,
-            _ => select_slot_by_algo(p.tap_id, frontend, info),
+            Some(s) if s < frontend.backend_count => (s, 1u8),
+            _ => (select_slot_by_algo(p.tap_id, frontend, info), 0u8),
         }
     } else {
-        select_slot_by_algo(p.tap_id, frontend, info)
+        (select_slot_by_algo(p.tap_id, frontend, info), 0u8)
     };
 
     let bkey = SvcBackendKey {
@@ -540,6 +576,7 @@ pub unsafe fn phase_lb_ingress_v6(
 
     if svc_dnat_v6(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        update_lb_stats(p.tap_id, frontend.service_id, slot, frontend.lb_algo, aff_hit, p.pkt_len);
         if has_affinity {
             affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
         }

@@ -299,3 +299,13 @@ pub use crate::common::{SvcMaglevEntry, SvcMaglevKey};
 #[map(name = "SVC_MAGLEV_MAP")]
 pub static SVC_MAGLEV_MAP: HashMap<SvcMaglevKey, SvcMaglevEntry> =
     HashMap::with_max_entries(65536, 0);
+
+pub use crate::common::{SvcLbStatsKey, SvcLbStatsValue};
+
+#[map(name = "SVC_LB_STATS")]
+pub static SVC_LB_STATS: PerCpuHashMap<SvcLbStatsKey, SvcLbStatsValue> =
+    PerCpuHashMap::with_max_entries(8192, 0);
+
+#[map(name = "SVC_LB_STATS_BUF")]
+pub static SVC_LB_STATS_BUF: PerCpuArray<SvcLbStatsValue> =
+    PerCpuArray::with_max_entries(1, 0);

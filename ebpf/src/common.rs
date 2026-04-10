@@ -766,3 +766,24 @@ pub struct SvcMaglevEntry {
     pub backend_slot: u16,
     pub pad: [u8; 2],
 }
+
+// --- LB Statistics ---
+
+/// LB stats key: per (tap_id, service_id, backend_slot, lb_algo)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcLbStatsKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub backend_slot: u16,
+    pub lb_algo: u8,
+    pub affinity_hit: u8,
+}
+
+/// LB stats value: hit counts
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcLbStatsValue {
+    pub packets: u64,
+    pub bytes: u64,
+}

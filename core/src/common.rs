@@ -715,3 +715,24 @@ pub struct SvcMaglevEntry {
     pub pad: [u8; 2],
 }
 unsafe impl Pod for SvcMaglevEntry {}
+
+// --- LB Statistics ---
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcLbStatsKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub backend_slot: u16,
+    pub lb_algo: u8,
+    pub affinity_hit: u8,
+}
+unsafe impl Pod for SvcLbStatsKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcLbStatsValue {
+    pub packets: u64,
+    pub bytes: u64,
+}
+unsafe impl Pod for SvcLbStatsValue {}

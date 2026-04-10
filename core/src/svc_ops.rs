@@ -349,3 +349,71 @@ pub fn compute_maglev_table(backends: &[(String, u16)]) -> Vec<u16> {
 
     table
 }
+
+// --- LB Statistics ---
+
+use crate::common::{SvcLbStatsKey, SvcLbStatsValue};
+use aya::maps::PerCpuValues;
+
+const SVC_LB_STATS_MAP_NAME: &str = "SVC_LB_STATS";
+
+#[derive(Debug, Clone)]
+pub struct SvcLbStatsEntry {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub backend_slot: u16,
+    pub lb_algo: u8,
+    pub affinity_hit: bool,
+    pub packets: u64,
+    pub bytes: u64,
+}
+
+fn sum_per_cpu_lb_stats(values: PerCpuValues<SvcLbStatsValue>) -> (u64, u64) {
+    let mut packets = 0u64;
+    let mut bytes = 0u64;
+    for v in values.iter() {
+        packets += v.packets;
+        bytes += v.bytes;
+    }
+    (packets, bytes)
+}
+
+/// Read all LB stats entries, optionally filtered by tap_id.
+pub fn get_lb_stats(
+    pin_path: &str,
+    tap_id: Option<u32>,
+) -> Result<Vec<SvcLbStatsEntry>, String> {
+    let map_path = format!("{}/{}", pin_path, SVC_LB_STATS_MAP_NAME);
+    let map_data = MapData::from_pin(&map_path)
+        .map_err(|e| format!("open {}: {:?}", SVC_LB_STATS_MAP_NAME, e))?;
+    let map = aya::maps::PerCpuHashMap::<_, SvcLbStatsKey, SvcLbStatsValue>::try_from(
+        aya::maps::Map::PerCpuHashMap(map_data),
+    )
+    .map_err(|e| format!("convert {}: {:?}", SVC_LB_STATS_MAP_NAME, e))?;
+
+    let mut entries = Vec::new();
+    for item in map.iter() {
+        let Ok((key, values)) = item else { continue };
+        if let Some(tid) = tap_id {
+            if key.tap_id != tid {
+                continue;
+            }
+        }
+        let (packets, bytes) = sum_per_cpu_lb_stats(values);
+        if packets == 0 {
+            continue;
+        }
+        entries.push(SvcLbStatsEntry {
+            tap_id: key.tap_id,
+            service_id: key.service_id,
+            backend_slot: key.backend_slot,
+            lb_algo: key.lb_algo,
+            affinity_hit: key.affinity_hit != 0,
+            packets,
+            bytes,
+        });
+    }
+
+    entries.sort_by(|a, b| b.packets.cmp(&a.packets));
+    Ok(entries)
+}
