@@ -36,7 +36,7 @@ pub use self::ssl::{
     get_ssl_config, list_ssl, list_ssl_errors, list_ssl_global, list_ssl_http,
     list_ssl_http_global, update_ssl_config,
 };
-pub use self::stats::{stats_flows, stats_groups, stats_overview, stats_qos, stats_rules};
+pub use self::stats::{stats_flows, stats_groups, stats_lb, stats_overview, stats_qos, stats_rules};
 pub use self::system::{list_instances, system_start, system_stop};
 pub use self::tcprt::{
     batch_query_tcprt, filter_tcprt, flush_tcprt, list_tcprt, tcprt_histogram, tcprt_states,

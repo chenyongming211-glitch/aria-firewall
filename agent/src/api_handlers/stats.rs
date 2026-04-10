@@ -249,3 +249,50 @@ pub async fn stats_groups(
         Err(e) => Err(err_response(e)),
     }
 }
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/{instance}/stats/lb",
+    operation_id = "statsLb",
+    tag = "stats",
+    summary = "LB backend hit statistics",
+    params(
+        ("instance" = String, Path, description = "Managed instance name")
+    ),
+    responses(
+        (status = 200, description = "LB statistics", body = LbStatsResponse),
+        (status = 404, description = "Instance not found", body = aria_api::ApiError),
+        (status = 500, description = "Internal server error", body = aria_api::ApiError)
+    )
+)]
+pub async fn stats_lb(
+    State(cp): State<AppState>,
+    Path(instance): Path<String>,
+) -> impl IntoResponse {
+    match cp.get_lb_stats(&instance).await {
+        Ok(entries) => {
+            let lb_algo_name = |algo: u8| -> String {
+                match algo {
+                    0 => "random".to_string(),
+                    1 => "maglev".to_string(),
+                    2 => "hash_src_ip".to_string(),
+                    _ => format!("algo_{}", algo),
+                }
+            };
+            Ok(Json(aria_api::LbStatsResponse {
+                entries: entries
+                    .into_iter()
+                    .map(|e| aria_api::LbStatsEntry {
+                        service_id: e.service_id,
+                        backend_slot: e.backend_slot,
+                        lb_algo: lb_algo_name(e.lb_algo),
+                        affinity_hit: e.affinity_hit,
+                        packets: e.packets,
+                        bytes: e.bytes,
+                    })
+                    .collect(),
+            }))
+        }
+        Err(e) => Err(err_response(e)),
+    }
+}

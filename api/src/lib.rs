@@ -836,6 +836,23 @@ pub struct GroupStatsResponse {
     pub groups: Vec<GroupStatsEntry>,
 }
 
+// --- LB Statistics ---
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LbStatsEntry {
+    pub service_id: u32,
+    pub backend_slot: u16,
+    pub lb_algo: String,
+    pub affinity_hit: bool,
+    pub packets: u64,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LbStatsResponse {
+    pub entries: Vec<LbStatsEntry>,
+}
+
 // ── Mirror ──
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -127,6 +127,10 @@ pub fn build_router(control_plane: Arc<ControlPlane>) -> Router {
             get(api_handlers::stats_groups),
         )
         .route(
+            "/api/v1/{instance}/stats/lb",
+            get(api_handlers::stats_lb),
+        )
+        .route(
             "/api/v1/{instance}/stats/mirror",
             get(api_handlers::stats_mirror),
         )

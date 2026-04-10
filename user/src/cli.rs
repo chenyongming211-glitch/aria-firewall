@@ -45,6 +45,8 @@ pub(crate) enum Commands {
         tcprt: bool,
         #[arg(long, help = "Show drop reason statistics")]
         drops: bool,
+        #[arg(long, help = "Show L4 LB backend hit statistics")]
+        lb: bool,
     },
     /// Connection tracking operations
     Conntrack {

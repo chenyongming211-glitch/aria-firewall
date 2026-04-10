@@ -12,8 +12,9 @@ pub(crate) async fn handle(
     mirror: bool,
     tcprt: bool,
     drop_stats: bool,
+    lb: bool,
 ) -> Result<(), String> {
-    if !rules && !flows && !qos && !groups && !mirror && !tcprt && !drop_stats {
+    if !rules && !flows && !qos && !groups && !mirror && !tcprt && !drop_stats && !lb {
         return match client.stats_overview(instance).await {
             Ok(stats) => {
                 println!("=== Firewall Statistics ===");
@@ -243,6 +244,38 @@ pub(crate) async fn handle(
             }
             Err(e) => {
                 eprintln!("Error reading kernel drop stats: {}", e);
+                has_error = true;
+            }
+        }
+    }
+
+    if lb {
+        match client.stats_lb(instance).await {
+            Ok(resp) => {
+                println!("=== LB Statistics ===");
+                if resp.entries.is_empty() {
+                    println!("  No LB statistics collected yet");
+                } else {
+                    println!(
+                        "{:<12} {:<8} {:<10} {:<10} {:>12} {:>12}",
+                        "ServiceID", "Slot", "Algo", "Affinity", "Packets", "Bytes"
+                    );
+                    for e in &resp.entries {
+                        println!(
+                            "{:<12} {:<8} {:<10} {:<10} {:>12} {:>12}",
+                            e.service_id,
+                            e.backend_slot,
+                            e.lb_algo,
+                            if e.affinity_hit { "hit" } else { "miss" },
+                            e.packets,
+                            e.bytes,
+                        );
+                    }
+                }
+                println!();
+            }
+            Err(e) => {
+                eprintln!("Error reading LB stats: {}", e);
                 has_error = true;
             }
         }

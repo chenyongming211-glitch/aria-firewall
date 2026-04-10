@@ -267,6 +267,13 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
+    pub async fn stats_lb(&self, instance: &str) -> Result<LbStatsResponse, String> {
+        let resp = self.client.get(self.url(&format!("/api/v1/{}/stats/lb", instance)))
+            .send().await
+            .map_err(|e| self.connection_error(e))?;
+        self.parse_response(resp).await
+    }
+
     // ── TCP-RT ──
 
     pub async fn list_tcprt(&self, instance: &str, top: usize) -> Result<TcpRtResponse, String> {

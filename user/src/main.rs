@@ -22,7 +22,7 @@ async fn main() {
         Commands::System { action } => commands::system::handle_system_action(&client, has_tap, action).await,
         Commands::Group { action } => commands::group::handle_action(&client, &instance, action).await,
         Commands::Policy { action } => commands::policy::handle_action(&client, &instance, action).await,
-        Commands::Stats { rules, flows, top, qos, groups, mirror, tcprt, drops } => {
+        Commands::Stats { rules, flows, top, qos, groups, mirror, tcprt, drops, lb } => {
             commands::stats::handle(
                 &client,
                 &instance,
@@ -35,6 +35,7 @@ async fn main() {
                 mirror,
                 tcprt,
                 drops,
+                lb,
             )
             .await
         },

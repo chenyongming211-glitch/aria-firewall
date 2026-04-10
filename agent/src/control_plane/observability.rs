@@ -112,6 +112,18 @@ impl ControlPlane {
 
     // ── Drop Reason Profiler ──
 
+    pub async fn get_lb_stats(
+        &self,
+        instance: &str,
+    ) -> Result<Vec<aria_core::svc_ops::SvcLbStatsEntry>, ControlPlaneError> {
+        let inst = self.get_instance(instance).await?;
+        let state = inst.read().await;
+        let pin_path = state.pin_path.as_str();
+        let tap_id = state.tap_id;
+        aria_core::svc_ops::get_lb_stats(pin_path, Some(tap_id))
+            .map_err(ControlPlaneError::KernelError)
+    }
+
     pub async fn get_drop_stats(
         &self,
         instance: &str,
