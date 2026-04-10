@@ -481,6 +481,7 @@ pub const FLAG_CT_HIT: u16 = 1 << 5;
 pub const FLAG_IS_FORWARD: u16 = 1 << 6;
 #[allow(dead_code)]
 pub const FLAG_NEED_IDS: u16 = 1 << 7;
+pub const FLAG_LB_HIT: u16 = 1 << 8;
 
 /// Per-CPU scratch buffer for passing state between pipeline phases.
 /// Lives in PIPE_SCRATCH PerCpuArray — zero stack overhead.

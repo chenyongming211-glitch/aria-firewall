@@ -14,6 +14,7 @@ mod conntrack;
 mod ct_contract;
 mod drops;
 mod kernel_drops;
+mod lb;
 mod maps;
 mod mirror;
 mod parser;
@@ -30,7 +31,7 @@ use common::{
     CT_CONTRACT_HOOK_TC_INGRESS, CT_CONTRACT_REASON_CT_DISABLED, CT_CONTRACT_REASON_CT_MISS,
     DIR_EGRESS, DIR_INGRESS, DROP_QOS_EGRESS, DROP_QOS_INGRESS, FLAG_ACL_ON, FLAG_CT_HIT,
     FLAG_IS_FORWARD, FLAG_MIRROR_ON, FLAG_QOS_ON, FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP,
-    TAP_ID_UNASSIGNED, TRACE_RESULT_DROP_ACL, TRACE_RESULT_DROP_ACL_DEFAULT,
+    IPPROTO_UDP, TAP_ID_UNASSIGNED, TRACE_RESULT_DROP_ACL, TRACE_RESULT_DROP_ACL_DEFAULT,
     TRACE_RESULT_DROP_ACL_PORT, TRACE_RESULT_DROP_QOS, TRACE_RESULT_PASS, TRACE_TC_DROP,
     TRACE_TC_EGRESS, TRACE_TC_INGRESS, TRACE_XDP_DROP, XDP_DROP, XDP_PASS,
 };
@@ -202,6 +203,15 @@ unsafe fn try_tc_egress(
     load_runtime_ctx_tc(ctx, p);
     load_feature_flags_tc(p, info);
 
+    // L4 LB RevNat: rewrite backend src → VIP src (before CT).
+    if info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP {
+        if info.is_ipv6 {
+            lb::phase_lb_egress_v6(ctx, info, p);
+        } else {
+            lb::phase_lb_egress_v4(ctx, info, p);
+        }
+    }
+
     if info.is_ipv6 {
         let ct_key = CtKey6 {
             tap_id: p.tap_id,
@@ -329,6 +339,15 @@ unsafe fn try_tc_ingress(
     p.proto = info.proto;
     load_runtime_ctx_tc(ctx, p);
     load_feature_flags_tc(p, info);
+
+    // L4 LB: frontend lookup → backend select → DNAT (before CT).
+    if info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP {
+        if info.is_ipv6 {
+            lb::phase_lb_ingress_v6(ctx, info, p);
+        } else {
+            lb::phase_lb_ingress_v4(ctx, info, p);
+        }
+    }
 
     if info.is_ipv6 {
         let ct_key = CtKey6 {
