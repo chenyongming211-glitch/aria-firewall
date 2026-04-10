@@ -3640,7 +3640,7 @@ fn materialize_service_maps(
     tap_id: u32,
     service_programs: &[ServiceProgramIr],
 ) -> Result<(usize, usize, usize), String> {
-    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_LB_ALGO_RANDOM};
+    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_LB_ALGO_RANDOM};
     use aria_core::svc_ops::{
         clear_service_maps_for_tap, ipv4_to_v4mapped, write_service_backends,
         write_service_frontends, write_service_revnats, SvcBackendEntry, SvcFrontendEntry,
@@ -3693,7 +3693,12 @@ fn materialize_service_maps(
                 scope: 0,
                 service_id,
                 backend_count,
-                flags: SVC_FRONTEND_FLAG_LOCAL_ONLY,
+                flags: SVC_FRONTEND_FLAG_LOCAL_ONLY
+                    | if program.frontend.session_affinity.as_deref() == Some("client_ip") {
+                        SVC_FRONTEND_FLAG_HAS_AFFINITY
+                    } else {
+                        0
+                    },
                 lb_algo: SVC_LB_ALGO_RANDOM,
             });
         }

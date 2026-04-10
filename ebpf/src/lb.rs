@@ -5,13 +5,15 @@
 
 use aya_ebpf::bindings::__sk_buff;
 use aya_ebpf::helpers::bpf_get_prandom_u32;
+use aya_ebpf::helpers::bpf_ktime_get_ns;
 use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_store_bytes};
 
 use crate::common::{
-    SvcBackendKey, SvcBackendValue, SvcFrontendKey, SvcFrontendValue, SvcRevNatKey,
-    SvcRevNatValue, FLAG_LB_HIT, SVC_BACKEND_FLAG_LOCAL, SVC_LB_ALGO_RANDOM,
+    SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
+    SvcFrontendValue, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT, SVC_BACKEND_FLAG_LOCAL,
+    SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_RANDOM,
 };
-use crate::maps::{SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_REVNAT_MAP};
+use crate::maps::{SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_REVNAT_MAP};
 use crate::parser::PacketInfo;
 use crate::PipelineCtx;
 
@@ -318,6 +320,46 @@ unsafe fn svc_snat_v6(
 // ---------------------------------------------------------------------------
 // Phase entry points — called from TC pipeline in lib.rs
 // ---------------------------------------------------------------------------
+// Affinity helpers (#[inline(always)])
+// ---------------------------------------------------------------------------
+
+#[inline(always)]
+unsafe fn affinity_lookup(
+    tap_id: u32,
+    service_id: u32,
+    client_address: [u8; 16],
+) -> Option<u16> {
+    let key = SvcAffinityKey {
+        tap_id,
+        service_id,
+        client_address,
+    };
+    SVC_AFFINITY_MAP.get(&key).map(|val| val.backend_slot)
+}
+
+#[inline(always)]
+unsafe fn affinity_write(
+    tap_id: u32,
+    service_id: u32,
+    client_address: [u8; 16],
+    backend_slot: u16,
+) {
+    let key = SvcAffinityKey {
+        tap_id,
+        service_id,
+        client_address,
+    };
+    let val = SvcAffinityValue {
+        backend_slot,
+        pad: [0; 2],
+        last_used_ns: bpf_ktime_get_ns(),
+    };
+    let _ = SVC_AFFINITY_MAP.insert(&key, &val, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Phase entry points — called from TC pipeline in lib.rs
+// ---------------------------------------------------------------------------
 
 /// TC ingress LB phase for IPv4.
 #[inline(never)]
@@ -330,12 +372,40 @@ pub unsafe fn phase_lb_ingress_v4(
         Some(f) => f,
         None => return,
     };
-    let backend = match svc_backend_select(p.tap_id, frontend) {
+
+    if frontend.backend_count == 0 || frontend.lb_algo != SVC_LB_ALGO_RANDOM {
+        return;
+    }
+
+    let has_affinity = (frontend.flags & SVC_FRONTEND_FLAG_HAS_AFFINITY) != 0;
+    let client_addr = ipv4_to_v4mapped_raw(info.src_ip);
+
+    // Determine backend slot: affinity hit or random.
+    let slot = if has_affinity {
+        match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
+            Some(s) if s < frontend.backend_count => s,
+            _ => (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16,
+        }
+    } else {
+        (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16
+    };
+
+    let bkey = SvcBackendKey {
+        tap_id: p.tap_id,
+        service_id: frontend.service_id,
+        slot,
+        pad: [0; 2],
+    };
+    let backend = match SVC_BACKEND_MAP.get(&bkey) {
         Some(b) => b,
         None => return,
     };
+
     if svc_dnat_v4(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        if has_affinity {
+            affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
+        }
     }
 }
 
@@ -350,12 +420,39 @@ pub unsafe fn phase_lb_ingress_v6(
         Some(f) => f,
         None => return,
     };
-    let backend = match svc_backend_select(p.tap_id, frontend) {
+
+    if frontend.backend_count == 0 || frontend.lb_algo != SVC_LB_ALGO_RANDOM {
+        return;
+    }
+
+    let has_affinity = (frontend.flags & SVC_FRONTEND_FLAG_HAS_AFFINITY) != 0;
+    let client_addr = info.src_ip_v6;
+
+    let slot = if has_affinity {
+        match affinity_lookup(p.tap_id, frontend.service_id, client_addr) {
+            Some(s) if s < frontend.backend_count => s,
+            _ => (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16,
+        }
+    } else {
+        (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16
+    };
+
+    let bkey = SvcBackendKey {
+        tap_id: p.tap_id,
+        service_id: frontend.service_id,
+        slot,
+        pad: [0; 2],
+    };
+    let backend = match SVC_BACKEND_MAP.get(&bkey) {
         Some(b) => b,
         None => return,
     };
+
     if svc_dnat_v6(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        if has_affinity {
+            affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
+        }
     }
 }
 
