@@ -557,8 +557,8 @@ Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler�
 - `southbound desired-state` 现已开始按节点相关网络投影 `Service / BackendSet / HealthCheck`
 - `aria-agent` 现已开始在 `services` shadow 域中编译 `Service / BackendSet / HealthCheck`，并把结果写入 `compiled state / reconcile plan / runtime inventory / runtime intent`
 - `aria-agent` 当前还会把 `Service / BackendSet / HealthCheck` 进一步收敛成第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达 frontend listener、backend member 以及节点内/跨节点转发方向，但仍然不会进入真实 L4 LB datapath
-- `services` shadow 域当前还会把 runtime map 规划进一步细化为 `service_frontend_catalog / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，作为后续节点内与跨节点转发统一 service datapath 的前置边界
-- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / socket-lb listener / packet-lb listener / backend member / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation；其中 reservation 计数已按 frontend listener 粒度统计，但仍然不会进入真实 L4 LB datapath
+- `services` shadow 域当前还会把 runtime map 规划进一步细化为 `service_frontend_catalog / service_frontend_map / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / backend_member_map / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，作为后续节点内与跨节点转发统一 service datapath 的前置边界
+- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation；其中 reservation 计数已按 frontend listener 粒度统计，但仍然不会进入真实 L4 LB datapath
 - 若节点 `supports_encap = false` 却收到 overlay cross-node forwarding，当前 agent 会显式追加 `overlay_encap_unsupported` degraded reason，而不是把该场景伪装成普通 overlay shadow 计划
 
 当前仍未实现：

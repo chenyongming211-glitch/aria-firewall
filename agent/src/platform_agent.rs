@@ -373,10 +373,14 @@ struct ServiceRuntimeIntentSummary {
     service_count: usize,
     frontend_listener_count: usize,
     #[serde(default)]
+    frontend_runtime_entry_count: usize,
+    #[serde(default)]
     socket_lb_frontend_count: usize,
     #[serde(default)]
     packet_lb_frontend_count: usize,
     backend_member_count: usize,
+    #[serde(default)]
+    backend_runtime_entry_count: usize,
     forwarding_projection_count: usize,
     node_local_service_count: usize,
     cross_node_service_count: usize,
@@ -431,10 +435,14 @@ struct ServiceRuntimeExecutionSummary {
     service_count: usize,
     frontend_listener_count: usize,
     #[serde(default)]
+    frontend_runtime_entry_count: usize,
+    #[serde(default)]
     socket_lb_frontend_count: usize,
     #[serde(default)]
     packet_lb_frontend_count: usize,
     backend_member_count: usize,
+    #[serde(default)]
+    backend_runtime_entry_count: usize,
     forwarding_projection_count: usize,
     node_local_service_count: usize,
     cross_node_service_count: usize,
@@ -2289,6 +2297,10 @@ fn build_runtime_plan(
         .map(total_service_listener_ports)
         .unwrap_or_default();
     let next_service_listener_count = total_service_listener_ports(next_state);
+    let previous_service_frontend_runtime_count = previous_state
+        .map(total_service_frontend_runtime_entries)
+        .unwrap_or_default();
+    let next_service_frontend_runtime_count = total_service_frontend_runtime_entries(next_state);
     let previous_socket_lb_frontend_count = previous_state
         .map(total_socket_lb_frontends)
         .unwrap_or_default();
@@ -2301,6 +2313,10 @@ fn build_runtime_plan(
         .map(total_service_backend_members)
         .unwrap_or_default();
     let next_backend_member_count = total_service_backend_members(next_state);
+    let previous_backend_runtime_count = previous_state
+        .map(total_backend_member_runtime_entries)
+        .unwrap_or_default();
+    let next_backend_runtime_count = total_backend_member_runtime_entries(next_state);
     let previous_forwarding_projection_count = previous_state
         .map(total_service_forwarding_projections)
         .unwrap_or_default();
@@ -2468,6 +2484,13 @@ fn build_runtime_plan(
             object_count: next_service_listener_count,
         });
     }
+    if next_service_frontend_runtime_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "service_frontend_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_service_frontend_runtime_count,
+        });
+    }
     if next_socket_lb_frontend_count > 0 {
         entries.push(MapPlanEntry {
             map_family: "service_socket_lb_projection".to_string(),
@@ -2487,6 +2510,13 @@ fn build_runtime_plan(
             map_family: "backend_member_catalog".to_string(),
             operation: "refresh_shadow".to_string(),
             object_count: next_backend_member_count,
+        });
+    }
+    if next_backend_runtime_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "backend_member_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_backend_runtime_count,
         });
     }
     if next_forwarding_projection_count > 0 {
@@ -2545,6 +2575,14 @@ fn build_runtime_plan(
             object_count: previous_service_listener_count - next_service_listener_count,
         });
     }
+    if previous_service_frontend_runtime_count > next_service_frontend_runtime_count {
+        entries.push(MapPlanEntry {
+            map_family: "service_frontend_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_service_frontend_runtime_count
+                - next_service_frontend_runtime_count,
+        });
+    }
     if previous_socket_lb_frontend_count > next_socket_lb_frontend_count {
         entries.push(MapPlanEntry {
             map_family: "service_socket_lb_projection".to_string(),
@@ -2564,6 +2602,13 @@ fn build_runtime_plan(
             map_family: "backend_member_catalog".to_string(),
             operation: "cleanup_shadow".to_string(),
             object_count: previous_backend_member_count - next_backend_member_count,
+        });
+    }
+    if previous_backend_runtime_count > next_backend_runtime_count {
+        entries.push(MapPlanEntry {
+            map_family: "backend_member_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_backend_runtime_count - next_backend_runtime_count,
         });
     }
     if previous_forwarding_projection_count > next_forwarding_projection_count {
@@ -3026,9 +3071,11 @@ fn build_runtime_intent(
         .map(|intent| ServiceRuntimeIntentSummary {
             service_count: compiled_state.service_programs.len(),
             frontend_listener_count: total_service_listener_ports(compiled_state),
+            frontend_runtime_entry_count: total_service_frontend_runtime_entries(compiled_state),
             socket_lb_frontend_count: total_socket_lb_frontends(compiled_state),
             packet_lb_frontend_count: total_packet_lb_frontends(compiled_state),
             backend_member_count: total_service_backend_members(compiled_state),
+            backend_runtime_entry_count: total_backend_member_runtime_entries(compiled_state),
             forwarding_projection_count: total_service_forwarding_projections(compiled_state),
             node_local_service_count: total_node_local_service_programs(compiled_state),
             cross_node_service_count: total_cross_node_service_programs(compiled_state),
@@ -3175,9 +3222,21 @@ fn build_runtime_execution_summary(
                     .to_string(),
             );
         }
+        if service_intent.frontend_runtime_entry_count > 0 {
+            warnings.push(
+                "service frontend runtime family is still shadow reserved; frontend lookup datapath is not materialized yet"
+                    .to_string(),
+            );
+        }
         if service_intent.packet_lb_frontend_count > 0 {
             warnings.push(
                 "packet lb path is still shadow planned for external or cross-node service listeners; tc packet rewrite path is not materialized yet"
+                    .to_string(),
+            );
+        }
+        if service_intent.backend_runtime_entry_count > 0 {
+            warnings.push(
+                "backend member runtime family is still shadow reserved; backend selection datapath is not materialized yet"
                     .to_string(),
             );
         }
@@ -3238,9 +3297,11 @@ fn build_runtime_execution_summary(
         ServiceRuntimeExecutionSummary {
             service_count: service_intent.service_count,
             frontend_listener_count: service_intent.frontend_listener_count,
+            frontend_runtime_entry_count: service_intent.frontend_runtime_entry_count,
             socket_lb_frontend_count: service_intent.socket_lb_frontend_count,
             packet_lb_frontend_count: service_intent.packet_lb_frontend_count,
             backend_member_count: service_intent.backend_member_count,
+            backend_runtime_entry_count: service_intent.backend_runtime_entry_count,
             forwarding_projection_count: service_intent.forwarding_projection_count,
             node_local_service_count: service_intent.node_local_service_count,
             cross_node_service_count: service_intent.cross_node_service_count,
@@ -3278,6 +3339,10 @@ fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
+fn total_service_frontend_runtime_entries(state: &CompiledNodeState) -> usize {
+    total_service_listener_ports(state)
+}
+
 fn total_socket_lb_frontends(state: &CompiledNodeState) -> usize {
     state
         .service_programs
@@ -3310,6 +3375,10 @@ fn total_service_backend_members(state: &CompiledNodeState) -> usize {
                 .unwrap_or(0)
         })
         .sum()
+}
+
+fn total_backend_member_runtime_entries(state: &CompiledNodeState) -> usize {
+    total_service_backend_members(state)
 }
 
 fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
@@ -3414,9 +3483,11 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         | "backend_set_catalog"
         | "service_catalog"
         | "service_frontend_catalog"
+        | "service_frontend_map"
         | "service_socket_lb_projection"
         | "service_packet_lb_projection"
         | "backend_member_catalog"
+        | "backend_member_map"
         | "service_forwarding_projection"
         | "service_revnat_map"
         | "service_affinity_map"
