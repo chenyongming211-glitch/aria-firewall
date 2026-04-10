@@ -446,11 +446,13 @@ Agent 重启时，恢复流程建议为：
 - agent 当前会把第一版 `RuntimeInventoryDiff` 缓存到 `${state_path}/platform-agent/runtime-inventory-diff.json`
 - agent 当前会把第一版 `RuntimeIntent` 缓存到 `${state_path}/platform-agent/runtime-intent.json`
 - agent 当前会把第一版 `RuntimeExecutionSummary` 缓存到 `${state_path}/platform-agent/runtime-execution-summary.json`
+- agent 当前会把第一版 `SocketSelectionPlan` 缓存到 `${state_path}/platform-agent/socket-selection-plan.json`
 - 第一版编译器已开始把 `Tenant / Network / Port / SecurityGroup / RouteTable / HealthCheck / BackendSet / Service` 下沉为节点局部视图
 - `CompiledNodeState` 已开始输出 `identity / ports / security / routes / services / nat` 六个 domain summary，作为后续按编译域分治的第一阶段骨架；其中 `routes` 域对应 routing 预留位，`services` 域对应 `Service / BackendSet / HealthCheck` 的 shadow 编译域，`nat` 域当前仅保留 `SNAT / DNAT / Floating IP` 的 shadow reserved 接口
 - `CompiledNodeState` 现已开始在 `services` 域内额外保留第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达节点内转发、跨节点转发、frontend listener 和 backend member 的局部视图，但仍不会直接 materialize 到 datapath
 - `RuntimePlan / RuntimeInventory` 现已开始把 `services` 域细化成 `service_frontend_catalog / service_frontend_map / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / backend_member_map / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map` 等 shadow map family，为后续 L4 datapath 的局部更新和 runtime diff 提供更稳定的规划边界
 - `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，作为后续 runtime apply 和 rollout 观察面的前置骨架
+- `SocketSelectionPlan` 现已开始为 internal service listener 生成第一版 node-local socket LB shadow selection 计划，收敛 `lb_policy / session_affinity / forwarding_mode / local-backend-count / remote-backend-count`，用于表达纯 node-local 命中与 cross-node handoff 需求，但仍然不会进入真实 socket datapath
 - `services` 域当前对 `service_revnat_map / service_affinity_map / service_maglev_map` 的 shadow reservation 已开始按 frontend listener 粒度统计，避免多端口 service 的 runtime-family 预算被低估
 - 若节点 `supports_encap = false` 但 `ServiceIR` 仍出现 overlay cross-node forwarding，当前编译器会显式追加 `overlay_encap_unsupported` degraded reason，并把 `services` 域标记为 shadow degraded
 - `RuntimeInventory` 已开始按 `identity / ports / security / routes / services / nat` 汇总 shadow attach/map/domain inventory，作为后续本地 runtime reconcile 的恢复基线

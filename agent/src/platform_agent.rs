@@ -477,6 +477,45 @@ struct RuntimeExecutionSummary {
     shadow_apply_only: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SocketSelectionPlanEntry {
+    service_id: String,
+    service_name: Option<String>,
+    vip: String,
+    protocol: String,
+    service_port: u16,
+    target_port: Option<u16>,
+    lb_policy: String,
+    session_affinity: Option<String>,
+    forwarding_mode: String,
+    local_backend_count: usize,
+    remote_backend_count: usize,
+    handoff_required: bool,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SocketSelectionPlanSummary {
+    listener_count: usize,
+    node_local_listener_count: usize,
+    cross_node_handoff_listener_count: usize,
+    random_listener_count: usize,
+    maglev_listener_count: usize,
+    affinity_listener_count: usize,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SocketSelectionPlan {
+    generation: String,
+    previous_generation: Option<String>,
+    compiled_at: String,
+    observed_at: String,
+    entries: Vec<SocketSelectionPlanEntry>,
+    summary: SocketSelectionPlanSummary,
+    shadow_apply_only: bool,
+}
+
 #[derive(Debug, Clone)]
 struct CompileOutcome {
     compiled_state: CompiledNodeState,
@@ -486,6 +525,7 @@ struct CompileOutcome {
     runtime_inventory_diff: RuntimeInventoryDiff,
     runtime_intent: RuntimeIntent,
     runtime_execution_summary: RuntimeExecutionSummary,
+    socket_selection_plan: SocketSelectionPlan,
     apply_report: ApplyStatusReport,
 }
 
@@ -551,6 +591,7 @@ impl PlatformAgent {
         let mut runtime_inventory_diff = self.state_store.load_runtime_inventory_diff().await;
         let mut runtime_intent = self.state_store.load_runtime_intent().await;
         let mut runtime_execution_summary = self.state_store.load_runtime_execution_summary().await;
+        let mut socket_selection_plan = self.state_store.load_socket_selection_plan().await;
         loop {
             interval.tick().await;
 
@@ -633,6 +674,10 @@ impl PlatformAgent {
                 || runtime_execution_summary
                     .as_ref()
                     .map(|summary| summary.generation.as_str())
+                    != Some(desired_generation.as_str())
+                || socket_selection_plan
+                    .as_ref()
+                    .map(|plan| plan.generation.as_str())
                     != Some(desired_generation.as_str());
 
             let mut last_reconcile_at = compiled_state
@@ -779,6 +824,25 @@ impl PlatformAgent {
                         changed_domains = outcome.runtime_execution_summary.changed_domains.len(),
                         domain_summaries = outcome.runtime_execution_summary.domain_summaries.len(),
                         "persisted shadow runtime execution summary"
+                    );
+                }
+
+                if let Err(error) = self
+                    .state_store
+                    .save_socket_selection_plan(&outcome.socket_selection_plan)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist socket selection plan");
+                    heartbeat_error = Some(error);
+                } else {
+                    socket_selection_plan = Some(outcome.socket_selection_plan.clone());
+                    info!(
+                        generation = %outcome.socket_selection_plan.generation,
+                        listeners = outcome.socket_selection_plan.summary.listener_count,
+                        cross_node_handoffs = outcome.socket_selection_plan
+                            .summary
+                            .cross_node_handoff_listener_count,
+                        "persisted shadow socket selection plan"
                     );
                 }
 
@@ -1049,6 +1113,15 @@ impl LocalPlatformStateStore {
             .await
     }
 
+    async fn load_socket_selection_plan(&self) -> Option<SocketSelectionPlan> {
+        self.load_json(self.socket_selection_plan_path()).await
+    }
+
+    async fn save_socket_selection_plan(&self, plan: &SocketSelectionPlan) -> Result<(), String> {
+        self.save_json(self.socket_selection_plan_path(), plan)
+            .await
+    }
+
     fn desired_state_path(&self) -> PathBuf {
         self.root.join("desired-state-cache.json")
     }
@@ -1079,6 +1152,10 @@ impl LocalPlatformStateStore {
 
     fn runtime_execution_summary_path(&self) -> PathBuf {
         self.root.join("runtime-execution-summary.json")
+    }
+
+    fn socket_selection_plan_path(&self) -> PathBuf {
+        self.root.join("socket-selection-plan.json")
     }
 
     async fn load_json<T>(&self, path: PathBuf) -> Option<T>
@@ -1674,6 +1751,8 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     );
     let runtime_execution_summary =
         build_runtime_execution_summary(&compiled_state, &reconcile_plan, &runtime_intent);
+    let socket_selection_plan =
+        build_socket_selection_plan(context.previous_compiled_state, &compiled_state);
     let domain_statuses = runtime_execution_summary
         .domain_summaries
         .iter()
@@ -1703,6 +1782,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         runtime_inventory_diff,
         runtime_intent,
         runtime_execution_summary,
+        socket_selection_plan,
         apply_report: ApplyStatusReport {
             generation: context.desired.generation.clone(),
             status,
@@ -3327,6 +3407,95 @@ fn build_runtime_execution_summary(
         changed_domains: runtime_intent.changed_domains.clone(),
         domain_summaries,
         service_execution,
+        shadow_apply_only: true,
+    }
+}
+
+fn build_socket_selection_plan(
+    previous_state: Option<&CompiledNodeState>,
+    compiled_state: &CompiledNodeState,
+) -> SocketSelectionPlan {
+    let entries =
+        compiled_state
+            .service_programs
+            .iter()
+            .filter(|program| program.frontend.exposure_type == "internal")
+            .flat_map(|program| {
+                let local_backend_count = program
+                    .backend_set
+                    .as_ref()
+                    .map(|backend_set| backend_set.local_backend_count)
+                    .unwrap_or(0);
+                let remote_backend_count = program
+                    .backend_set
+                    .as_ref()
+                    .map(|backend_set| backend_set.remote_backend_count)
+                    .unwrap_or(0);
+                program.frontend.listener_ports.iter().map(move |listener| {
+                    SocketSelectionPlanEntry {
+                        service_id: program.service_id.clone(),
+                        service_name: None,
+                        vip: program.frontend.vip.clone(),
+                        protocol: program.frontend.protocol.clone(),
+                        service_port: listener.service_port,
+                        target_port: listener.target_port,
+                        lb_policy: program.frontend.lb_policy.clone(),
+                        session_affinity: program.frontend.session_affinity.clone(),
+                        forwarding_mode: program.frontend.forwarding_mode.clone(),
+                        local_backend_count,
+                        remote_backend_count,
+                        handoff_required: remote_backend_count > 0,
+                        shadow_apply_only: true,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
+    let listener_count = entries.len();
+    let node_local_listener_count = entries
+        .iter()
+        .filter(|entry| !entry.handoff_required)
+        .count();
+    let cross_node_handoff_listener_count = entries
+        .iter()
+        .filter(|entry| entry.handoff_required)
+        .count();
+    let random_listener_count = entries
+        .iter()
+        .filter(|entry| entry.lb_policy == "round_robin" || entry.lb_policy == "random")
+        .count();
+    let maglev_listener_count = entries
+        .iter()
+        .filter(|entry| entry.lb_policy == "maglev")
+        .count();
+    let affinity_listener_count = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .session_affinity
+                .as_deref()
+                .map(|value| value != "none")
+                .unwrap_or(false)
+        })
+        .count();
+
+    SocketSelectionPlan {
+        generation: compiled_state.generation.clone(),
+        previous_generation: previous_state
+            .map(|state| state.generation.clone())
+            .filter(|generation| generation != &compiled_state.generation),
+        compiled_at: compiled_state.compiled_at.clone(),
+        observed_at: unix_timestamp_string(),
+        entries,
+        summary: SocketSelectionPlanSummary {
+            listener_count,
+            node_local_listener_count,
+            cross_node_handoff_listener_count,
+            random_listener_count,
+            maglev_listener_count,
+            affinity_listener_count,
+            shadow_apply_only: true,
+        },
         shadow_apply_only: true,
     }
 }
