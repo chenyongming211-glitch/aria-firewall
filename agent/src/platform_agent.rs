@@ -20,6 +20,7 @@ pub struct PlatformAgentConfig {
     pub poll_interval: Duration,
     pub register_interval: Duration,
     pub state_dir: PathBuf,
+    pub pin_path: String,
     pub trace_backend: String,
     pub kernel_version: Option<String>,
     pub max_port_policies: u32,
@@ -880,6 +881,28 @@ impl PlatformAgent {
                             .cross_node_handoff_listener_count,
                         "persisted shadow socket selection plan"
                     );
+                }
+
+                // Materialize service maps into pinned eBPF maps.
+                if !outcome.compiled_state.service_programs.is_empty() {
+                    // Use tap_id 1 for the shared managed runtime.
+                    let tap_id = 1u32;
+                    match materialize_service_maps(
+                        &self.config.pin_path,
+                        tap_id,
+                        &outcome.compiled_state.service_programs,
+                    ) {
+                        Ok((frontends, backends, revnats)) => {
+                            info!(
+                                frontends, backends, revnats,
+                                "materialized service maps into eBPF datapath"
+                            );
+                        }
+                        Err(error) => {
+                            warn!(error = %error, "failed to materialize service maps");
+                            heartbeat_error = Some(error);
+                        }
+                    }
                 }
 
                 if let Err(error) = self
@@ -3584,6 +3607,120 @@ fn build_socket_selection_plan(
         },
         shadow_apply_only: true,
     }
+}
+
+/// Materialize compiled service state into pinned eBPF maps.
+/// Returns (frontends_written, backends_written, revnats_written) on success.
+fn materialize_service_maps(
+    pin_path: &str,
+    tap_id: u32,
+    service_programs: &[ServiceProgramIr],
+) -> Result<(usize, usize, usize), String> {
+    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_LB_ALGO_RANDOM};
+    use aria_core::svc_ops::{
+        clear_service_maps_for_tap, ipv4_to_v4mapped, write_service_backends,
+        write_service_frontends, write_service_revnats, SvcBackendEntry, SvcFrontendEntry,
+        SvcRevNatEntry,
+    };
+
+    clear_service_maps_for_tap(pin_path, tap_id)
+        .map_err(|e| format!("clear service maps: {}", e))?;
+
+    let mut frontend_entries = Vec::new();
+    let mut backend_entries = Vec::new();
+    let mut revnat_entries = Vec::new();
+    let mut service_id_counter: u32 = 1;
+
+    for program in service_programs {
+        let service_id = service_id_counter;
+        service_id_counter += 1;
+
+        let local_backends: Vec<&BackendMemberIr> = program
+            .backend_set
+            .as_ref()
+            .map(|bs| {
+                bs.backends
+                    .iter()
+                    .filter(|b| b.admin_state != "disabled" && b.resolved_locality == "local")
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let backend_count = local_backends.len() as u16;
+
+        let vip_addr = match program.frontend.vip.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(v4)) => ipv4_to_v4mapped(&v4),
+            Ok(std::net::IpAddr::V6(v6)) => v6.octets(),
+            Err(_) => continue,
+        };
+
+        let proto = match program.frontend.protocol.as_str() {
+            "tcp" => 6u8,
+            "udp" => 17u8,
+            _ => continue,
+        };
+
+        for listener in &program.frontend.listener_ports {
+            frontend_entries.push(SvcFrontendEntry {
+                tap_id,
+                address: vip_addr,
+                port: listener.service_port,
+                proto,
+                scope: 0,
+                service_id,
+                backend_count,
+                flags: SVC_FRONTEND_FLAG_LOCAL_ONLY,
+                lb_algo: SVC_LB_ALGO_RANDOM,
+            });
+        }
+
+        let service_port = program
+            .frontend
+            .listener_ports
+            .first()
+            .map(|l| l.service_port)
+            .unwrap_or(0);
+
+        for (slot, backend) in local_backends.iter().enumerate() {
+            let backend_addr = match backend
+                .resolved_ip_hint
+                .as_deref()
+                .and_then(|ip| ip.parse::<std::net::IpAddr>().ok())
+            {
+                Some(std::net::IpAddr::V4(v4)) => ipv4_to_v4mapped(&v4),
+                Some(std::net::IpAddr::V6(v6)) => v6.octets(),
+                None => continue,
+            };
+
+            backend_entries.push(SvcBackendEntry {
+                tap_id,
+                service_id,
+                slot: slot as u16,
+                address: backend_addr,
+                port: backend.service_port,
+                weight: backend.weight,
+                flags: SVC_BACKEND_FLAG_LOCAL,
+            });
+
+            revnat_entries.push(SvcRevNatEntry {
+                tap_id,
+                backend_address: backend_addr,
+                backend_port: backend.service_port,
+                proto,
+                service_address: vip_addr,
+                service_port,
+            });
+        }
+    }
+
+    let frontends = write_service_frontends(pin_path, &frontend_entries)
+        .map_err(|e| format!("write frontends: {}", e))?;
+    let backends = write_service_backends(pin_path, &backend_entries)
+        .map_err(|e| format!("write backends: {}", e))?;
+    let revnats = write_service_revnats(pin_path, &revnat_entries)
+        .map_err(|e| format!("write revnats: {}", e))?;
+
+    Ok((frontends, backends, revnats))
 }
 
 fn build_backend_choice_shape(

@@ -482,6 +482,7 @@ async fn main() {
                         .max(config.southbound_poll_interval_secs.max(5)),
                 ),
                 state_dir: PathBuf::from(&config.state_path),
+                pin_path: format!("{}/{}", config.pin_path, crate::control_plane::MANAGED_SHARED_PIN_NAMESPACE),
                 trace_backend: resolved_ebpf.trace_backend.as_str().to_string(),
                 kernel_version: resolved_ebpf.kernel_version.clone(),
                 max_port_policies: config.max_port_policies,
