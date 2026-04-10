@@ -11,4 +11,5 @@ pub mod drop_ops;
 pub mod kernel_drop_ops;
 pub mod trace_ops;
 pub mod ssl_ops;
+pub mod svc_ops;
 pub mod wal;
