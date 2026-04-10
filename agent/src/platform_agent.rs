@@ -487,6 +487,8 @@ struct SocketSelectionPlanEntry {
     target_port: Option<u16>,
     lb_policy: String,
     session_affinity: Option<String>,
+    normalized_lb_strategy: String,
+    normalized_affinity_strategy: String,
     forwarding_mode: String,
     local_backend_count: usize,
     remote_backend_count: usize,
@@ -501,7 +503,12 @@ struct SocketSelectionPlanSummary {
     cross_node_handoff_listener_count: usize,
     random_listener_count: usize,
     maglev_listener_count: usize,
+    deferred_hash_listener_count: usize,
+    unsupported_policy_listener_count: usize,
     affinity_listener_count: usize,
+    client_ip_affinity_listener_count: usize,
+    deferred_affinity_listener_count: usize,
+    unsupported_affinity_listener_count: usize,
     shadow_apply_only: bool,
 }
 
@@ -3415,41 +3422,47 @@ fn build_socket_selection_plan(
     previous_state: Option<&CompiledNodeState>,
     compiled_state: &CompiledNodeState,
 ) -> SocketSelectionPlan {
-    let entries =
-        compiled_state
-            .service_programs
-            .iter()
-            .filter(|program| program.frontend.exposure_type == "internal")
-            .flat_map(|program| {
-                let local_backend_count = program
-                    .backend_set
-                    .as_ref()
-                    .map(|backend_set| backend_set.local_backend_count)
-                    .unwrap_or(0);
-                let remote_backend_count = program
-                    .backend_set
-                    .as_ref()
-                    .map(|backend_set| backend_set.remote_backend_count)
-                    .unwrap_or(0);
-                program.frontend.listener_ports.iter().map(move |listener| {
-                    SocketSelectionPlanEntry {
-                        service_id: program.service_id.clone(),
-                        service_name: None,
-                        vip: program.frontend.vip.clone(),
-                        protocol: program.frontend.protocol.clone(),
-                        service_port: listener.service_port,
-                        target_port: listener.target_port,
-                        lb_policy: program.frontend.lb_policy.clone(),
-                        session_affinity: program.frontend.session_affinity.clone(),
-                        forwarding_mode: program.frontend.forwarding_mode.clone(),
-                        local_backend_count,
-                        remote_backend_count,
-                        handoff_required: remote_backend_count > 0,
-                        shadow_apply_only: true,
-                    }
-                })
+    let entries = compiled_state
+        .service_programs
+        .iter()
+        .filter(|program| program.frontend.exposure_type == "internal")
+        .flat_map(|program| {
+            let local_backend_count = program
+                .backend_set
+                .as_ref()
+                .map(|backend_set| backend_set.local_backend_count)
+                .unwrap_or(0);
+            let remote_backend_count = program
+                .backend_set
+                .as_ref()
+                .map(|backend_set| backend_set.remote_backend_count)
+                .unwrap_or(0);
+            program.frontend.listener_ports.iter().map(move |listener| {
+                let normalized_lb_strategy =
+                    normalize_socket_lb_strategy(&program.frontend.lb_policy);
+                let normalized_affinity_strategy = normalize_socket_affinity_strategy(
+                    program.frontend.session_affinity.as_deref(),
+                );
+                SocketSelectionPlanEntry {
+                    service_id: program.service_id.clone(),
+                    service_name: None,
+                    vip: program.frontend.vip.clone(),
+                    protocol: program.frontend.protocol.clone(),
+                    service_port: listener.service_port,
+                    target_port: listener.target_port,
+                    lb_policy: program.frontend.lb_policy.clone(),
+                    session_affinity: program.frontend.session_affinity.clone(),
+                    normalized_lb_strategy,
+                    normalized_affinity_strategy,
+                    forwarding_mode: program.frontend.forwarding_mode.clone(),
+                    local_backend_count,
+                    remote_backend_count,
+                    handoff_required: remote_backend_count > 0,
+                    shadow_apply_only: true,
+                }
             })
-            .collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     let listener_count = entries.len();
     let node_local_listener_count = entries
@@ -3462,21 +3475,35 @@ fn build_socket_selection_plan(
         .count();
     let random_listener_count = entries
         .iter()
-        .filter(|entry| entry.lb_policy == "round_robin" || entry.lb_policy == "random")
+        .filter(|entry| entry.normalized_lb_strategy == "random")
         .count();
     let maglev_listener_count = entries
         .iter()
-        .filter(|entry| entry.lb_policy == "maglev")
+        .filter(|entry| entry.normalized_lb_strategy == "maglev")
+        .count();
+    let deferred_hash_listener_count = entries
+        .iter()
+        .filter(|entry| entry.normalized_lb_strategy == "deferred_hash")
+        .count();
+    let unsupported_policy_listener_count = entries
+        .iter()
+        .filter(|entry| entry.normalized_lb_strategy == "unsupported")
         .count();
     let affinity_listener_count = entries
         .iter()
-        .filter(|entry| {
-            entry
-                .session_affinity
-                .as_deref()
-                .map(|value| value != "none")
-                .unwrap_or(false)
-        })
+        .filter(|entry| entry.normalized_affinity_strategy != "none")
+        .count();
+    let client_ip_affinity_listener_count = entries
+        .iter()
+        .filter(|entry| entry.normalized_affinity_strategy == "client_ip")
+        .count();
+    let deferred_affinity_listener_count = entries
+        .iter()
+        .filter(|entry| entry.normalized_affinity_strategy == "deferred_5tuple")
+        .count();
+    let unsupported_affinity_listener_count = entries
+        .iter()
+        .filter(|entry| entry.normalized_affinity_strategy == "unsupported")
         .count();
 
     SocketSelectionPlan {
@@ -3493,10 +3520,33 @@ fn build_socket_selection_plan(
             cross_node_handoff_listener_count,
             random_listener_count,
             maglev_listener_count,
+            deferred_hash_listener_count,
+            unsupported_policy_listener_count,
             affinity_listener_count,
+            client_ip_affinity_listener_count,
+            deferred_affinity_listener_count,
+            unsupported_affinity_listener_count,
             shadow_apply_only: true,
         },
         shadow_apply_only: true,
+    }
+}
+
+fn normalize_socket_lb_strategy(lb_policy: &str) -> String {
+    match lb_policy {
+        "round_robin" | "random" => "random".to_string(),
+        "maglev" => "maglev".to_string(),
+        "hash_5tuple" | "hash_src_ip" => "deferred_hash".to_string(),
+        _ => "unsupported".to_string(),
+    }
+}
+
+fn normalize_socket_affinity_strategy(session_affinity: Option<&str>) -> String {
+    match session_affinity {
+        None | Some("none") => "none".to_string(),
+        Some("client_ip") => "client_ip".to_string(),
+        Some("5tuple") => "deferred_5tuple".to_string(),
+        _ => "unsupported".to_string(),
     }
 }
 

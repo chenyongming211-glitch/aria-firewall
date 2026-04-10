@@ -59,7 +59,7 @@
 - agent 的 `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow 骨架，用于承载节点内转发与跨节点转发的服务局部视图，但仍然只保存在本地影子状态中，不会直接下沉到 datapath。
 - `services` 域的 `RuntimePlan / RuntimeInventory` 现已开始把 shadow map family 细化为 `service_frontend_catalog / service_frontend_map / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / backend_member_map / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，为后续节点内与跨节点 L4 转发实现预留更稳定的 runtime 规划边界。
 - agent 本地的 `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，但仍然只用于 shadow 执行视图。
-- agent 本地现已开始单独维护 `socket-selection-plan.json`，按 internal service listener 生成第一版 node-local socket LB shadow selection 计划，并显式区分纯 node-local 命中与需要 cross-node handoff 的 listener，但仍然不会进入真实 socket datapath。
+- agent 本地现已开始单独维护 `socket-selection-plan.json`，按 internal service listener 生成第一版 node-local socket LB shadow selection 计划，并显式区分纯 node-local 命中与需要 cross-node handoff 的 listener；同时会把 `lb_policy / session_affinity` 规范化为稳定的 shadow 选择策略，区分当前可支持、延后实现和不支持的语义，但仍然不会进入真实 socket datapath。
 - `apply-status` 现在也开始携带按 `identity / ports / security / routes / services / nat` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - `apply-status.domain_statuses` 当前已从“纯 compile 摘要”推进为“shadow execute 摘要”，用于承载 `Service / BackendSet / HealthCheck` 等域的本地执行意图结果。
 - 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
