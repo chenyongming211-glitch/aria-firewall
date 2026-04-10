@@ -121,10 +121,12 @@ unsafe fn svc_dnat_v4(
         return false;
     }
 
-    let ip_hdr_off = info.l3_offset as usize;
-    let l4_hdr_off = info.l4_offset as usize;
+    // Compute header offsets from TcContext.
+    // ETH_HLEN = 14, VLAN adds 4 bytes.
+    let ip_hdr_off: usize = if info.vlan_id != 0 { 18 } else { 14 };
+    let ihl: usize = 20; // Minimum IPv4 header; sufficient for dst IP at offset 16.
+    let l4_hdr_off: usize = ip_hdr_off + ihl;
 
-    // Extract new IPv4 dst from v4-mapped-v6 backend address bytes [12..16].
     let new_ip = u32::from_be_bytes([
         backend.address[12],
         backend.address[13],
@@ -155,10 +157,9 @@ unsafe fn svc_dnat_v4(
     let _ = ctx.l3_csum_replace(ip_hdr_off + 10, old_ip as u64, new_ip as u64, 4);
 
     // Incremental L4 checksum update for dst IP + dst port change.
-    let _ = ctx.l4_csum_replace(l4_hdr_off + if info.proto == 6 { 16 } else { 6 },
-        old_ip as u64, new_ip as u64, 0x01 | 4);
-    let _ = ctx.l4_csum_replace(l4_hdr_off + if info.proto == 6 { 16 } else { 6 },
-        old_port as u64, new_port as u64, 0x01 | 2);
+    let csum_off = l4_hdr_off + if info.proto == 6 { 16 } else { 6 };
+    let _ = ctx.l4_csum_replace(csum_off, old_ip as u64, new_ip as u64, 0x01 | 4);
+    let _ = ctx.l4_csum_replace(csum_off, old_port as u64, new_port as u64, 0x01 | 2);
 
     true
 }
@@ -174,8 +175,8 @@ unsafe fn svc_dnat_v6(
         return false;
     }
 
-    let ip_hdr_off = info.l3_offset as usize;
-    let l4_hdr_off = info.l4_offset as usize;
+    let ip_hdr_off: usize = if info.vlan_id != 0 { 18 } else { 14 };
+    let l4_hdr_off: usize = ip_hdr_off + 40;
 
     // Rewrite IPv6 dst (offset 24 in IPv6 header, 16 bytes).
     if ctx.store(ip_hdr_off + 24, &backend.address, 0).is_err() {
@@ -218,8 +219,8 @@ unsafe fn svc_snat_v4(
     info: &PacketInfo,
     revnat: &SvcRevNatValue,
 ) -> bool {
-    let ip_hdr_off = info.l3_offset as usize;
-    let l4_hdr_off = info.l4_offset as usize;
+    let ip_hdr_off: usize = if info.vlan_id != 0 { 18 } else { 14 };
+    let l4_hdr_off: usize = ip_hdr_off + 20;
 
     let new_ip = u32::from_be_bytes([
         revnat.service_address[12],
