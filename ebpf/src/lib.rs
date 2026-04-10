@@ -205,10 +205,11 @@ unsafe fn try_tc_egress(
 
     // L4 LB RevNat: rewrite backend src → VIP src (before CT).
     if info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP {
+        let skb = ctx.as_ptr() as *mut __sk_buff;
         if info.is_ipv6 {
-            lb::phase_lb_egress_v6(ctx, info, p);
+            lb::phase_lb_egress_v6(skb, info, p);
         } else {
-            lb::phase_lb_egress_v4(ctx, info, p);
+            lb::phase_lb_egress_v4(skb, info, p);
         }
     }
 
@@ -342,10 +343,11 @@ unsafe fn try_tc_ingress(
 
     // L4 LB: frontend lookup → backend select → DNAT (before CT).
     if info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP {
+        let skb = ctx.as_ptr() as *mut __sk_buff;
         if info.is_ipv6 {
-            lb::phase_lb_ingress_v6(ctx, info, p);
+            lb::phase_lb_ingress_v6(skb, info, p);
         } else {
-            lb::phase_lb_ingress_v4(ctx, info, p);
+            lb::phase_lb_ingress_v4(skb, info, p);
         }
     }
 
