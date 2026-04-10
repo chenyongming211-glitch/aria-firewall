@@ -270,3 +270,26 @@ pub static SSL_ERROR_SEQ: PerCpuArray<u64> = PerCpuArray::with_max_entries(1, 0)
 /// SSL_write scratch: store ssl_ptr in entry, read in return
 #[map(name = "SSL_WRITE_SCRATCH")]
 pub static SSL_WRITE_SCRATCH: HashMap<u64, SslWriteScratch> = HashMap::with_max_entries(4096, 0);
+
+// --- Service LB maps ---
+
+pub use crate::common::{
+    SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
+    SvcFrontendValue, SvcRevNatKey, SvcRevNatValue,
+};
+
+#[map(name = "SVC_FRONTEND_MAP")]
+pub static SVC_FRONTEND_MAP: HashMap<SvcFrontendKey, SvcFrontendValue> =
+    HashMap::with_max_entries(4096, 0);
+
+#[map(name = "SVC_BACKEND_MAP")]
+pub static SVC_BACKEND_MAP: HashMap<SvcBackendKey, SvcBackendValue> =
+    HashMap::with_max_entries(16384, 0);
+
+#[map(name = "SVC_REVNAT_MAP")]
+pub static SVC_REVNAT_MAP: HashMap<SvcRevNatKey, SvcRevNatValue> =
+    HashMap::with_max_entries(4096, 0);
+
+#[map(name = "SVC_AFFINITY_MAP")]
+pub static SVC_AFFINITY_MAP: LruHashMap<SvcAffinityKey, SvcAffinityValue> =
+    LruHashMap::with_max_entries(65536, 0);

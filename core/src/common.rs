@@ -596,3 +596,100 @@ pub const CT_NEW: u8 = 1;
 pub const CT_ESTABLISHED: u8 = 2;
 pub const DIR_INGRESS: u8 = 0;
 pub const DIR_EGRESS: u8 = 1;
+
+// --- Service LB (L4 Load Balancer) ---
+
+pub const SVC_LB_ALGO_RANDOM: u8 = 0;
+pub const SVC_LB_ALGO_MAGLEV: u8 = 1;
+pub const SVC_LB_ALGO_HASH_SRC_IP: u8 = 2;
+
+pub const SVC_FRONTEND_FLAG_HAS_AFFINITY: u16 = 1 << 0;
+pub const SVC_FRONTEND_FLAG_USE_MAGLEV: u16 = 1 << 1;
+pub const SVC_FRONTEND_FLAG_LOCAL_ONLY: u16 = 1 << 2;
+pub const SVC_FRONTEND_FLAG_HAS_REMOTE: u16 = 1 << 3;
+
+pub const SVC_BACKEND_FLAG_LOCAL: u16 = 1 << 0;
+pub const SVC_BACKEND_FLAG_REMOTE: u16 = 1 << 1;
+pub const SVC_BACKEND_FLAG_DISABLED: u16 = 1 << 2;
+pub const SVC_BACKEND_FLAG_DRAINING: u16 = 1 << 3;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcFrontendKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+    pub port: u16,
+    pub proto: u8,
+    pub scope: u8,
+}
+unsafe impl Pod for SvcFrontendKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcFrontendValue {
+    pub service_id: u32,
+    pub backend_count: u16,
+    pub flags: u16,
+    pub lb_algo: u8,
+    pub pad: [u8; 3],
+}
+unsafe impl Pod for SvcFrontendValue {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcBackendKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub slot: u16,
+    pub pad: [u8; 2],
+}
+unsafe impl Pod for SvcBackendKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcBackendValue {
+    pub address: [u8; 16],
+    pub port: u16,
+    pub weight: u16,
+    pub flags: u16,
+    pub pad: [u8; 2],
+}
+unsafe impl Pod for SvcBackendValue {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcRevNatKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+    pub port: u16,
+    pub proto: u8,
+    pub pad: u8,
+}
+unsafe impl Pod for SvcRevNatKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcRevNatValue {
+    pub service_address: [u8; 16],
+    pub service_port: u16,
+    pub pad: [u8; 6],
+}
+unsafe impl Pod for SvcRevNatValue {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcAffinityKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub client_address: [u8; 16],
+}
+unsafe impl Pod for SvcAffinityKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SvcAffinityValue {
+    pub backend_slot: u16,
+    pub pad: [u8; 2],
+    pub last_used_ns: u64,
+}
+unsafe impl Pod for SvcAffinityValue {}

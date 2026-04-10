@@ -643,3 +643,103 @@ pub struct SslWriteScratch {
     pub ssl_ptr: u64,
     pub write_ts: u64,
 }
+
+// --- Service LB (L4 Load Balancer) ---
+
+/// Frontend LB algorithm constants
+pub const SVC_LB_ALGO_RANDOM: u8 = 0;
+pub const SVC_LB_ALGO_MAGLEV: u8 = 1;
+pub const SVC_LB_ALGO_HASH_SRC_IP: u8 = 2;
+
+/// Frontend flags
+pub const SVC_FRONTEND_FLAG_HAS_AFFINITY: u16 = 1 << 0;
+pub const SVC_FRONTEND_FLAG_USE_MAGLEV: u16 = 1 << 1;
+pub const SVC_FRONTEND_FLAG_LOCAL_ONLY: u16 = 1 << 2;
+pub const SVC_FRONTEND_FLAG_HAS_REMOTE: u16 = 1 << 3;
+
+/// Backend flags
+pub const SVC_BACKEND_FLAG_LOCAL: u16 = 1 << 0;
+pub const SVC_BACKEND_FLAG_REMOTE: u16 = 1 << 1;
+pub const SVC_BACKEND_FLAG_DISABLED: u16 = 1 << 2;
+pub const SVC_BACKEND_FLAG_DRAINING: u16 = 1 << 3;
+
+/// VIP frontend lookup key: (tap_id, address, port, proto, scope)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcFrontendKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+    pub port: u16,
+    pub proto: u8,
+    pub scope: u8,
+}
+
+/// VIP frontend lookup value: service metadata + backend entry point
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcFrontendValue {
+    pub service_id: u32,
+    pub backend_count: u16,
+    pub flags: u16,
+    pub lb_algo: u8,
+    pub pad: [u8; 3],
+}
+
+/// Backend member lookup key: (tap_id, service_id, slot)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcBackendKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub slot: u16,
+    pub pad: [u8; 2],
+}
+
+/// Backend member lookup value: target address + metadata
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcBackendValue {
+    pub address: [u8; 16],
+    pub port: u16,
+    pub weight: u16,
+    pub flags: u16,
+    pub pad: [u8; 2],
+}
+
+/// Reverse NAT lookup key: (tap_id, backend_address, backend_port, proto)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcRevNatKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+    pub port: u16,
+    pub proto: u8,
+    pub pad: u8,
+}
+
+/// Reverse NAT lookup value: original VIP + service port
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcRevNatValue {
+    pub service_address: [u8; 16],
+    pub service_port: u16,
+    pub pad: [u8; 6],
+}
+
+/// Session affinity lookup key: (tap_id, service_id, client_address)
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcAffinityKey {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub client_address: [u8; 16],
+}
+
+/// Session affinity lookup value: last selected backend slot
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcAffinityValue {
+    pub backend_slot: u16,
+    pub pad: [u8; 2],
+    pub last_used_ns: u64,
+}
