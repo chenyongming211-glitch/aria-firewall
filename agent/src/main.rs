@@ -14,6 +14,7 @@ mod api_handlers;
 mod api_routes;
 mod control_plane;
 mod ebpf_binary;
+mod health_check;
 mod instance;
 mod kernel_drop_manager;
 mod kernel_drop_support;

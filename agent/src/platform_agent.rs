@@ -590,6 +590,7 @@ struct PlatformAgent {
     state_store: LocalPlatformStateStore,
     start_time: Instant,
     capability: NodeCapability,
+    health_executor: crate::health_check::HealthCheckExecutor,
 }
 
 pub fn start(config: PlatformAgentConfig) -> JoinHandle<()> {
@@ -610,6 +611,7 @@ impl PlatformAgent {
             state_store,
             start_time: Instant::now(),
             capability,
+            health_executor: crate::health_check::HealthCheckExecutor::new(),
         }
     }
 
@@ -891,6 +893,7 @@ impl PlatformAgent {
                         &self.config.pin_path,
                         tap_id,
                         &outcome.compiled_state.service_programs,
+                        &self.health_executor,
                     ) {
                         Ok((frontends, backends, revnats)) => {
                             info!(
@@ -924,6 +927,59 @@ impl PlatformAgent {
                                 if ds.domain == "services" {
                                     ds.status = "failed".to_string();
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // Run health check probes for services with health checks.
+                {
+                    let probe_targets: Vec<(crate::health_check::BackendTarget, crate::health_check::ProbeConfig)> =
+                        outcome.compiled_state.service_programs.iter()
+                            .filter_map(|program| {
+                                let hc = program.health_check.as_ref()?;
+                                let bs = program.backend_set.as_ref()?;
+                                Some(bs.backends.iter()
+                                    .filter(|b| b.admin_state != "disabled" && b.resolved_locality == "local")
+                                    .filter_map(|b| {
+                                        let ip = b.resolved_ip_hint.as_deref()?;
+                                        Some((
+                                            crate::health_check::BackendTarget {
+                                                service_id: program.service_id.clone(),
+                                                backend_id: b.backend_id.clone(),
+                                                address: ip.to_string(),
+                                                port: b.service_port,
+                                            },
+                                            crate::health_check::ProbeConfig {
+                                                protocol: hc.probe_protocol.clone(),
+                                                interval: std::time::Duration::from_secs(hc.interval_seconds as u64),
+                                                timeout: std::time::Duration::from_secs(hc.timeout_seconds as u64),
+                                                healthy_threshold: hc.healthy_threshold,
+                                                unhealthy_threshold: hc.unhealthy_threshold,
+                                                target_port: hc.target_port,
+                                            },
+                                        ))
+                                    })
+                                    .collect::<Vec<_>>())
+                            })
+                            .flatten()
+                            .collect();
+
+                    if !probe_targets.is_empty() {
+                        let changed = self.health_executor.probe_round(&probe_targets).await;
+                        if !changed.is_empty() {
+                            info!(
+                                changed_backends = changed.len(),
+                                "health check state changed, re-materializing service maps"
+                            );
+                            let tap_id = 1u32;
+                            if let Err(e) = materialize_service_maps(
+                                &self.config.pin_path,
+                                tap_id,
+                                &outcome.compiled_state.service_programs,
+                                &self.health_executor,
+                            ) {
+                                warn!(error = %e, "failed to re-materialize after health change");
                             }
                         }
                     }
@@ -3639,6 +3695,7 @@ fn materialize_service_maps(
     pin_path: &str,
     tap_id: u32,
     service_programs: &[ServiceProgramIr],
+    health_executor: &crate::health_check::HealthCheckExecutor,
 ) -> Result<(usize, usize, usize), String> {
     use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_FRONTEND_FLAG_USE_MAGLEV, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM};
     use aria_core::svc_ops::{
@@ -3667,7 +3724,27 @@ fn materialize_service_maps(
             .map(|bs| {
                 bs.backends
                     .iter()
-                    .filter(|b| b.admin_state != "disabled" && b.resolved_locality == "local")
+                    .filter(|b| {
+                        if b.admin_state == "disabled" || b.resolved_locality != "local" {
+                            return false;
+                        }
+                        // Check health state if health check is configured.
+                        if program.health_check.is_some() {
+                            if let Some(ip) = b.resolved_ip_hint.as_deref() {
+                                let target = crate::health_check::BackendTarget {
+                                    service_id: program.service_id.clone(),
+                                    backend_id: b.backend_id.clone(),
+                                    address: ip.to_string(),
+                                    port: b.service_port,
+                                };
+                                let state = health_executor.get_state(&target);
+                                if state == crate::health_check::HealthState::Unhealthy {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    })
                     .collect()
             })
             .unwrap_or_default();
