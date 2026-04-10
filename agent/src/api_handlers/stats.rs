@@ -8,6 +8,7 @@ use super::{
     common::{err_response, AppState},
     TopQuery,
 };
+use aria_api::LbStatsResponse;
 use aria_api::{
     direction_to_string, proto_to_string, FlowEntry, FlowStatsResponse, GroupStatsResponse,
     QosStatsResponse, RuleStatsResponse, StatsOverview,

@@ -62,8 +62,8 @@
 - agent 本地现已开始单独维护 `socket-selection-plan.json`，按 internal service listener 生成第一版 node-local socket LB shadow selection 计划，并显式区分纯 node-local 命中与需要 cross-node handoff 的 listener；同时会把 `lb_policy / session_affinity` 规范化为稳定的 shadow 选择策略，区分当前可支持、延后实现和不支持的语义，但仍然不会进入真实 socket datapath。
 - `apply-status` 现在也开始携带按 `identity / ports / security / routes / services / nat` 划分的 `domain_statuses`，给后续真正的 datapath materialization 和 rollout 观察面预留统一域语义。
 - `apply-status.domain_statuses` 当前已从“纯 compile 摘要”推进为“shadow execute 摘要”，用于承载 `Service / BackendSet / HealthCheck` 等域的本地执行意图结果。
-- 当前还没有接入 southbound 增量协议、真正的 datapath 编译/下发、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
-- `Service / BackendSet / HealthCheck` 当前仍停留在 `southbound + agent shadow compile` 阶段，尚未进入健康检查执行器或 L4 LB datapath materialization。
+- 当前还没有接入 southbound 增量协议、鉴权审计或平台级持久化闭环；这些能力仍按 RFC 路线后续实现。
+- `2026-04-10`：L4 负载均衡 node-local datapath 已完成首版实现，覆盖 random LB、Maglev 一致性哈希、client_ip session affinity、DNAT/RevNat（IPv4/IPv6）、per-service backend 命中统计（`ariactl stats --lb`）。eBPF 数据面通过 `SVC_FRONTEND_MAP / SVC_BACKEND_MAP / SVC_REVNAT_MAP / SVC_AFFINITY_MAP / SVC_MAGLEV_MAP / SVC_LB_STATS` 六个 map 实现。agent 侧 `materialize_service_maps` 负责从 compiled state 写入 pinned maps，apply-status 已从 shadow 切换为真实 `applied / failed` 报告。cross-node handoff 和 HealthCheck 执行器仍按 RFC 路线后续实现。
 
 ## 回归脚本
 
@@ -781,6 +781,9 @@ ariactl --tap eth0 stats --tcprt --top 20
 
 # Kernel drop 统计
 ariactl --tap eth0 stats --drops --top 50
+
+# L4 LB 后端命中统计
+ariactl --tap eth0 stats --lb
 ```
 
 多个统计标志可以组合使用，例如：
@@ -860,7 +863,7 @@ ariactl --tap tap2 policy list
 | `drops list/flush` | Kernel drop 观测与清理 |
 | `ssl enable/disable/status/list/flush/http/http-flush/errors/errors-flush` | SSL/TLS 观测（host-global） |
 | `diagnose` | 全栈连接诊断（TCP-RT + SSL + HTTP + kernel drop） |
-| `stats [--rules|--flows|--qos|--groups|--mirror|--tcprt|--drops]` | 统一统计入口 |
+| `stats [--rules|--flows|--qos|--groups|--mirror|--tcprt|--drops|--lb]` | 统一统计入口 |
 | `config show/set` | 运行时配置 |
 
 ### 技术架构
@@ -988,6 +991,7 @@ aria-firewall/
 | GET/PUT | `/{instance}/config` | 配置查看/更新 |
 | GET | `/{instance}/stats` | 统计概览 |
 | GET | `/{instance}/stats/rules\|flows\|qos\|groups\|mirror\|drops` | 详细统计（其中 `drops` 为旧防火墙 drop 接口） |
+| GET | `/{instance}/stats/lb` | L4 LB 后端命中统计 |
 | GET/DELETE | `/stats/kernel_drops` | 全局 kernel drop 查看/清空 |
 | GET/DELETE | `/{instance}/tcprt` | TCP-RT 查看/清空 |
 | POST | `/tcprt/query` | 跨实例批量查询 |

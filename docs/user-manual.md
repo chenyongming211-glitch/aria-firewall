@@ -996,12 +996,13 @@ ariactl --tap eth0 stats --groups
 ariactl --tap eth0 stats --mirror
 ariactl --tap eth0 stats --tcprt --top 20
 ariactl --tap eth0 stats --drops --top 50
+ariactl --tap eth0 stats --lb
 ```
 
 这些标志可以组合：
 
 ```bash
-ariactl --tap eth0 stats --rules --qos --mirror
+ariactl --tap eth0 stats --rules --qos --mirror --lb
 ```
 
 ### 12.3 统计口径的常见误区
