@@ -609,12 +609,38 @@ impl InMemoryControllerStore {
             })
     }
 
+    async fn ensure_port_exists_inner(
+        &self,
+        port_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<PortResource, StoreError> {
+        self.ports
+            .get(port_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: port_id.to_string(),
+                referenced_resource: "port",
+            })
+    }
+
     async fn validate_network_resource_inner(
         &self,
         resource: &NetworkResource,
     ) -> Result<(), StoreError> {
         self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "network", "tenant_id")
             .await?;
+        if !matches!(
+            resource.spec.route_mode.as_str(),
+            "native" | "overlay" | "hybrid"
+        ) {
+            return Err(StoreError::BadRequest(format!(
+                "network route_mode '{}' must be one of: native, overlay, hybrid",
+                resource.spec.route_mode
+            )));
+        }
         Ok(())
     }
 
@@ -695,6 +721,32 @@ impl InMemoryControllerStore {
             }
         }
 
+        for backend in &resource.spec.backends {
+            if backend.target_type == "port_ref" {
+                let target_ref = backend.target_ref.as_deref().ok_or_else(|| {
+                    StoreError::BadRequest(format!(
+                        "backend_set backend '{}' with target_type 'port_ref' must set target_ref",
+                        backend.id
+                    ))
+                })?;
+                let port = self
+                    .ensure_port_exists_inner(target_ref, "backend_set", "backends.target_ref")
+                    .await?;
+                if port.spec.tenant_id != resource.spec.tenant_id {
+                    return Err(StoreError::BadRequest(format!(
+                        "backend_set backend '{}' references port '{}' in tenant '{}' but backend_set belongs to tenant '{}'",
+                        backend.id, port.metadata.id, port.spec.tenant_id, resource.spec.tenant_id
+                    )));
+                }
+                if port.spec.network_id != resource.spec.network_id {
+                    return Err(StoreError::BadRequest(format!(
+                        "backend_set backend '{}' references port '{}' in network '{}' but backend_set targets network '{}'",
+                        backend.id, port.metadata.id, port.spec.network_id, resource.spec.network_id
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -702,6 +754,12 @@ impl InMemoryControllerStore {
         &self,
         resource: &ServiceResource,
     ) -> Result<(), StoreError> {
+        if resource.spec.ports.is_empty() {
+            return Err(StoreError::BadRequest(
+                "service must define at least one listener port".to_string(),
+            ));
+        }
+
         self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "service", "tenant_id")
             .await?;
         let network = self

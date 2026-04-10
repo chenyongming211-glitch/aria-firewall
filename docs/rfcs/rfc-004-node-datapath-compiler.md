@@ -451,6 +451,8 @@ Agent 重启时，恢复流程建议为：
 - `CompiledNodeState` 现已开始在 `services` 域内额外保留第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达节点内转发、跨节点转发、frontend listener 和 backend member 的局部视图，但仍不会直接 materialize 到 datapath
 - `RuntimePlan / RuntimeInventory` 现已开始把 `services` 域细化成 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map` 等 shadow map family，为后续 L4 datapath 的局部更新和 runtime diff 提供更稳定的规划边界
 - `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，作为后续 runtime apply 和 rollout 观察面的前置骨架
+- `services` 域当前对 `service_revnat_map / service_affinity_map / service_maglev_map` 的 shadow reservation 已开始按 frontend listener 粒度统计，避免多端口 service 的 runtime-family 预算被低估
+- 若节点 `supports_encap = false` 但 `ServiceIR` 仍出现 overlay cross-node forwarding，当前编译器会显式追加 `overlay_encap_unsupported` degraded reason，并把 `services` 域标记为 shadow degraded
 - `RuntimeInventory` 已开始按 `identity / ports / security / routes / services / nat` 汇总 shadow attach/map/domain inventory，作为后续本地 runtime reconcile 的恢复基线
 - `RuntimeInventoryDiff` 已开始按编译域汇总 attach/map/domain delta，作为后续 runtime inventory reconcile 与增量 materialization 的轻量差异骨架
 - `RuntimeIntent` 已开始把 `reconcile plan + runtime inventory + runtime inventory diff` 收敛成按域的 shadow runtime intent，作为后续 datapath apply/reconcile 的本地执行入口骨架

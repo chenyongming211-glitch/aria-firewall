@@ -1481,6 +1481,16 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         &compiled_services,
         context.node_id,
     );
+    let overlay_encap_unsupported = !context.capability.supports_encap
+        && service_programs
+            .iter()
+            .any(|program| program.frontend.forwarding_mode == "cross_node_overlay");
+    if overlay_encap_unsupported {
+        warnings.push(
+            "overlay cross-node service forwarding requested but node capability supports_encap=false; keeping shadow plan but marking services degraded"
+                .to_string(),
+        );
+    }
 
     if context.desired.deletes.is_empty() {
         debug!(
@@ -1508,6 +1518,9 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     let mut degraded_reasons = vec!["shadow_apply_only".to_string()];
     if !failed_objects.is_empty() {
         degraded_reasons.push("object_validation_failed".to_string());
+    }
+    if overlay_encap_unsupported {
+        degraded_reasons.push("overlay_encap_unsupported".to_string());
     }
     degraded_reasons.sort();
     degraded_reasons.dedup();
@@ -1580,7 +1593,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
                 + compiled_backend_sets.len()
                 + compiled_services.len(),
             failed_objects: service_failure_count,
-            status: if service_failure_count == 0 {
+            status: if service_failure_count == 0 && !overlay_encap_unsupported {
                 "shadow_ready".to_string()
             } else {
                 "shadow_degraded".to_string()
@@ -3032,8 +3045,16 @@ fn build_runtime_execution_summary(
             let failed_objects = compile_summary
                 .map(|summary| summary.failed_objects)
                 .unwrap_or(intent.failed_objects);
+            let overlay_encap_unsupported =
+                intent.domain == "services"
+                    && compiled_state
+                        .degraded_reasons
+                        .iter()
+                        .any(|reason| reason == "overlay_encap_unsupported");
             let execution_status = if intent.desired_action == "reserve_shadow" {
                 "shadow_reserved".to_string()
+            } else if overlay_encap_unsupported {
+                "shadow_execute_degraded".to_string()
             } else if failed_objects > 0 {
                 "shadow_execute_degraded".to_string()
             } else if intent.requires_cleanup {
@@ -3047,6 +3068,9 @@ fn build_runtime_execution_summary(
             let mut degraded_reasons = Vec::new();
             if failed_objects > 0 {
                 degraded_reasons.push("compile_or_inventory_failures_present".to_string());
+            }
+            if overlay_encap_unsupported {
+                degraded_reasons.push("overlay_encap_unsupported".to_string());
             }
             if intent.requires_cleanup {
                 degraded_reasons.push("cleanup_required".to_string());
@@ -3112,10 +3136,21 @@ fn build_runtime_execution_summary(
             );
         }
         if service_intent.cross_node_overlay_service_count > 0 {
-            warnings.push(
-                "overlay cross-node service forwarding is still shadow planned; vxlan/geneve handoff datapath not materialized yet"
-                    .to_string(),
-            );
+            if compiled_state
+                .degraded_reasons
+                .iter()
+                .any(|reason| reason == "overlay_encap_unsupported")
+            {
+                warnings.push(
+                    "overlay cross-node service forwarding requested but node capability supports_encap=false; shadow compiler marked services degraded"
+                        .to_string(),
+                );
+            } else {
+                warnings.push(
+                    "overlay cross-node service forwarding is still shadow planned; vxlan/geneve handoff datapath not materialized yet"
+                        .to_string(),
+                );
+            }
         }
         if service_intent.cross_node_hybrid_service_count > 0 {
             warnings.push(
@@ -3249,7 +3284,11 @@ fn total_cross_node_hybrid_service_programs(state: &CompiledNodeState) -> usize 
 }
 
 fn total_service_revnat_entries(state: &CompiledNodeState) -> usize {
-    state.service_programs.len()
+    state
+        .service_programs
+        .iter()
+        .map(|program| program.frontend.listener_ports.len())
+        .sum()
 }
 
 fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
@@ -3264,7 +3303,8 @@ fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
                 .map(|value| value != "none")
                 .unwrap_or(false)
         })
-        .count()
+        .map(|program| program.frontend.listener_ports.len())
+        .sum()
 }
 
 fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
@@ -3272,7 +3312,8 @@ fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
         .service_programs
         .iter()
         .filter(|program| program.frontend.lb_policy == "maglev")
-        .count()
+        .map(|program| program.frontend.listener_ports.len())
+        .sum()
 }
 
 fn inventory_domain_from_scope(scope: &str) -> String {

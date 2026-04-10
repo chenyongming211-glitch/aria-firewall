@@ -15,6 +15,11 @@
 | BUG-12 | High | store | 一阶引用校验早期在 handler 层完成，写入在 store 层完成，存在 TOCTOU 窗口：引用对象可能在校验后、写入前被并发删除。现已把引用完整性校验和依赖删除保护下沉到 store 锁范围内。 | Fixed (2026-04-09) |
 | BUG-13 | Medium | store | `pending_object_counts / changed_kinds / has_deletes` 曾直接使用上一轮 publish 摘要，即使其 generation 已落后于 controller 当前 `desired_generation`，会在状态面暴露旧摘要。现已只在 publish generation 命中当前 desired generation 时使用摘要。 | Fixed (2026-04-09) |
 | BUG-14 | Medium | store | `pending_object_counts` 曾在 `partial / failed` apply 报告下也用 `compiled_objects` 抵扣 desired counts，导致待 reconcile 数量被低估。现已仅在当前 generation 且 `status = applied` 时扣减，否则保守返回当前 publish 摘要。 | Fixed (2026-04-09) |
+| BUG-15 | Medium | controller/store | `NetworkSpec.route_mode` 曾作为自由字符串被 controller 接受，agent 对未知值又会静默归类为 native handoff。现已在 store 准入层限制为 `native / overlay / hybrid`。 | Fixed (2026-04-10) |
+| BUG-16 | Medium | controller/store | `BackendSet.backends[].target_ref` 曾不会在 controller 侧校验；`target_type = port_ref` 时拼错的 `Port` 引用会混入 shadow 状态。现已在 store 准入层校验 `port_ref` 必须存在，且 tenant/network 必须对齐。 | Fixed (2026-04-10) |
+| BUG-17 | Medium | controller/store | `ServiceSpec.ports = []` 曾被接受，生成无 frontend 的无效 service。现已要求 service 至少定义一个 listener port。 | Fixed (2026-04-10) |
+| BUG-18 | Medium | agent/compiler | `service_revnat_map / service_affinity_map / service_maglev_map` 曾按 service_program 计数，低估多端口 service 的 runtime-family 预算。现已改为按 frontend listener 粒度统计。 | Fixed (2026-04-10) |
+| BUG-19 | Medium | agent/compiler | agent 曾在 `supports_encap = false` 时仍把 overlay remote backend 仅标记为普通 shadow overlay handoff，没有显式 degraded reason。现已将该场景显式标记为 `overlay_encap_unsupported` 并下沉到 services 域降级语义。 | Fixed (2026-04-10) |
 | BUG-9 | Low | store | 读操作（尤其 `desired_state_for_node_inner` 和 `southbound_status_inner`）与 CUD 并发时可能读到 mixed-time 视图。Phase 0 原型可接受，Phase 1 应结合快照/事务边界统一处理。 | Deferred (Phase 1) |
 | STYLE-1 | Info | store | 5 个 helper 方法（`list_resource` / `get_resource` 等）只是转发到 `ResourceStore` 同名方法，宏可直接调用 `self.$field.xxx()`。约 50 行冗余。 | Won't fix |
 | STYLE-2 | Info | store | southbound 方法采用 `_inner` + trait impl 委托模式，代码量翻倍。是 `async_trait` 的合理 workaround。 | Won't fix |

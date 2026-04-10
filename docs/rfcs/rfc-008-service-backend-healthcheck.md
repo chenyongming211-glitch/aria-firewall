@@ -552,12 +552,14 @@ Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler�
 - `aria-controller` 已新增实验性的 `Service / BackendSet / HealthCheck` northbound API 骨架
 - 当前覆盖 CRUD、OpenAPI、基础分页/过滤、引用完整性校验和删除依赖保护
 - `BackendSet` 与 `HealthCheck` 的引用关系、`Service` 与 `BackendSet` 的引用关系，现已由 store mutation 边界原子校验
+- controller 当前还会显式拒绝非法 `route_mode`、不存在的 `Backend.port_ref` 目标，以及不包含 listener port 的无效 `Service`
 - `routing / NAT / Floating IP` 的预留位不会阻塞该对象层推进
 - `southbound desired-state` 现已开始按节点相关网络投影 `Service / BackendSet / HealthCheck`
 - `aria-agent` 现已开始在 `services` shadow 域中编译 `Service / BackendSet / HealthCheck`，并把结果写入 `compiled state / reconcile plan / runtime inventory / runtime intent`
 - `aria-agent` 当前还会把 `Service / BackendSet / HealthCheck` 进一步收敛成第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达 frontend listener、backend member 以及节点内/跨节点转发方向，但仍然不会进入真实 L4 LB datapath
 - `services` shadow 域当前还会把 runtime map 规划进一步细化为 `service_frontend_catalog / backend_member_catalog / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，作为后续节点内与跨节点转发统一 service datapath 的前置边界
-- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation，但仍然不会进入真实 L4 LB datapath
+- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / backend member / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation；其中 reservation 计数已按 frontend listener 粒度统计，但仍然不会进入真实 L4 LB datapath
+- 若节点 `supports_encap = false` 却收到 overlay cross-node forwarding，当前 agent 会显式追加 `overlay_encap_unsupported` degraded reason，而不是把该场景伪装成普通 overlay shadow 计划
 
 当前仍未实现：
 
