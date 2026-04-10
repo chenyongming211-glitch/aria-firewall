@@ -478,6 +478,30 @@ struct RuntimeExecutionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct SocketBackendCandidate {
+    backend_id: String,
+    target_type: String,
+    resolved_ip_hint: Option<String>,
+    port: u16,
+    weight: u16,
+    locality: String,
+    forwarding_scope: String,
+    health_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SocketBackendChoiceShape {
+    total_candidates: usize,
+    local_candidates: usize,
+    remote_candidates: usize,
+    total_weight: u32,
+    local_weight: u32,
+    remote_weight: u32,
+    handoff_type: Option<String>,
+    candidates: Vec<SocketBackendCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SocketSelectionPlanEntry {
     service_id: String,
     service_name: Option<String>,
@@ -493,6 +517,7 @@ struct SocketSelectionPlanEntry {
     local_backend_count: usize,
     remote_backend_count: usize,
     handoff_required: bool,
+    backend_choice: SocketBackendChoiceShape,
     shadow_apply_only: bool,
 }
 
@@ -509,6 +534,10 @@ struct SocketSelectionPlanSummary {
     client_ip_affinity_listener_count: usize,
     deferred_affinity_listener_count: usize,
     unsupported_affinity_listener_count: usize,
+    total_backend_candidates: usize,
+    total_local_candidates: usize,
+    total_remote_candidates: usize,
+    listeners_with_no_backends: usize,
     shadow_apply_only: bool,
 }
 
@@ -3437,6 +3466,10 @@ fn build_socket_selection_plan(
                 .as_ref()
                 .map(|backend_set| backend_set.remote_backend_count)
                 .unwrap_or(0);
+            let backend_choice = build_backend_choice_shape(
+                program.backend_set.as_ref(),
+                &program.frontend.forwarding_mode,
+            );
             program.frontend.listener_ports.iter().map(move |listener| {
                 let normalized_lb_strategy =
                     normalize_socket_lb_strategy(&program.frontend.lb_policy);
@@ -3458,6 +3491,7 @@ fn build_socket_selection_plan(
                     local_backend_count,
                     remote_backend_count,
                     handoff_required: remote_backend_count > 0,
+                    backend_choice: backend_choice.clone(),
                     shadow_apply_only: true,
                 }
             })
@@ -3505,6 +3539,22 @@ fn build_socket_selection_plan(
         .iter()
         .filter(|entry| entry.normalized_affinity_strategy == "unsupported")
         .count();
+    let total_backend_candidates: usize = entries
+        .iter()
+        .map(|entry| entry.backend_choice.total_candidates)
+        .sum();
+    let total_local_candidates: usize = entries
+        .iter()
+        .map(|entry| entry.backend_choice.local_candidates)
+        .sum();
+    let total_remote_candidates: usize = entries
+        .iter()
+        .map(|entry| entry.backend_choice.remote_candidates)
+        .sum();
+    let listeners_with_no_backends = entries
+        .iter()
+        .filter(|entry| entry.backend_choice.total_candidates == 0)
+        .count();
 
     SocketSelectionPlan {
         generation: compiled_state.generation.clone(),
@@ -3526,9 +3576,93 @@ fn build_socket_selection_plan(
             client_ip_affinity_listener_count,
             deferred_affinity_listener_count,
             unsupported_affinity_listener_count,
+            total_backend_candidates,
+            total_local_candidates,
+            total_remote_candidates,
+            listeners_with_no_backends,
             shadow_apply_only: true,
         },
         shadow_apply_only: true,
+    }
+}
+
+fn build_backend_choice_shape(
+    backend_set: Option<&BackendSetIr>,
+    forwarding_mode: &str,
+) -> SocketBackendChoiceShape {
+    let backends = match backend_set {
+        Some(bs) => &bs.backends,
+        None => {
+            return SocketBackendChoiceShape {
+                total_candidates: 0,
+                local_candidates: 0,
+                remote_candidates: 0,
+                total_weight: 0,
+                local_weight: 0,
+                remote_weight: 0,
+                handoff_type: None,
+                candidates: Vec::new(),
+            };
+        }
+    };
+
+    let candidates: Vec<SocketBackendCandidate> = backends
+        .iter()
+        .filter(|b| b.admin_state != "disabled")
+        .map(|b| SocketBackendCandidate {
+            backend_id: b.backend_id.clone(),
+            target_type: b.target_type.clone(),
+            resolved_ip_hint: b.resolved_ip_hint.clone(),
+            port: b.service_port,
+            weight: b.weight,
+            locality: b.resolved_locality.clone(),
+            forwarding_scope: b.forwarding_scope.clone(),
+            health_state: "unknown".to_string(),
+        })
+        .collect();
+
+    let local_candidates = candidates
+        .iter()
+        .filter(|c| c.locality == "local")
+        .count();
+    let remote_candidates = candidates
+        .iter()
+        .filter(|c| c.locality == "remote")
+        .count();
+    let total_weight: u32 = candidates.iter().map(|c| c.weight as u32).sum();
+    let local_weight: u32 = candidates
+        .iter()
+        .filter(|c| c.locality == "local")
+        .map(|c| c.weight as u32)
+        .sum();
+    let remote_weight: u32 = candidates
+        .iter()
+        .filter(|c| c.locality == "remote")
+        .map(|c| c.weight as u32)
+        .sum();
+
+    let handoff_type = if remote_candidates > 0 {
+        Some(
+            match forwarding_mode {
+                "cross_node_overlay" => "overlay",
+                "cross_node_hybrid" => "hybrid",
+                _ => "native",
+            }
+            .to_string(),
+        )
+    } else {
+        None
+    };
+
+    SocketBackendChoiceShape {
+        total_candidates: candidates.len(),
+        local_candidates,
+        remote_candidates,
+        total_weight,
+        local_weight,
+        remote_weight,
+        handoff_type,
+        candidates,
     }
 }
 
