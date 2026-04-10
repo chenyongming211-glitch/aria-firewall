@@ -738,7 +738,7 @@ impl PlatformAgent {
                     desired_cache = Some(cache_entry);
                 }
 
-                let outcome = compile_desired_state(CompilerContext {
+                let mut outcome = compile_desired_state(CompilerContext {
                     node_id: &self.config.node_id,
                     desired: &desired_state,
                     capability: &self.capability,
@@ -897,10 +897,34 @@ impl PlatformAgent {
                                 frontends, backends, revnats,
                                 "materialized service maps into eBPF datapath"
                             );
+                            // Update services domain status to "applied".
+                            for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                                if domain.domain == "services" {
+                                    domain.execution_status = "applied".to_string();
+                                    domain.shadow_apply_only = false;
+                                    domain.warnings.retain(|w| !w.contains("not materialized yet"));
+                                }
+                            }
+                            for ds in &mut outcome.apply_report.domain_statuses {
+                                if ds.domain == "services" {
+                                    ds.status = "applied".to_string();
+                                }
+                            }
                         }
                         Err(error) => {
                             warn!(error = %error, "failed to materialize service maps");
-                            heartbeat_error = Some(error);
+                            heartbeat_error = Some(error.clone());
+                            for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                                if domain.domain == "services" {
+                                    domain.execution_status = "failed".to_string();
+                                    domain.warnings.push(format!("materialize failed: {}", error));
+                                }
+                            }
+                            for ds in &mut outcome.apply_report.domain_statuses {
+                                if ds.domain == "services" {
+                                    ds.status = "failed".to_string();
+                                }
+                            }
                         }
                     }
                 }
