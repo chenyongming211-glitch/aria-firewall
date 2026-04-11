@@ -57,6 +57,7 @@ pub fn update_runtime_config(
     mirror_enabled: Option<bool>,
     tcprt_enabled: Option<bool>,
     ssl_enabled: Option<bool>,
+    lb_enabled: Option<bool>,
 ) -> Result<(), String> {
     if runtime.tap_id == TAP_ID_UNASSIGNED {
         return update_firewall_config(
@@ -68,6 +69,7 @@ pub fn update_runtime_config(
             mirror_enabled,
             tcprt_enabled,
             ssl_enabled,
+            lb_enabled,
         );
     }
 
@@ -92,7 +94,10 @@ pub fn update_runtime_config(
         tcprt_enabled: tcprt_enabled
             .map(|b| if b { 1 } else { 0 })
             .unwrap_or_else(|| current.as_ref().map(|c| c.tcprt_enabled).unwrap_or(0)),
-        pad: [0; 2],
+        lb_enabled: lb_enabled
+            .map(|b| if b { 1 } else { 0 })
+            .unwrap_or_else(|| current.as_ref().map(|c| c.lb_enabled).unwrap_or(0)),
+        pad: [0; 1],
     };
     map.insert(&runtime.tap_id, &cfg, 0).map_err(|e| {
         format!(
@@ -113,6 +118,7 @@ pub fn update_firewall_config(
     mirror_enabled: Option<bool>,
     tcprt_enabled: Option<bool>,
     ssl_enabled: Option<bool>,
+    lb_enabled: Option<bool>,
 ) -> Result<(), String> {
     let pin_path = runtime.pin_path;
     let map_path = format!("{}/FIREWALL_CONFIG", pin_path);
@@ -152,6 +158,9 @@ pub fn update_firewall_config(
     let ssl = ssl_enabled
         .map(|b| if b { 1u8 } else { 0 })
         .unwrap_or_else(|| current.as_ref().map(|c| c.ssl_enabled).unwrap_or(0));
+    let lb = lb_enabled
+        .map(|b| if b { 1u8 } else { 0 })
+        .unwrap_or_else(|| current.as_ref().map(|c| c.lb_enabled).unwrap_or(0));
 
     let cfg = FirewallConfig {
         conntrack_enabled: ct,
@@ -162,6 +171,7 @@ pub fn update_firewall_config(
         mirror_enabled: mir,
         tcprt_enabled: tcprt,
         ssl_enabled: ssl,
+        lb_enabled: lb,
     };
     map.insert(&0u32, &cfg, 0)
         .map_err(|e| format!("FIREWALL_CONFIG insert: {:?}", e))?;
@@ -199,6 +209,7 @@ pub fn read_runtime_config(runtime: TapMapRuntime<'_>) -> Result<FirewallConfig,
             mirror_enabled: 0,
             tcprt_enabled: 1,
             ssl_enabled: 0,
+            lb_enabled: 0,
         }
     });
 
@@ -216,5 +227,6 @@ pub fn read_runtime_config(runtime: TapMapRuntime<'_>) -> Result<FirewallConfig,
         mirror_enabled: tap_cfg.mirror_enabled,
         tcprt_enabled: tap_cfg.tcprt_enabled,
         ssl_enabled: global.ssl_enabled,
+        lb_enabled: tap_cfg.lb_enabled,
     })
 }

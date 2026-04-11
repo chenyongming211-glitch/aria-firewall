@@ -4568,7 +4568,8 @@ fn materialize_phase3_maps(
                 qos_enabled: 0,
                 mirror_enabled: 0,
                 tcprt_enabled: 1,
-                pad: [0; 2],
+                lb_enabled: 0,
+                pad: [0; 1],
             },
         )?;
 

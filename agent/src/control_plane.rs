@@ -543,6 +543,7 @@ impl ControlPlane {
                 Some(state.mirror_enabled && !state.mirror_rules.is_empty()),
                 Some(state.tcprt_enabled),
                 None,
+                None,
             ) {
                 Self::cleanup_failed_managed_registration(
                     name,
@@ -766,6 +767,7 @@ impl ControlPlane {
             Some(state.qos_enabled && !state.qos_rules.is_empty()),
             Some(state.mirror_enabled && !state.mirror_rules.is_empty()),
             Some(state.tcprt_enabled),
+            None,
             None,
         )?;
         let instance = Arc::new(tokio::sync::RwLock::new(InstanceState {
@@ -1976,6 +1978,7 @@ impl ControlPlane {
             kernel_mirror,
             tcprt,
             None,
+            None,
         ) {
             return Err(ControlPlaneError::KernelError(e));
         }
@@ -2264,6 +2267,7 @@ impl ControlPlane {
             None,
             None,
             Some(enabled),
+            None,
         )
     }
 

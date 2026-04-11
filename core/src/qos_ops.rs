@@ -14,6 +14,7 @@ fn sync_qos_enabled(runtime: TapMapRuntime<'_>, enabled: bool) -> Result<(), Str
         None,
         None,
         None,
+        None,
     )
 }
 

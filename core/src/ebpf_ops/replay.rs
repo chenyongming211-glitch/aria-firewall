@@ -386,7 +386,8 @@ pub fn replay_state(bpf: &mut aya::Ebpf, state_path: &str) -> Result<(), String>
                 0
             },
             tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
-            pad: [0; 2],
+            lb_enabled: 0,
+            pad: [0; 1],
         };
         match bpf
             .map_mut("TAP_CONFIG_MAP")
@@ -493,6 +494,7 @@ pub fn replay_state_to_pinned_maps(pin_path: &str, state_path: &str) -> Result<(
         Some(state.mirror_enabled && !state.mirror_rules.is_empty()),
         Some(state.tcprt_enabled),
         Some(state.ssl_enabled),
+        None,
     ) {
         errors.push(format!("FIREWALL_CONFIG: {}", e));
     }
@@ -513,7 +515,8 @@ pub fn replay_state_to_pinned_maps(pin_path: &str, state_path: &str) -> Result<(
                 0
             },
             tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
-            pad: [0; 2],
+            lb_enabled: 0,
+            pad: [0; 1],
         };
         if let Err(e) = write_tap_config(runtime, tap_cfg) {
             errors.push(format!("TAP_CONFIG_MAP tap_id={}: {}", tap_id, e));

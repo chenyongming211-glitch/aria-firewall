@@ -291,6 +291,7 @@ pub struct FirewallConfig {
     pub mirror_enabled: u8,
     pub tcprt_enabled: u8,
     pub ssl_enabled: u8,
+    pub lb_enabled: u8,
 }
 unsafe impl Pod for FirewallConfig {}
 
@@ -330,7 +331,8 @@ pub struct TapConfig {
     pub qos_enabled: u8,
     pub mirror_enabled: u8,
     pub tcprt_enabled: u8,
-    pub pad: [u8; 2],
+    pub lb_enabled: u8,
+    pub pad: [u8; 1],
 }
 unsafe impl Pod for TapConfig {}
 
@@ -343,7 +345,8 @@ impl From<FirewallConfig> for TapConfig {
             qos_enabled: value.qos_enabled,
             mirror_enabled: value.mirror_enabled,
             tcprt_enabled: value.tcprt_enabled,
-            pad: [0; 2],
+            lb_enabled: value.lb_enabled,
+            pad: [0; 1],
         }
     }
 }

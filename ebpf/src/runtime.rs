@@ -68,6 +68,18 @@ pub fn mirror_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+pub fn lb_enabled(tap_id: u32) -> bool {
+    if tap_id != TAP_ID_UNASSIGNED {
+        if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
+            return cfg.lb_enabled != 0;
+        }
+    }
+    read_global_config()
+        .map(|cfg| cfg.lb_enabled != 0)
+        .unwrap_or(false)
+}
+
+#[inline(always)]
 pub fn tcprt_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {

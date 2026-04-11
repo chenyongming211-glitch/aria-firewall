@@ -40,6 +40,7 @@ fn sync_mirror_enabled(runtime: TapMapRuntime<'_>, enabled: bool) -> Result<(), 
         Some(enabled),
         None,
         None,
+        None,
     )
 }
 

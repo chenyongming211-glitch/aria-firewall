@@ -488,6 +488,7 @@ pub const FLAG_TCPRT_ON: u16 = 1 << 1;
 pub const FLAG_TRACING: u16 = 1 << 2;
 pub const FLAG_ACL_ON: u16 = 1 << 3;
 pub const FLAG_MIRROR_ON: u16 = 1 << 4;
+pub const FLAG_LB_ON: u16 = 1 << 5;
 pub const FLAG_CT_HIT: u16 = 1 << 5;
 pub const FLAG_IS_FORWARD: u16 = 1 << 6;
 #[allow(dead_code)]
@@ -553,6 +554,7 @@ pub struct FirewallConfig {
     pub mirror_enabled: u8,
     pub tcprt_enabled: u8,
     pub ssl_enabled: u8,
+    pub lb_enabled: u8,
 }
 
 pub const TAP_ID_UNASSIGNED: u32 = 0;
@@ -577,7 +579,8 @@ pub struct TapConfig {
     pub qos_enabled: u8,
     pub mirror_enabled: u8,
     pub tcprt_enabled: u8,
-    pub pad: [u8; 2],
+    pub lb_enabled: u8,
+    pub pad: [u8; 1],
 }
 
 // --- SSL Observability ---

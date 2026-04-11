@@ -126,7 +126,8 @@ pub fn validate_pinned_runtime_state(
             0
         },
         tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
-        pad: [0; 2],
+        lb_enabled: 0,
+        pad: [0; 1],
     };
     let tap_config_map = open_pinned_tap_config(pin_path)?;
     let actual_tap_config = tap_config_map
