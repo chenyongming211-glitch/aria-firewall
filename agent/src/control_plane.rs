@@ -543,7 +543,7 @@ impl ControlPlane {
                 Some(state.mirror_enabled && !state.mirror_rules.is_empty()),
                 Some(state.tcprt_enabled),
                 None,
-                None,
+                Some(state.lb_enabled),
             ) {
                 Self::cleanup_failed_managed_registration(
                     name,
@@ -768,7 +768,7 @@ impl ControlPlane {
             Some(state.mirror_enabled && !state.mirror_rules.is_empty()),
             Some(state.tcprt_enabled),
             None,
-            None,
+            Some(state.lb_enabled),
         )?;
         let instance = Arc::new(tokio::sync::RwLock::new(InstanceState {
             state,

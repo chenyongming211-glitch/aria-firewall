@@ -64,27 +64,6 @@ unsafe fn svc_frontend_lookup_v6(
 }
 
 #[inline(always)]
-unsafe fn svc_backend_select(
-    tap_id: u32,
-    frontend: &SvcFrontendValue,
-) -> Option<&'static SvcBackendValue> {
-    if frontend.lb_algo != SVC_LB_ALGO_RANDOM {
-        return None;
-    }
-    if frontend.backend_count == 0 {
-        return None;
-    }
-    let slot = (bpf_get_prandom_u32() % frontend.backend_count as u32) as u16;
-    let key = SvcBackendKey {
-        tap_id,
-        service_id: frontend.service_id,
-        slot,
-        pad: [0; 2],
-    };
-    SVC_BACKEND_MAP.get(&key)
-}
-
-#[inline(always)]
 unsafe fn svc_revnat_lookup_v4(tap_id: u32, info: &PacketInfo) -> Option<&'static SvcRevNatValue> {
     let key = SvcRevNatKey {
         tap_id,
@@ -537,6 +516,18 @@ pub unsafe fn phase_lb_ingress_v4(skb: *mut __sk_buff, info: &PacketInfo, p: &mu
 
     if svc_dnat_v4(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        // Update PacketInfo to post-DNAT so downstream CT key uses backend
+        // addresses.  This makes the ingress CT entry (client→backend) match
+        // the egress reverse lookup (backend→client), enabling bidirectional
+        // CT fast-path.
+        let info_mut = (info as *const PacketInfo) as *mut PacketInfo;
+        (*info_mut).dst_ip = u32::from_be_bytes([
+            backend.address[12],
+            backend.address[13],
+            backend.address[14],
+            backend.address[15],
+        ]);
+        (*info_mut).dst_port = backend.port;
         update_lb_stats(
             p.tap_id,
             frontend.service_id,
@@ -619,6 +610,11 @@ pub unsafe fn phase_lb_ingress_v6(skb: *mut __sk_buff, info: &PacketInfo, p: &mu
 
     if svc_dnat_v6(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
+        // Update PacketInfo to post-DNAT so downstream CT key uses backend
+        // addresses, enabling bidirectional CT fast-path.
+        let info_mut = (info as *const PacketInfo) as *mut PacketInfo;
+        (*info_mut).dst_ip_v6 = backend.address;
+        (*info_mut).dst_port = backend.port;
         update_lb_stats(
             p.tap_id,
             frontend.service_id,

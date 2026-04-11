@@ -387,7 +387,7 @@ pub fn replay_state(bpf: &mut aya::Ebpf, state_path: &str) -> Result<(), String>
                 0
             },
             tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
-            lb_enabled: 0,
+            lb_enabled: if state.lb_enabled { 1 } else { 0 },
             pad: [0; 1],
         };
         match bpf
@@ -516,7 +516,7 @@ pub fn replay_state_to_pinned_maps(pin_path: &str, state_path: &str) -> Result<(
                 0
             },
             tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
-            lb_enabled: 0,
+            lb_enabled: if state.lb_enabled { 1 } else { 0 },
             pad: [0; 1],
         };
         if let Err(e) = write_tap_config(runtime, tap_cfg) {
