@@ -112,6 +112,8 @@ pub struct FirewallState {
     pub tcprt_enabled: bool,
     #[serde(default)]
     pub ssl_enabled: bool,
+    #[serde(default)]
+    pub lb_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -139,6 +141,7 @@ impl Default for FirewallState {
             mirror_enabled: true,
             tcprt_enabled: true,
             ssl_enabled: false,
+            lb_enabled: false,
         }
     }
 }

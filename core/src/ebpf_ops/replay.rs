@@ -353,6 +353,7 @@ pub fn replay_state(bpf: &mut aya::Ebpf, state_path: &str) -> Result<(), String>
             },
             tcprt_enabled: if state.tcprt_enabled { 1 } else { 0 },
             ssl_enabled: if state.ssl_enabled { 1 } else { 0 },
+            lb_enabled: if state.lb_enabled { 1 } else { 0 },
         };
         match bpf
             .map_mut("FIREWALL_CONFIG")
