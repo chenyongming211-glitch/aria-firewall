@@ -1,8 +1,8 @@
 use aya::maps::{HashMap, Map, MapData};
 
 use crate::common::{
-    SvcBackendKey, SvcBackendValue, SvcFrontendKey, SvcFrontendValue, SvcRevNatKey,
-    SvcRevNatValue, TapMapRuntime,
+    SvcBackendKey, SvcBackendValue, SvcFrontendKey, SvcFrontendValue, SvcRevNatKey, SvcRevNatValue,
+    TapMapRuntime,
 };
 
 const SVC_FRONTEND_MAP_NAME: &str = "SVC_FRONTEND_MAP";
@@ -43,8 +43,7 @@ fn open_revnat_map(
 pub fn ipv4_to_v4mapped(ip: &std::net::Ipv4Addr) -> [u8; 16] {
     let octets = ip.octets();
     [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff,
-        octets[0], octets[1], octets[2], octets[3],
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, octets[0], octets[1], octets[2], octets[3],
     ]
 }
 
@@ -143,10 +142,7 @@ pub fn write_service_backends(
 }
 
 /// Write a batch of reverse NAT entries to the pinned map.
-pub fn write_service_revnats(
-    pin_path: &str,
-    entries: &[SvcRevNatEntry],
-) -> Result<usize, String> {
+pub fn write_service_revnats(pin_path: &str, entries: &[SvcRevNatEntry]) -> Result<usize, String> {
     let mut map = open_revnat_map(pin_path)?;
     let mut written = 0;
     for entry in entries {
@@ -212,7 +208,7 @@ pub fn clear_service_maps_for_tap(pin_path: &str, tap_id: u32) -> Result<(), Str
 
 // --- Maglev consistent hashing ---
 
-use crate::common::{MAGLEV_TABLE_SIZE, SvcMaglevEntry, SvcMaglevKey};
+use crate::common::{SvcMaglevEntry, SvcMaglevKey, MAGLEV_TABLE_SIZE};
 
 const SVC_MAGLEV_MAP_NAME: &str = "SVC_MAGLEV_MAP";
 
@@ -379,10 +375,7 @@ fn sum_per_cpu_lb_stats(values: PerCpuValues<SvcLbStatsValue>) -> (u64, u64) {
 }
 
 /// Read all LB stats entries, optionally filtered by tap_id.
-pub fn get_lb_stats(
-    pin_path: &str,
-    tap_id: Option<u32>,
-) -> Result<Vec<SvcLbStatsEntry>, String> {
+pub fn get_lb_stats(pin_path: &str, tap_id: Option<u32>) -> Result<Vec<SvcLbStatsEntry>, String> {
     let map_path = format!("{}/{}", pin_path, SVC_LB_STATS_MAP_NAME);
     let map_data = MapData::from_pin(&map_path)
         .map_err(|e| format!("open {}: {:?}", SVC_LB_STATS_MAP_NAME, e))?;

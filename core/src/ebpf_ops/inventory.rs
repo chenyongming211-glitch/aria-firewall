@@ -4,7 +4,12 @@ fn summarize_entries(entries: &BTreeSet<String>) -> String {
     if entries.is_empty() {
         return "none".to_string();
     }
-    entries.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
+    entries
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn validate_entry_set(
@@ -146,8 +151,8 @@ pub fn validate_pinned_runtime_state(
     let mut expected_dst_ipv6 = BTreeSet::new();
     for (name, group) in &state.groups {
         for cidr in &group.cidrs {
-            let (ip, prefix) = parse_cidr(cidr)
-                .map_err(|e| format!("group '{}' cidr '{}': {}", name, cidr, e))?;
+            let (ip, prefix) =
+                parse_cidr(cidr).map_err(|e| format!("group '{}' cidr '{}': {}", name, cidr, e))?;
             match ip {
                 IpAddr::V4(v4) => {
                     expected_src_ipv4.insert(format_lpm_entry_v4(
@@ -292,8 +297,8 @@ pub fn validate_pinned_runtime_state(
     let mut expected_policy_mirror = BTreeSet::new();
     let mut expected_global_mirror = BTreeSet::new();
     for rule in &state.mirror_rules {
-        let target_ifindex = crate::mirror_ops::resolve_ifindex(&rule.target_iface)
-            .map_err(|e| {
+        let target_ifindex =
+            crate::mirror_ops::resolve_ifindex(&rule.target_iface).map_err(|e| {
                 format!(
                     "resolve mirror target '{}' for validation: {}",
                     rule.target_iface, e
@@ -550,7 +555,11 @@ pub fn show_stats(pin_path: &str, state_path: &str) -> Result<(), String> {
     let allow_count = state.rules.iter().filter(|r| r.action == 0).count();
     let drop_count = state.rules.iter().filter(|r| r.action == 1).count();
     println!("  Allow: {}, Drop: {}", allow_count, drop_count);
-    let with_ports = state.rules.iter().filter(|r| r.bitmap_idx.is_some()).count();
+    let with_ports = state
+        .rules
+        .iter()
+        .filter(|r| r.bitmap_idx.is_some())
+        .count();
     println!("  With port filter: {}", with_ports);
     println!();
 

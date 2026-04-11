@@ -20,21 +20,31 @@ pub fn clear_iface_ctx(pin_path: &str, ifindex: u32) -> Result<(), String> {
     let mut map = open_pinned_iface_ctx(pin_path)?;
     match map.remove(&ifindex) {
         Ok(()) => Ok(()),
-        Err(e) => Err(format!("IFACE_CTX_MAP remove for ifindex {}: {:?}", ifindex, e)),
+        Err(e) => Err(format!(
+            "IFACE_CTX_MAP remove for ifindex {}: {:?}",
+            ifindex, e
+        )),
     }
 }
 
 pub fn write_tap_config(runtime: TapMapRuntime<'_>, config: TapConfig) -> Result<(), String> {
     let mut map = open_pinned_tap_config(runtime.pin_path)?;
-    map.insert(&runtime.tap_id, &config, 0)
-        .map_err(|e| format!("TAP_CONFIG_MAP insert for tap_id {}: {:?}", runtime.tap_id, e))
+    map.insert(&runtime.tap_id, &config, 0).map_err(|e| {
+        format!(
+            "TAP_CONFIG_MAP insert for tap_id {}: {:?}",
+            runtime.tap_id, e
+        )
+    })
 }
 
 pub fn delete_tap_config(runtime: TapMapRuntime<'_>) -> Result<(), String> {
     let mut map = open_pinned_tap_config(runtime.pin_path)?;
     match map.remove(&runtime.tap_id) {
         Ok(()) => Ok(()),
-        Err(e) => Err(format!("TAP_CONFIG_MAP remove for tap_id {}: {:?}", runtime.tap_id, e)),
+        Err(e) => Err(format!(
+            "TAP_CONFIG_MAP remove for tap_id {}: {:?}",
+            runtime.tap_id, e
+        )),
     }
 }
 
@@ -84,8 +94,12 @@ pub fn update_runtime_config(
             .unwrap_or_else(|| current.as_ref().map(|c| c.tcprt_enabled).unwrap_or(0)),
         pad: [0; 2],
     };
-    map.insert(&runtime.tap_id, &cfg, 0)
-        .map_err(|e| format!("TAP_CONFIG_MAP insert for tap_id {}: {:?}", runtime.tap_id, e))
+    map.insert(&runtime.tap_id, &cfg, 0).map_err(|e| {
+        format!(
+            "TAP_CONFIG_MAP insert for tap_id {}: {:?}",
+            runtime.tap_id, e
+        )
+    })
 }
 
 /// Update FIREWALL_CONFIG map at runtime via pinned map.
@@ -102,17 +116,20 @@ pub fn update_firewall_config(
 ) -> Result<(), String> {
     let pin_path = runtime.pin_path;
     let map_path = format!("{}/FIREWALL_CONFIG", pin_path);
-    let map_data = MapData::from_pin(&map_path)
-        .map_err(|e| format!("open FIREWALL_CONFIG: {:?}", e))?;
-    let mut map = aya::maps::HashMap::<_, u32, FirewallConfig>::try_from(
-        aya::maps::Map::HashMap(map_data),
-    )
-    .map_err(|e| format!("convert FIREWALL_CONFIG: {:?}", e))?;
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open FIREWALL_CONFIG: {:?}", e))?;
+    let mut map =
+        aya::maps::HashMap::<_, u32, FirewallConfig>::try_from(aya::maps::Map::HashMap(map_data))
+            .map_err(|e| format!("convert FIREWALL_CONFIG: {:?}", e))?;
 
     let current = map.get(&0u32, 0).ok();
     let num_cpus_val = current.as_ref().map(|c| c.num_cpus).unwrap_or_else(|| {
         let raw = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-        if raw > 0 { raw as u16 } else { 1u16 }
+        if raw > 0 {
+            raw as u16
+        } else {
+            1u16
+        }
     });
     let ct = conntrack_enabled
         .map(|b| if b { 1u8 } else { 0 })
@@ -156,12 +173,11 @@ pub fn update_firewall_config(
 pub fn read_firewall_config(runtime: TapMapRuntime<'_>) -> Result<FirewallConfig, String> {
     let pin_path = runtime.pin_path;
     let map_path = format!("{}/FIREWALL_CONFIG", pin_path);
-    let map_data = MapData::from_pin(&map_path)
-        .map_err(|e| format!("open FIREWALL_CONFIG: {:?}", e))?;
-    let map = aya::maps::HashMap::<_, u32, FirewallConfig>::try_from(
-        aya::maps::Map::HashMap(map_data),
-    )
-    .map_err(|e| format!("convert FIREWALL_CONFIG: {:?}", e))?;
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open FIREWALL_CONFIG: {:?}", e))?;
+    let map =
+        aya::maps::HashMap::<_, u32, FirewallConfig>::try_from(aya::maps::Map::HashMap(map_data))
+            .map_err(|e| format!("convert FIREWALL_CONFIG: {:?}", e))?;
 
     map.get(&0u32, 0)
         .map_err(|e| format!("read FIREWALL_CONFIG: {:?}", e))

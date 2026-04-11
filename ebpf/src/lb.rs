@@ -11,8 +11,8 @@ use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_s
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
     SvcFrontendValue, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue, FLAG_LB_HIT,
-    MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY,
-    SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
+    MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_MAGLEV,
+    SVC_LB_ALGO_RANDOM,
 };
 use crate::maps::{
     SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_LB_STATS, SVC_LB_STATS_BUF,
@@ -28,7 +28,9 @@ use crate::PipelineCtx;
 #[inline(always)]
 fn ipv4_to_v4mapped_raw(ip: u32) -> [u8; 16] {
     let b = ip.to_be_bytes();
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, b[0], b[1], b[2], b[3]]
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, b[0], b[1], b[2], b[3],
+    ]
 }
 
 #[inline(always)]
@@ -83,10 +85,7 @@ unsafe fn svc_backend_select(
 }
 
 #[inline(always)]
-unsafe fn svc_revnat_lookup_v4(
-    tap_id: u32,
-    info: &PacketInfo,
-) -> Option<&'static SvcRevNatValue> {
+unsafe fn svc_revnat_lookup_v4(tap_id: u32, info: &PacketInfo) -> Option<&'static SvcRevNatValue> {
     let key = SvcRevNatKey {
         tap_id,
         address: ipv4_to_v4mapped_raw(info.src_ip),
@@ -98,10 +97,7 @@ unsafe fn svc_revnat_lookup_v4(
 }
 
 #[inline(always)]
-unsafe fn svc_revnat_lookup_v6(
-    tap_id: u32,
-    info: &PacketInfo,
-) -> Option<&'static SvcRevNatValue> {
+unsafe fn svc_revnat_lookup_v6(tap_id: u32, info: &PacketInfo) -> Option<&'static SvcRevNatValue> {
     let key = SvcRevNatKey {
         tap_id,
         address: info.src_ip_v6,
@@ -118,11 +114,7 @@ unsafe fn svc_revnat_lookup_v6(
 
 /// Rewrite IPv4 dst to backend address + port with incremental checksum.
 #[inline(never)]
-unsafe fn svc_dnat_v4(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    backend: &SvcBackendValue,
-) -> bool {
+unsafe fn svc_dnat_v4(skb: *mut __sk_buff, info: &PacketInfo, backend: &SvcBackendValue) -> bool {
     if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0 {
         return false;
     }
@@ -131,8 +123,10 @@ unsafe fn svc_dnat_v4(
     let l4_off: u32 = ip_off + 20;
 
     let new_ip = u32::from_be_bytes([
-        backend.address[12], backend.address[13],
-        backend.address[14], backend.address[15],
+        backend.address[12],
+        backend.address[13],
+        backend.address[14],
+        backend.address[15],
     ]);
     let old_ip = info.dst_ip;
     let new_port = backend.port;
@@ -141,20 +135,26 @@ unsafe fn svc_dnat_v4(
     // Rewrite IP dst (offset 16 in IPv4 header).
     let new_ip_be = new_ip.to_be_bytes();
     if bpf_skb_store_bytes(
-        skb, (ip_off + 16) as u32,
+        skb,
+        (ip_off + 16) as u32,
         new_ip_be.as_ptr() as *const _,
-        4, 0,
-    ) < 0 {
+        4,
+        0,
+    ) < 0
+    {
         return false;
     }
 
     // Rewrite L4 dst port (offset 2 in TCP/UDP header).
     let new_port_be = new_port.to_be_bytes();
     if bpf_skb_store_bytes(
-        skb, (l4_off + 2) as u32,
+        skb,
+        (l4_off + 2) as u32,
         new_port_be.as_ptr() as *const _,
-        2, 0,
-    ) < 0 {
+        2,
+        0,
+    ) < 0
+    {
         return false;
     }
 
@@ -165,18 +165,20 @@ unsafe fn svc_dnat_v4(
     let csum_off = l4_off + if info.proto == 6 { 16 } else { 6 };
     // BPF_F_PSEUDO_HDR = 0x10 for pseudo-header aware update.
     bpf_l4_csum_replace(skb, csum_off as u32, old_ip as u64, new_ip as u64, 0x10 | 4);
-    bpf_l4_csum_replace(skb, csum_off as u32, old_port as u64, new_port as u64, 0x10 | 2);
+    bpf_l4_csum_replace(
+        skb,
+        csum_off as u32,
+        old_port as u64,
+        new_port as u64,
+        0x10 | 2,
+    );
 
     true
 }
 
 /// Rewrite IPv6 dst to backend address + port. L4 checksum only.
 #[inline(never)]
-unsafe fn svc_dnat_v6(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    backend: &SvcBackendValue,
-) -> bool {
+unsafe fn svc_dnat_v6(skb: *mut __sk_buff, info: &PacketInfo, backend: &SvcBackendValue) -> bool {
     if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0 {
         return false;
     }
@@ -186,10 +188,13 @@ unsafe fn svc_dnat_v6(
 
     // Rewrite IPv6 dst (offset 24, 16 bytes).
     if bpf_skb_store_bytes(
-        skb, (ip_off + 24) as u32,
+        skb,
+        (ip_off + 24) as u32,
         backend.address.as_ptr() as *const _,
-        16, 0,
-    ) < 0 {
+        16,
+        0,
+    ) < 0
+    {
         return false;
     }
 
@@ -197,10 +202,13 @@ unsafe fn svc_dnat_v6(
     let new_port = backend.port;
     let new_port_be = new_port.to_be_bytes();
     if bpf_skb_store_bytes(
-        skb, (l4_off + 2) as u32,
+        skb,
+        (l4_off + 2) as u32,
         new_port_be.as_ptr() as *const _,
-        2, 0,
-    ) < 0 {
+        2,
+        0,
+    ) < 0
+    {
         return false;
     }
 
@@ -211,32 +219,46 @@ unsafe fn svc_dnat_v6(
     let mut i = 0u32;
     while i < 4 {
         let off = (i * 4) as usize;
-        let old_w = u32::from_be_bytes([old_addr[off], old_addr[off+1], old_addr[off+2], old_addr[off+3]]);
-        let new_w = u32::from_be_bytes([new_addr[off], new_addr[off+1], new_addr[off+2], new_addr[off+3]]);
+        let old_w = u32::from_be_bytes([
+            old_addr[off],
+            old_addr[off + 1],
+            old_addr[off + 2],
+            old_addr[off + 3],
+        ]);
+        let new_w = u32::from_be_bytes([
+            new_addr[off],
+            new_addr[off + 1],
+            new_addr[off + 2],
+            new_addr[off + 3],
+        ]);
         if old_w != new_w {
             bpf_l4_csum_replace(skb, csum_off as u32, old_w as u64, new_w as u64, 0x10 | 4);
         }
         i += 1;
     }
     let old_port = info.dst_port;
-    bpf_l4_csum_replace(skb, csum_off as u32, old_port as u64, new_port as u64, 0x10 | 2);
+    bpf_l4_csum_replace(
+        skb,
+        csum_off as u32,
+        old_port as u64,
+        new_port as u64,
+        0x10 | 2,
+    );
 
     true
 }
 
 /// RevNat: rewrite IPv4 src to VIP address + port.
 #[inline(never)]
-unsafe fn svc_snat_v4(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    revnat: &SvcRevNatValue,
-) -> bool {
+unsafe fn svc_snat_v4(skb: *mut __sk_buff, info: &PacketInfo, revnat: &SvcRevNatValue) -> bool {
     let ip_off: u32 = if info.vlan_id != 0 { 18 } else { 14 };
     let l4_off: u32 = ip_off + 20;
 
     let new_ip = u32::from_be_bytes([
-        revnat.service_address[12], revnat.service_address[13],
-        revnat.service_address[14], revnat.service_address[15],
+        revnat.service_address[12],
+        revnat.service_address[13],
+        revnat.service_address[14],
+        revnat.service_address[15],
     ]);
     let old_ip = info.src_ip;
     let new_port = revnat.service_port;
@@ -245,20 +267,19 @@ unsafe fn svc_snat_v4(
     // Rewrite IP src (offset 12).
     let new_ip_be = new_ip.to_be_bytes();
     if bpf_skb_store_bytes(
-        skb, (ip_off + 12) as u32,
+        skb,
+        (ip_off + 12) as u32,
         new_ip_be.as_ptr() as *const _,
-        4, 0,
-    ) < 0 {
+        4,
+        0,
+    ) < 0
+    {
         return false;
     }
 
     // Rewrite L4 src port (offset 0).
     let new_port_be = new_port.to_be_bytes();
-    if bpf_skb_store_bytes(
-        skb, l4_off as u32,
-        new_port_be.as_ptr() as *const _,
-        2, 0,
-    ) < 0 {
+    if bpf_skb_store_bytes(skb, l4_off as u32, new_port_be.as_ptr() as *const _, 2, 0) < 0 {
         return false;
     }
 
@@ -266,38 +287,39 @@ unsafe fn svc_snat_v4(
     bpf_l3_csum_replace(skb, (ip_off + 10) as u32, old_ip as u64, new_ip as u64, 4);
     let csum_off = l4_off + if info.proto == 6 { 16 } else { 6 };
     bpf_l4_csum_replace(skb, csum_off as u32, old_ip as u64, new_ip as u64, 0x10 | 4);
-    bpf_l4_csum_replace(skb, csum_off as u32, old_port as u64, new_port as u64, 0x10 | 2);
+    bpf_l4_csum_replace(
+        skb,
+        csum_off as u32,
+        old_port as u64,
+        new_port as u64,
+        0x10 | 2,
+    );
 
     true
 }
 
 /// RevNat: rewrite IPv6 src to VIP address + port.
 #[inline(never)]
-unsafe fn svc_snat_v6(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    revnat: &SvcRevNatValue,
-) -> bool {
+unsafe fn svc_snat_v6(skb: *mut __sk_buff, info: &PacketInfo, revnat: &SvcRevNatValue) -> bool {
     let ip_off: u32 = if info.vlan_id != 0 { 18 } else { 14 };
     let l4_off: u32 = ip_off + 40;
 
     // Rewrite IPv6 src (offset 8, 16 bytes).
     if bpf_skb_store_bytes(
-        skb, (ip_off + 8) as u32,
+        skb,
+        (ip_off + 8) as u32,
         revnat.service_address.as_ptr() as *const _,
-        16, 0,
-    ) < 0 {
+        16,
+        0,
+    ) < 0
+    {
         return false;
     }
 
     // Rewrite L4 src port.
     let new_port = revnat.service_port;
     let new_port_be = new_port.to_be_bytes();
-    if bpf_skb_store_bytes(
-        skb, l4_off as u32,
-        new_port_be.as_ptr() as *const _,
-        2, 0,
-    ) < 0 {
+    if bpf_skb_store_bytes(skb, l4_off as u32, new_port_be.as_ptr() as *const _, 2, 0) < 0 {
         return false;
     }
 
@@ -308,15 +330,31 @@ unsafe fn svc_snat_v6(
     let mut i = 0u32;
     while i < 4 {
         let off = (i * 4) as usize;
-        let old_w = u32::from_be_bytes([old_addr[off], old_addr[off+1], old_addr[off+2], old_addr[off+3]]);
-        let new_w = u32::from_be_bytes([new_addr[off], new_addr[off+1], new_addr[off+2], new_addr[off+3]]);
+        let old_w = u32::from_be_bytes([
+            old_addr[off],
+            old_addr[off + 1],
+            old_addr[off + 2],
+            old_addr[off + 3],
+        ]);
+        let new_w = u32::from_be_bytes([
+            new_addr[off],
+            new_addr[off + 1],
+            new_addr[off + 2],
+            new_addr[off + 3],
+        ]);
         if old_w != new_w {
             bpf_l4_csum_replace(skb, csum_off as u32, old_w as u64, new_w as u64, 0x10 | 4);
         }
         i += 1;
     }
     let old_port = info.src_port;
-    bpf_l4_csum_replace(skb, csum_off as u32, old_port as u64, new_port as u64, 0x10 | 2);
+    bpf_l4_csum_replace(
+        skb,
+        csum_off as u32,
+        old_port as u64,
+        new_port as u64,
+        0x10 | 2,
+    );
 
     true
 }
@@ -345,18 +383,24 @@ fn hash_5tuple_v4(src_ip: u32, dst_ip: u32, src_port: u16, dst_port: u16, proto:
 }
 
 #[inline(always)]
-fn hash_5tuple_v6(src_ip: [u8; 16], dst_ip: [u8; 16], src_port: u16, dst_port: u16, proto: u8) -> u32 {
+fn hash_5tuple_v6(
+    src_ip: [u8; 16],
+    dst_ip: [u8; 16],
+    src_port: u16,
+    dst_port: u16,
+    proto: u8,
+) -> u32 {
     let mut h: u32 = 0x9e37_79b9;
     let mut i = 0usize;
     while i < 16 {
-        let w = u32::from_be_bytes([src_ip[i], src_ip[i+1], src_ip[i+2], src_ip[i+3]]);
+        let w = u32::from_be_bytes([src_ip[i], src_ip[i + 1], src_ip[i + 2], src_ip[i + 3]]);
         h = h.wrapping_add(w);
         h ^= h.rotate_left(13);
         i += 4;
     }
     i = 0;
     while i < 16 {
-        let w = u32::from_be_bytes([dst_ip[i], dst_ip[i+1], dst_ip[i+2], dst_ip[i+3]]);
+        let w = u32::from_be_bytes([dst_ip[i], dst_ip[i + 1], dst_ip[i + 2], dst_ip[i + 3]]);
         h = h.wrapping_add(w);
         h ^= h.rotate_left(7);
         i += 4;
@@ -372,11 +416,7 @@ fn hash_5tuple_v6(src_ip: [u8; 16], dst_ip: [u8; 16], src_port: u16, dst_port: u
 
 /// Maglev table lookup: hash → table_index → backend_slot.
 #[inline(always)]
-unsafe fn maglev_select(
-    tap_id: u32,
-    service_id: u32,
-    hash: u32,
-) -> Option<u16> {
+unsafe fn maglev_select(tap_id: u32, service_id: u32, hash: u32) -> Option<u16> {
     let table_index = (hash % MAGLEV_TABLE_SIZE) as u16;
     let key = SvcMaglevKey {
         tap_id,
@@ -426,11 +466,7 @@ unsafe fn update_lb_stats(
 // ---------------------------------------------------------------------------
 
 #[inline(always)]
-unsafe fn affinity_lookup(
-    tap_id: u32,
-    service_id: u32,
-    client_address: [u8; 16],
-) -> Option<u16> {
+unsafe fn affinity_lookup(tap_id: u32, service_id: u32, client_address: [u8; 16]) -> Option<u16> {
     let key = SvcAffinityKey {
         tap_id,
         service_id,
@@ -465,11 +501,7 @@ unsafe fn affinity_write(
 
 /// TC ingress LB phase for IPv4.
 #[inline(never)]
-pub unsafe fn phase_lb_ingress_v4(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    p: &mut PipelineCtx,
-) {
+pub unsafe fn phase_lb_ingress_v4(skb: *mut __sk_buff, info: &PacketInfo, p: &mut PipelineCtx) {
     let frontend = match svc_frontend_lookup_v4(p.tap_id, info) {
         Some(f) => f,
         None => return,
@@ -505,7 +537,14 @@ pub unsafe fn phase_lb_ingress_v4(
 
     if svc_dnat_v4(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
-        update_lb_stats(p.tap_id, frontend.service_id, slot, frontend.lb_algo, aff_hit, p.pkt_len);
+        update_lb_stats(
+            p.tap_id,
+            frontend.service_id,
+            slot,
+            frontend.lb_algo,
+            aff_hit,
+            p.pkt_len,
+        );
         if has_affinity {
             affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
         }
@@ -514,16 +553,24 @@ pub unsafe fn phase_lb_ingress_v4(
 
 /// Select backend slot based on lb_algo: maglev or random. IPv4 variant.
 #[inline(always)]
-unsafe fn select_slot_by_algo(
-    tap_id: u32,
-    frontend: &SvcFrontendValue,
-    info: &PacketInfo,
-) -> u16 {
+unsafe fn select_slot_by_algo(tap_id: u32, frontend: &SvcFrontendValue, info: &PacketInfo) -> u16 {
     if frontend.lb_algo == SVC_LB_ALGO_MAGLEV {
         let hash = if info.is_ipv6 {
-            hash_5tuple_v6(info.src_ip_v6, info.dst_ip_v6, info.src_port, info.dst_port, info.proto)
+            hash_5tuple_v6(
+                info.src_ip_v6,
+                info.dst_ip_v6,
+                info.src_port,
+                info.dst_port,
+                info.proto,
+            )
         } else {
-            hash_5tuple_v4(info.src_ip, info.dst_ip, info.src_port, info.dst_port, info.proto)
+            hash_5tuple_v4(
+                info.src_ip,
+                info.dst_ip,
+                info.src_port,
+                info.dst_port,
+                info.proto,
+            )
         };
         if let Some(slot) = maglev_select(tap_id, frontend.service_id, hash) {
             if slot < frontend.backend_count {
@@ -537,11 +584,7 @@ unsafe fn select_slot_by_algo(
 
 /// TC ingress LB phase for IPv6.
 #[inline(never)]
-pub unsafe fn phase_lb_ingress_v6(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    p: &mut PipelineCtx,
-) {
+pub unsafe fn phase_lb_ingress_v6(skb: *mut __sk_buff, info: &PacketInfo, p: &mut PipelineCtx) {
     let frontend = match svc_frontend_lookup_v6(p.tap_id, info) {
         Some(f) => f,
         None => return,
@@ -576,7 +619,14 @@ pub unsafe fn phase_lb_ingress_v6(
 
     if svc_dnat_v6(skb, info, backend) {
         p.flags |= FLAG_LB_HIT;
-        update_lb_stats(p.tap_id, frontend.service_id, slot, frontend.lb_algo, aff_hit, p.pkt_len);
+        update_lb_stats(
+            p.tap_id,
+            frontend.service_id,
+            slot,
+            frontend.lb_algo,
+            aff_hit,
+            p.pkt_len,
+        );
         if has_affinity {
             affinity_write(p.tap_id, frontend.service_id, client_addr, slot);
         }
@@ -585,11 +635,7 @@ pub unsafe fn phase_lb_ingress_v6(
 
 /// TC egress RevNat phase for IPv4.
 #[inline(never)]
-pub unsafe fn phase_lb_egress_v4(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    p: &mut PipelineCtx,
-) {
+pub unsafe fn phase_lb_egress_v4(skb: *mut __sk_buff, info: &PacketInfo, p: &mut PipelineCtx) {
     let revnat = match svc_revnat_lookup_v4(p.tap_id, info) {
         Some(r) => r,
         None => return,
@@ -599,11 +645,7 @@ pub unsafe fn phase_lb_egress_v4(
 
 /// TC egress RevNat phase for IPv6.
 #[inline(never)]
-pub unsafe fn phase_lb_egress_v6(
-    skb: *mut __sk_buff,
-    info: &PacketInfo,
-    p: &mut PipelineCtx,
-) {
+pub unsafe fn phase_lb_egress_v6(skb: *mut __sk_buff, info: &PacketInfo, p: &mut PipelineCtx) {
     let revnat = match svc_revnat_lookup_v6(p.tap_id, info) {
         Some(r) => r,
         None => return,

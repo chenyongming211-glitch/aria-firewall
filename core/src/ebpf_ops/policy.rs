@@ -122,7 +122,13 @@ pub fn add_policy(
                             return Err(format!("set port bitmap error: {:?}", e));
                         }
                     }
-                    info!(bitmap_idx = idx, start_port = start, end_port = end, rule_action, "programmed port bitmap range");
+                    info!(
+                        bitmap_idx = idx,
+                        start_port = start,
+                        end_port = end,
+                        rule_action,
+                        "programmed port bitmap range"
+                    );
                 }
             }
         }

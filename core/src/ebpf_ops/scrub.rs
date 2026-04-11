@@ -5,39 +5,57 @@ trait HasTapId {
 }
 
 impl HasTapId for PolicyKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for PortKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for CtKey4 {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for CtKey6 {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for CtContractKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for QosKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for GroupStatsKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for MirrorKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 impl HasTapId for GlobalMirrorKey {
-    fn tap_id(&self) -> u32 { self.tap_id }
+    fn tap_id(&self) -> u32 {
+        self.tap_id
+    }
 }
 
 fn scrub_hash_map<K, V, F>(
@@ -52,8 +70,8 @@ where
     F: FnOnce(MapData) -> Result<HashMap<MapData, K, V>, String>,
 {
     let map_path = format!("{}/{}", pin_path, map_name);
-    let map_data = MapData::from_pin(&map_path)
-        .map_err(|e| format!("open pinned {}: {:?}", map_name, e))?;
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open pinned {}: {:?}", map_name, e))?;
     let mut map = open_map(map_data)?;
     let keys: Vec<K> = map
         .iter()
@@ -80,8 +98,8 @@ where
     F: FnOnce(MapData) -> Result<PerCpuHashMap<MapData, K, V>, String>,
 {
     let map_path = format!("{}/{}", pin_path, map_name);
-    let map_data = MapData::from_pin(&map_path)
-        .map_err(|e| format!("open pinned {}: {:?}", map_name, e))?;
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open pinned {}: {:?}", map_name, e))?;
     let mut map = open_map(map_data)?;
     let keys: Vec<K> = map
         .keys()
@@ -143,8 +161,12 @@ fn scrub_iface_ctx_entries(pin_path: &str, tap_id: u32) -> Result<u64, String> {
         .collect();
     let count = keys.len() as u64;
     for ifindex in keys {
-        map.remove(&ifindex)
-            .map_err(|e| format!("remove IFACE_CTX_MAP entry for ifindex {}: {:?}", ifindex, e))?;
+        map.remove(&ifindex).map_err(|e| {
+            format!(
+                "remove IFACE_CTX_MAP entry for ifindex {}: {:?}",
+                ifindex, e
+            )
+        })?;
     }
     Ok(count)
 }
@@ -221,9 +243,9 @@ fn scrub_runtime_state(runtime: TapMapRuntime<'_>, scope: &'static str) -> Resul
         "RULE_STATS",
         &mut removed,
         scrub_per_cpu_hash_map(pin_path, "RULE_STATS", tap_id, |map_data| {
-            PerCpuHashMap::<_, PolicyKey, RuleStatsValue>::try_from(
-                aya::maps::Map::PerCpuHashMap(map_data),
-            )
+            PerCpuHashMap::<_, PolicyKey, RuleStatsValue>::try_from(aya::maps::Map::PerCpuHashMap(
+                map_data,
+            ))
             .map_err(|e| format!("convert RULE_STATS to PerCpuHashMap: {:?}", e))
         }),
     );
@@ -232,9 +254,9 @@ fn scrub_runtime_state(runtime: TapMapRuntime<'_>, scope: &'static str) -> Resul
         "FLOW_STATS_V4",
         &mut removed,
         scrub_per_cpu_hash_map(pin_path, "FLOW_STATS_V4", tap_id, |map_data| {
-            PerCpuHashMap::<_, CtKey4, FlowStatsValue>::try_from(
-                aya::maps::Map::PerCpuLruHashMap(map_data),
-            )
+            PerCpuHashMap::<_, CtKey4, FlowStatsValue>::try_from(aya::maps::Map::PerCpuLruHashMap(
+                map_data,
+            ))
             .map_err(|e| format!("convert FLOW_STATS_V4 to PerCpuHashMap: {:?}", e))
         }),
     );
@@ -243,9 +265,9 @@ fn scrub_runtime_state(runtime: TapMapRuntime<'_>, scope: &'static str) -> Resul
         "FLOW_STATS_V6",
         &mut removed,
         scrub_per_cpu_hash_map(pin_path, "FLOW_STATS_V6", tap_id, |map_data| {
-            PerCpuHashMap::<_, CtKey6, FlowStatsValue>::try_from(
-                aya::maps::Map::PerCpuLruHashMap(map_data),
-            )
+            PerCpuHashMap::<_, CtKey6, FlowStatsValue>::try_from(aya::maps::Map::PerCpuLruHashMap(
+                map_data,
+            ))
             .map_err(|e| format!("convert FLOW_STATS_V6 to PerCpuHashMap: {:?}", e))
         }),
     );
@@ -263,9 +285,9 @@ fn scrub_runtime_state(runtime: TapMapRuntime<'_>, scope: &'static str) -> Resul
         "QOS_STATS",
         &mut removed,
         scrub_per_cpu_hash_map(pin_path, "QOS_STATS", tap_id, |map_data| {
-            PerCpuHashMap::<_, QosKey, QosStatsValue>::try_from(
-                aya::maps::Map::PerCpuHashMap(map_data),
-            )
+            PerCpuHashMap::<_, QosKey, QosStatsValue>::try_from(aya::maps::Map::PerCpuHashMap(
+                map_data,
+            ))
             .map_err(|e| format!("convert QOS_STATS to PerCpuHashMap: {:?}", e))
         }),
     );
@@ -327,7 +349,12 @@ fn scrub_runtime_state(runtime: TapMapRuntime<'_>, scope: &'static str) -> Resul
         crate::trace_ops::flush_trace_log(runtime),
     );
 
-    info!(tap_id, removed_entries = removed, scope, "scrubbed runtime state");
+    info!(
+        tap_id,
+        removed_entries = removed,
+        scope,
+        "scrubbed runtime state"
+    );
     Ok(removed)
 }
 
@@ -343,5 +370,8 @@ pub fn scrub_managed_runtime_state(runtime: TapMapRuntime<'_>) -> Result<u64, St
 
 /// Scrub all standalone tap-scoped entries before replaying persisted system state.
 pub fn scrub_standalone_runtime_state(pin_path: &str) -> Result<u64, String> {
-    scrub_runtime_state(TapMapRuntime::new(pin_path, TAP_ID_UNASSIGNED), "standalone")
+    scrub_runtime_state(
+        TapMapRuntime::new(pin_path, TAP_ID_UNASSIGNED),
+        "standalone",
+    )
 }

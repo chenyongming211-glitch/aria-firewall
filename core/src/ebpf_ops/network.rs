@@ -90,7 +90,9 @@ pub fn delete_network(
             let mut lpm_map = open_pinned_lpm_v4(pin_path, map_name)?;
             match lpm_map.remove(&key) {
                 Ok(()) => info!(cidr = %cidr, map = %map_name, "deleted IPv4 network"),
-                Err(_) => info!(cidr = %cidr, map = %map_name, "IPv4 network not present during delete"),
+                Err(_) => {
+                    info!(cidr = %cidr, map = %map_name, "IPv4 network not present during delete")
+                }
             }
         }
         IpAddr::V6(v6) => {
@@ -103,7 +105,9 @@ pub fn delete_network(
             let mut lpm_map = open_pinned_lpm_v6(pin_path, map_name)?;
             match lpm_map.remove(&key) {
                 Ok(()) => info!(cidr = %cidr, map = %map_name, "deleted IPv6 network"),
-                Err(_) => info!(cidr = %cidr, map = %map_name, "IPv6 network not present during delete"),
+                Err(_) => {
+                    info!(cidr = %cidr, map = %map_name, "IPv6 network not present during delete")
+                }
             }
         }
     }
