@@ -5,8 +5,8 @@ use aya_ebpf::maps::lpm_trie::Key;
 use aya_ebpf::programs::TcContext;
 
 use crate::common::{
-    PipelineCtx, RouteValue, DROP_ROUTE_BLACKHOLE, DROP_ROUTE_MISS, FLAG_ROUTE_RESOLVED,
-    NEXT_HOP_BLACKHOLE, NEXT_HOP_GATEWAY, NEXT_HOP_HOST, NEXT_HOP_LOCAL_PORT,
+    PipelineCtx, RouteValue, DROP_REDIRECT_FAIL, DROP_ROUTE_BLACKHOLE, DROP_ROUTE_MISS,
+    FLAG_ROUTE_RESOLVED, NEXT_HOP_BLACKHOLE, NEXT_HOP_GATEWAY, NEXT_HOP_HOST, NEXT_HOP_LOCAL_PORT,
 };
 use crate::maps::{ROUTE_TABLE_V4, ROUTE_TABLE_V6};
 
@@ -48,7 +48,11 @@ pub unsafe fn phase_route_forward(
                 p.drop_reason = DROP_ROUTE_MISS;
                 TC_ACT_SHOT
             } else {
-                bpf_redirect(route.egress_ifindex, 0) as i32
+                let ret = bpf_redirect(route.egress_ifindex, 0) as i32;
+                if ret == TC_ACT_SHOT {
+                    p.drop_reason = DROP_REDIRECT_FAIL;
+                }
+                ret
             }
         }
         NEXT_HOP_GATEWAY | NEXT_HOP_HOST => TC_ACT_OK,

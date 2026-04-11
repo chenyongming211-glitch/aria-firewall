@@ -307,6 +307,7 @@ pub const DROP_SG_INGRESS: u8 = 22;
 pub const DROP_SG_EGRESS: u8 = 23;
 pub const DROP_ROUTE_MISS: u8 = 24;
 pub const DROP_ROUTE_BLACKHOLE: u8 = 25;
+pub const DROP_REDIRECT_FAIL: u8 = 26;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -488,7 +489,7 @@ pub const FLAG_TCPRT_ON: u16 = 1 << 1;
 pub const FLAG_TRACING: u16 = 1 << 2;
 pub const FLAG_ACL_ON: u16 = 1 << 3;
 pub const FLAG_MIRROR_ON: u16 = 1 << 4;
-pub const FLAG_LB_ON: u16 = 1 << 5;
+pub const FLAG_LB_ON: u16 = 1 << 12;
 pub const FLAG_CT_HIT: u16 = 1 << 5;
 pub const FLAG_IS_FORWARD: u16 = 1 << 6;
 #[allow(dead_code)]

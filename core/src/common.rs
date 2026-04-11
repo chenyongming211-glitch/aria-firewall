@@ -437,6 +437,7 @@ pub const DROP_SG_INGRESS: u8 = 22;
 pub const DROP_SG_EGRESS: u8 = 23;
 pub const DROP_ROUTE_MISS: u8 = 24;
 pub const DROP_ROUTE_BLACKHOLE: u8 = 25;
+pub const DROP_REDIRECT_FAIL: u8 = 26;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
