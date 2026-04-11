@@ -4625,7 +4625,7 @@ fn materialize_phase3_maps(
         PortIdentityValue, RouteValue, SgRuleKey, SgRuleValue, TapConfig, TapMapRuntime,
         PORT_FLAG_ANTI_SPOOF, PORT_FLAG_HAS_ALLOWED_PAIRS,
     };
-    use aria_core::ebpf_ops::{add_policy, clear_iface_ctx, delete_policy, sync_iface_ctx, write_tap_config};
+    use aria_core::ebpf_ops::{clear_iface_ctx, sync_iface_ctx, write_tap_config};
     use aria_core::port_ops::{
         clear_anti_spoof_entries, write_anti_spoof_entries, write_port_identity, AntiSpoofEntry,
     };
@@ -4827,10 +4827,6 @@ fn materialize_phase3_maps(
                         prev_rule.src_numeric_id,
                         prev_rule.dst_numeric_id,
                         prev_rule.proto,
-                        prev_rule.action,
-                        prev_rule.ports.as_deref(),
-                        None,
-                        false,
                         prev_rule.direction,
                         runtime,
                         "",
@@ -4854,8 +4850,8 @@ fn materialize_phase3_maps(
                     rule.proto,
                     rule.action,
                     rule.ports.as_deref(),
-                    None,  // bitmap_idx: agent allocates per-call
-                    true,  // is_new_port_set
+                    None,  // bitmap_idx: not managed per-rule for Controller path
+                    false, // is_new_port_set: no bitmap to write without idx
                     rule.direction,
                     runtime,
                     "",

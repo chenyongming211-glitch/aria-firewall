@@ -2,7 +2,6 @@ use aya::maps::{HashMap, Map, MapData};
 
 use crate::common::{
     SvcBackendKey, SvcBackendValue, SvcFrontendKey, SvcFrontendValue, SvcRevNatKey, SvcRevNatValue,
-    TapMapRuntime,
 };
 
 const SVC_FRONTEND_MAP_NAME: &str = "SVC_FRONTEND_MAP";
