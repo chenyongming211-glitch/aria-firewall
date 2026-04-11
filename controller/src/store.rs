@@ -1392,8 +1392,8 @@ impl InMemoryControllerStore {
                 .into_iter()
                 .find(|network_policy| {
                     network_policy.spec.rules.iter().any(|rule| {
-                        rule.src_ip_group_ids.iter().any(|id| id == ip_group_id)
-                            || rule.dst_ip_group_ids.iter().any(|id| id == ip_group_id)
+                        rule.src_ip_group_id == ip_group_id
+                            || rule.dst_ip_group_id == ip_group_id
                     })
                 })
         {

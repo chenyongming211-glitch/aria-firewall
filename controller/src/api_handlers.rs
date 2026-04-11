@@ -1449,11 +1449,11 @@ pub async fn create_ip_group(
     State(store): State<AppState>,
     Json(request): Json<CreateIpGroupRequest>,
 ) -> Result<(StatusCode, Json<IpGroupResource>), ControllerError> {
-    let entry_count = request.spec.cidrs.len();
+    let cidr_count = request.spec.cidrs.len();
     let resource = IpGroupResource {
         metadata: metadata_from_create(request.metadata),
         spec: request.spec,
-        status: ip_group_status(entry_count),
+        status: ip_group_status(cidr_count),
     };
     let created = store.create_ip_group(resource).await?;
     Ok((StatusCode::CREATED, Json(created)))

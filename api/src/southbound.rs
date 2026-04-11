@@ -235,12 +235,6 @@ pub struct DesiredStateEnvelope {
     /// Route-table objects relevant to the node.
     #[serde(default)]
     pub route_tables: Vec<RouteTableResource>,
-    /// IP-group objects relevant to node-local policy compilation.
-    #[serde(default)]
-    pub ip_groups: Vec<IpGroupResource>,
-    /// Network-policy objects relevant to node-local policy compilation.
-    #[serde(default)]
-    pub network_policies: Vec<NetworkPolicyResource>,
     /// Health-check objects relevant to the node.
     #[serde(default)]
     pub health_checks: Vec<HealthCheckResource>,

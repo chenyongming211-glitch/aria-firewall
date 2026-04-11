@@ -1136,6 +1136,7 @@ pub struct RouteTableListResponse {
     pub total_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "tenant_id": "tenant-0001",
     "network_id": "network-0001",
@@ -1732,13 +1733,4 @@ pub struct NetworkPolicyListResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
     pub total_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, IntoParams, ToSchema)]
-pub struct NetworkPolicyListQuery {
-    pub limit: Option<usize>,
-    pub page_token: Option<String>,
-    pub label_selector: Option<String>,
-    pub tenant_id: Option<String>,
-    pub network_id: Option<String>,
 }
