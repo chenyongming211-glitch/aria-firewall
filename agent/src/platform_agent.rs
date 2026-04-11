@@ -4838,7 +4838,6 @@ fn materialize_phase3_maps(
                 }
             }
         }
-        }
     }
     let mut policy_entries_written = 0usize;
     for np in &compiled_state.network_policies {
