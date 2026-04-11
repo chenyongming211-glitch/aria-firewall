@@ -96,6 +96,23 @@ struct RouteIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct IpGroupIr {
+    ip_group_id: String,
+    numeric_id: u32,
+    network_id: String,
+    cidrs: Vec<IpGroupCidrIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct IpGroupCidrIr {
+    cidr: String,
+    is_ipv6: bool,
+    address: [u8; 16],
+    prefix_len: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SgRuleIr {
     port_id: String,
     tap_id: u32,
@@ -258,6 +275,8 @@ struct CompiledNodeState {
     route_entries: Vec<RouteIr>,
     #[serde(default)]
     sg_rules: Vec<SgRuleIr>,
+    #[serde(default)]
+    ip_groups: Vec<IpGroupIr>,
     health_checks: Vec<CompiledHealthCheckView>,
     backend_sets: Vec<CompiledBackendSetView>,
     services: Vec<CompiledServiceView>,
@@ -2166,11 +2185,60 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         })
         .count();
 
+    // --- IpGroup compilation ---
+    let mut ip_groups = Vec::new();
+    let network_id_set: BTreeSet<&str> = network_by_id.keys().map(|s| s.as_str()).collect();
+    for ip_group in &context.desired.ip_groups {
+        if !network_id_set.contains(ip_group.spec.network_id.as_str()) {
+            continue;
+        }
+        let numeric_id = stable_local_id(&ip_group.metadata.id);
+        let mut cidrs = Vec::new();
+        for cidr_str in &ip_group.spec.cidrs {
+            match aria_core::ebpf_ops::parse_cidr(cidr_str) {
+                Ok((ip, prefix_len)) => {
+                    let is_ipv6 = matches!(ip, std::net::IpAddr::V6(_));
+                    let mut address = [0u8; 16];
+                    match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            let mapped = ipv4_to_v4mapped_bytes(v4.octets());
+                            address.copy_from_slice(&mapped);
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            address.copy_from_slice(&v6.octets());
+                        }
+                    }
+                    cidrs.push(IpGroupCidrIr {
+                        cidr: cidr_str.clone(),
+                        is_ipv6,
+                        address,
+                        prefix_len,
+                    });
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "ip_group '{}': invalid CIDR '{}': {}",
+                        ip_group.metadata.id, cidr_str, e
+                    ));
+                }
+            }
+        }
+        ip_groups.push(IpGroupIr {
+            ip_group_id: ip_group.metadata.id.clone(),
+            numeric_id,
+            network_id: ip_group.spec.network_id.clone(),
+            cidrs,
+            shadow_apply_only: true,
+        });
+    }
+
     let domain_summaries = vec![
         CompileDomainSummary {
             domain: "identity".to_string(),
-            input_objects: context.desired.tenants.len() + context.desired.networks.len(),
-            compiled_objects: tenant_ids.len() + network_by_id.len(),
+            input_objects: context.desired.tenants.len()
+                + context.desired.networks.len()
+                + context.desired.ip_groups.len(),
+            compiled_objects: tenant_ids.len() + network_by_id.len() + ip_groups.len(),
             failed_objects: 0,
             status: "shadow_ready".to_string(),
             shadow_apply_only: true,
@@ -2253,6 +2321,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         route_tables: compiled_route_tables,
         route_entries,
         sg_rules,
+        ip_groups,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,
@@ -4471,6 +4540,7 @@ struct Phase3MaterializeResult {
     sg_rules_written: usize,
     route_v4_written: usize,
     route_v6_written: usize,
+    ip_group_entries_written: usize,
 }
 
 fn clear_phase3_state_for_port(
@@ -4686,12 +4756,78 @@ fn materialize_phase3_maps(
         }
     }
 
+    // --- IpGroup LPM Trie materialization ---
+    // Clear previous Controller-written LPM entries for IpGroups.
+    if let Some(prev) = previous_state {
+        for prev_group in &prev.ip_groups {
+            for cidr_ir in &prev_group.cidrs {
+                for tap_id in &current_tap_ids {
+                    let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                    let _ = aria_core::ebpf_ops::delete_network(
+                        "src",
+                        &cidr_ir.cidr,
+                        prev_group.numeric_id,
+                        runtime,
+                        "",
+                    );
+                    let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                    let _ = aria_core::ebpf_ops::delete_network(
+                        "dst",
+                        &cidr_ir.cidr,
+                        prev_group.numeric_id,
+                        runtime,
+                        "",
+                    );
+                }
+            }
+        }
+    }
+    let mut ip_group_entries_written = 0usize;
+    // Build a map from network_id to tap_ids for fast lookup.
+    let network_tap_ids: BTreeMap<&str, Vec<u32>> = compiled_state
+        .port_identities
+        .iter()
+        .fold(BTreeMap::new(), |mut acc, port| {
+            acc.entry(&port.network_id)
+                .or_default()
+                .push(port.tap_id);
+            acc
+        });
+    for group in &compiled_state.ip_groups {
+        let tap_ids = match network_tap_ids.get(group.network_id.as_str()) {
+            Some(ids) => ids,
+            None => continue,
+        };
+        for cidr_ir in &group.cidrs {
+            for tap_id in tap_ids {
+                let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                aria_core::ebpf_ops::add_network(
+                    "src",
+                    &cidr_ir.cidr,
+                    group.numeric_id,
+                    runtime,
+                    "",
+                )?;
+                let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                aria_core::ebpf_ops::add_network(
+                    "dst",
+                    &cidr_ir.cidr,
+                    group.numeric_id,
+                    runtime,
+                    "",
+                )?;
+                ip_group_entries_written += 2; // src + dst
+            }
+        }
+    }
+
     Ok(Phase3MaterializeResult {
         port_identities_written: compiled_state.port_identities.len(),
         anti_spoof_entries_written,
         sg_rules_written,
         route_v4_written,
         route_v6_written,
+        ip_group_entries_written,
     })
 }
 

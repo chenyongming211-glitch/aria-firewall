@@ -53,6 +53,16 @@ pub fn build_router(store: SharedStore) -> Router {
                 .delete(api_handlers::delete_port),
         )
         .route(
+            "/api/v1/ip-groups",
+            get(api_handlers::list_ip_groups).post(api_handlers::create_ip_group),
+        )
+        .route(
+            "/api/v1/ip-groups/{id}",
+            get(api_handlers::get_ip_group)
+                .put(api_handlers::update_ip_group)
+                .delete(api_handlers::delete_ip_group),
+        )
+        .route(
             "/api/v1/security-groups",
             get(api_handlers::list_security_groups).post(api_handlers::create_security_group),
         )

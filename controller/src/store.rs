@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
-    HealthCheckResource, NetworkResource, NodeCapability, NodeHealthReport, NodeInfo,
-    NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata, RouteTableResource,
-    SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus,
-    TenantResource,
+    HealthCheckResource, IpGroupResource, NetworkResource, NodeCapability, NodeHealthReport,
+    NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
+    RouteTableResource, SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse,
+    SouthboundSyncStatus, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,7 @@ impl_stored_resource!(RouteTableResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
+impl_stored_resource!(IpGroupResource);
 
 #[derive(Debug, Clone)]
 pub enum StoreError {
@@ -137,6 +138,7 @@ struct PersistedControllerState {
     health_checks: PersistedResourceStore<HealthCheckResource>,
     backend_sets: PersistedResourceStore<BackendSetResource>,
     services: PersistedResourceStore<ServiceResource>,
+    ip_groups: PersistedResourceStore<IpGroupResource>,
     generation: u64,
     #[serde(default)]
     southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
@@ -254,6 +256,19 @@ pub trait ControllerStore: Send + Sync {
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError>;
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError>;
+
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource>;
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource>;
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError>;
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError>;
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError>;
 
     async fn record_registration(
         &self,
@@ -401,6 +416,7 @@ pub struct InMemoryControllerStore {
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
+    pub ip_groups: ResourceStore<IpGroupResource>,
     generation: AtomicU64,
     // High-frequency southbound runtime stays in memory so heartbeat/status
     // updates do not rewrite the controller snapshot on every report.
@@ -421,6 +437,7 @@ impl InMemoryControllerStore {
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
+            ip_groups: ResourceStore::new("ip_group", "ipgroup"),
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
             southbound_publishes: RwLock::new(BTreeMap::new()),
@@ -445,6 +462,7 @@ impl InMemoryControllerStore {
         );
         counts.insert("backend_sets".to_string(), self.backend_sets.count().await);
         counts.insert("services".to_string(), self.services.count().await);
+        counts.insert("ip_groups".to_string(), self.ip_groups.count().await);
         counts
     }
 
@@ -659,6 +677,50 @@ impl InMemoryControllerStore {
     ) -> Result<(), StoreError> {
         self.ensure_network_exists_inner(&resource.spec.network_id, "route_table", "network_id")
             .await?;
+        Ok(())
+    }
+
+    async fn validate_ip_group_resource_inner(
+        &self,
+        resource: &IpGroupResource,
+    ) -> Result<(), StoreError> {
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "ip_group", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "ip_group", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::InvalidReference {
+                resource: "ip_group",
+                field: "network_id",
+                value: resource.spec.network_id.clone(),
+                referenced_resource: "network",
+            });
+        }
+        // Validate CIDR strings parse correctly.
+        for cidr in &resource.spec.cidrs {
+            if cidr.parse::<std::net::IpNet>().is_err() {
+                return Err(StoreError::BadRequest(format!(
+                    "invalid CIDR '{}'",
+                    cidr
+                )));
+            }
+        }
+        // Enforce name uniqueness within the same network.
+        for existing in self.ip_groups.list().await {
+            if existing.spec.network_id == resource.spec.network_id
+                && existing.spec.name == resource.spec.name
+                && existing.metadata.id != resource.metadata.id
+            {
+                return Err(StoreError::AlreadyExists {
+                    resource: "ip_group",
+                    id: format!(
+                        "name '{}' in network '{}'",
+                        resource.spec.name, resource.spec.network_id
+                    ),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1171,6 +1233,7 @@ impl InMemoryControllerStore {
         networks: &[NetworkResource],
         ports: &[PortResource],
         security_groups: &[SecurityGroupResource],
+        ip_groups: &[IpGroupResource],
         route_tables: &[RouteTableResource],
         health_checks: &[HealthCheckResource],
         backend_sets: &[BackendSetResource],
@@ -1182,6 +1245,7 @@ impl InMemoryControllerStore {
             ("networks".to_string(), networks.len()),
             ("ports".to_string(), ports.len()),
             ("security_groups".to_string(), security_groups.len()),
+            ("ip_groups".to_string(), ip_groups.len()),
             ("route_tables".to_string(), route_tables.len()),
             ("health_checks".to_string(), health_checks.len()),
             ("backend_sets".to_string(), backend_sets.len()),
@@ -1415,6 +1479,7 @@ impl InMemoryControllerStore {
             health_checks: self.health_checks.snapshot().await,
             backend_sets: self.backend_sets.snapshot().await,
             services: self.services.snapshot().await,
+            ip_groups: self.ip_groups.snapshot().await,
             generation: self.generation.load(Ordering::Relaxed),
             southbound_publishes: self.southbound_publishes.read().await.clone(),
         }
@@ -1430,6 +1495,7 @@ impl InMemoryControllerStore {
         self.health_checks.restore(snapshot.health_checks).await;
         self.backend_sets.restore(snapshot.backend_sets).await;
         self.services.restore(snapshot.services).await;
+        self.ip_groups.restore(snapshot.ip_groups).await;
         self.generation
             .store(snapshot.generation, Ordering::Relaxed);
         *self.southbound_publishes.write().await = snapshot.southbound_publishes;
@@ -1687,6 +1753,14 @@ impl InMemoryControllerStore {
             .filter(|route_table| network_ids.contains(&route_table.spec.network_id))
             .collect::<Vec<_>>();
 
+        let ip_groups = self
+            .ip_groups
+            .list()
+            .await
+            .into_iter()
+            .filter(|ip_group| network_ids.contains(&ip_group.spec.network_id))
+            .collect::<Vec<_>>();
+
         let backend_sets = self
             .backend_sets
             .list()
@@ -1736,6 +1810,7 @@ impl InMemoryControllerStore {
             &networks,
             &ports,
             &security_groups,
+            &ip_groups,
             &route_tables,
             &health_checks,
             &backend_sets,
@@ -1758,6 +1833,7 @@ impl InMemoryControllerStore {
                 networks,
                 ports,
                 security_groups,
+                ip_groups,
                 route_tables,
                 health_checks,
                 backend_sets,
@@ -2324,6 +2400,52 @@ impl ControllerStore for InMemoryControllerStore {
             .await
     }
 
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource> {
+        self.list_resource(&self.ip_groups).await
+    }
+
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource> {
+        self.get_resource(&self.ip_groups, id).await
+    }
+
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_ip_group_resource_inner(&resource).await?;
+            inner.create_resource(&inner.ip_groups, resource).await
+        })
+        .await
+    }
+
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .ip_groups
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "ip_group",
+                    id: id.to_string(),
+                })?;
+            inner.validate_ip_group_resource_inner(&resource).await?;
+            inner
+                .update_resource(&inner.ip_groups, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move { inner.delete_resource(&inner.ip_groups, id).await })
+            .await
+    }
+
     // `node` keeps a hand-written delete path because removing a node must
     // also purge any cached southbound runtime state keyed by the same ID.
     async fn list_nodes(&self) -> Vec<NodeResource> {
@@ -2669,6 +2791,35 @@ impl ControllerStore for FileBackedControllerStore {
 
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
         self.run_persisted(|inner| inner.delete_service(id)).await
+    }
+
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource> {
+        self.inner.list_ip_groups().await
+    }
+
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource> {
+        self.inner.get_ip_group(id).await
+    }
+
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.create_ip_group(resource))
+            .await
+    }
+
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.update_ip_group(id, resource))
+            .await
+    }
+
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_ip_group(id)).await
     }
 
     async fn record_registration(
