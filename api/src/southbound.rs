@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use crate::{
-    BackendSetResource, HealthCheckResource, IpGroupResource, NetworkResource, PortResource,
-    RouteTableResource, SecurityGroupResource, ServiceResource, TenantResource,
+    BackendSetResource, HealthCheckResource, IpGroupResource, NetworkPolicyResource,
+    NetworkResource, PortResource, RouteTableResource, SecurityGroupResource, ServiceResource,
+    TenantResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -187,6 +188,7 @@ pub struct DesiredStateDeleteRef {
     "ports": [],
     "security_groups": [],
     "ip_groups": [],
+    "network_policies": [],
     "route_tables": [],
     "health_checks": [],
     "backend_sets": [],
@@ -223,6 +225,9 @@ pub struct DesiredStateEnvelope {
     /// IP group objects relevant to the node.
     #[serde(default)]
     pub ip_groups: Vec<IpGroupResource>,
+    /// Network-policy objects relevant to the node.
+    #[serde(default)]
+    pub network_policies: Vec<NetworkPolicyResource>,
     /// Route-table objects relevant to the node.
     #[serde(default)]
     pub route_tables: Vec<RouteTableResource>,

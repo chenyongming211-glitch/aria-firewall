@@ -113,6 +113,24 @@ struct IpGroupCidrIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct NetworkPolicyIr {
+    policy_id: String,
+    network_id: String,
+    rules: Vec<NetworkPolicyRuleIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NetworkPolicyRuleIr {
+    src_numeric_id: u32,
+    dst_numeric_id: u32,
+    proto: u8,
+    direction: u8,
+    action: u8,
+    ports: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SgRuleIr {
     port_id: String,
     tap_id: u32,
@@ -277,6 +295,8 @@ struct CompiledNodeState {
     sg_rules: Vec<SgRuleIr>,
     #[serde(default)]
     ip_groups: Vec<IpGroupIr>,
+    #[serde(default)]
+    network_policies: Vec<NetworkPolicyIr>,
     health_checks: Vec<CompiledHealthCheckView>,
     backend_sets: Vec<CompiledBackendSetView>,
     services: Vec<CompiledServiceView>,
@@ -2232,6 +2252,33 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         });
     }
 
+    // --- NetworkPolicy compilation ---
+    let mut network_policies = Vec::new();
+    for np in &context.desired.network_policies {
+        if !network_id_set.contains(np.spec.network_id.as_str()) {
+            continue;
+        }
+        let rules: Vec<NetworkPolicyRuleIr> = np
+            .spec
+            .rules
+            .iter()
+            .map(|rule| NetworkPolicyRuleIr {
+                src_numeric_id: stable_local_id(&rule.src_ip_group_id),
+                dst_numeric_id: stable_local_id(&rule.dst_ip_group_id),
+                proto: rule.proto,
+                direction: rule.direction,
+                action: rule.action,
+                ports: rule.ports.clone(),
+            })
+            .collect();
+        network_policies.push(NetworkPolicyIr {
+            policy_id: np.metadata.id.clone(),
+            network_id: np.spec.network_id.clone(),
+            rules,
+            shadow_apply_only: true,
+        });
+    }
+
     let domain_summaries = vec![
         CompileDomainSummary {
             domain: "identity".to_string(),
@@ -2257,8 +2304,9 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         },
         CompileDomainSummary {
             domain: "security".to_string(),
-            input_objects: context.desired.security_groups.len(),
-            compiled_objects: sg_rules.len(),
+            input_objects: context.desired.security_groups.len()
+                + context.desired.network_policies.len(),
+            compiled_objects: sg_rules.len() + network_policies.len(),
             failed_objects: security_failure_count,
             status: if security_failure_count == 0 {
                 "shadow_ready".to_string()
@@ -2322,6 +2370,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         route_entries,
         sg_rules,
         ip_groups,
+        network_policies,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,
@@ -4541,6 +4590,7 @@ struct Phase3MaterializeResult {
     route_v4_written: usize,
     route_v6_written: usize,
     ip_group_entries_written: usize,
+    policy_entries_written: usize,
 }
 
 fn clear_phase3_state_for_port(
@@ -4575,7 +4625,7 @@ fn materialize_phase3_maps(
         PortIdentityValue, RouteValue, SgRuleKey, SgRuleValue, TapConfig, TapMapRuntime,
         PORT_FLAG_ANTI_SPOOF, PORT_FLAG_HAS_ALLOWED_PAIRS,
     };
-    use aria_core::ebpf_ops::{clear_iface_ctx, sync_iface_ctx, write_tap_config};
+    use aria_core::ebpf_ops::{add_policy, clear_iface_ctx, delete_policy, sync_iface_ctx, write_tap_config};
     use aria_core::port_ops::{
         clear_anti_spoof_entries, write_anti_spoof_entries, write_port_identity, AntiSpoofEntry,
     };
@@ -4756,6 +4806,66 @@ fn materialize_phase3_maps(
         }
     }
 
+    // --- NetworkPolicy POLICY_TABLE materialization ---
+    // Build a map from network_id to tap_ids (shared by IpGroup and NetworkPolicy).
+    let network_tap_ids: BTreeMap<&str, Vec<u32>> = compiled_state
+        .port_identities
+        .iter()
+        .fold(BTreeMap::new(), |mut acc, port| {
+            acc.entry(&port.network_id)
+                .or_default()
+                .push(port.tap_id);
+            acc
+        });
+    // Clear previous Controller-written policy entries.
+    if let Some(prev) = previous_state {
+        for prev_np in &prev.network_policies {
+            for prev_rule in &prev_np.rules {
+                for tap_id in &current_tap_ids {
+                    let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                    let _ = aria_core::ebpf_ops::delete_policy(
+                        prev_rule.src_numeric_id,
+                        prev_rule.dst_numeric_id,
+                        prev_rule.proto,
+                        prev_rule.action,
+                        prev_rule.ports.as_deref(),
+                        None,
+                        false,
+                        prev_rule.direction,
+                        runtime,
+                        "",
+                    );
+                }
+            }
+        }
+        }
+    }
+    let mut policy_entries_written = 0usize;
+    for np in &compiled_state.network_policies {
+        let tap_ids = match network_tap_ids.get(np.network_id.as_str()) {
+            Some(ids) => ids,
+            None => continue,
+        };
+        for rule in &np.rules {
+            for tap_id in tap_ids {
+                let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                aria_core::ebpf_ops::add_policy(
+                    rule.src_numeric_id,
+                    rule.dst_numeric_id,
+                    rule.proto,
+                    rule.action,
+                    rule.ports.as_deref(),
+                    None,  // bitmap_idx: agent allocates per-call
+                    true,  // is_new_port_set
+                    rule.direction,
+                    runtime,
+                    "",
+                )?;
+                policy_entries_written += 1;
+            }
+        }
+    }
+
     // --- IpGroup LPM Trie materialization ---
     // Clear previous Controller-written LPM entries for IpGroups.
     if let Some(prev) = previous_state {
@@ -4783,16 +4893,6 @@ fn materialize_phase3_maps(
         }
     }
     let mut ip_group_entries_written = 0usize;
-    // Build a map from network_id to tap_ids for fast lookup.
-    let network_tap_ids: BTreeMap<&str, Vec<u32>> = compiled_state
-        .port_identities
-        .iter()
-        .fold(BTreeMap::new(), |mut acc, port| {
-            acc.entry(&port.network_id)
-                .or_default()
-                .push(port.tap_id);
-            acc
-        });
     for group in &compiled_state.ip_groups {
         let tap_ids = match network_tap_ids.get(group.network_id.as_str()) {
             Some(ids) => ids,
@@ -4828,6 +4928,7 @@ fn materialize_phase3_maps(
         route_v4_written,
         route_v6_written,
         ip_group_entries_written,
+        policy_entries_written,
     })
 }
 
