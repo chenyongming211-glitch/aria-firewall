@@ -382,6 +382,6 @@ Routing / NAT v1 的验收标准：
 
 ## 17. 后续拆分建议
 
-- `RFC-005A` Route / NextHop 结构
+- `RFC-005A` 单节点 IaaS map schema（Port / Anti-Spoof / Route / SecurityGroup + Mode B NAT 预留）
 - `RFC-005B` FloatingIP / NAT Gateway
 - `RFC-005C` Multi-node overlay / native routing

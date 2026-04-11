@@ -300,6 +300,14 @@ pub const DROP_ACL_DEFAULT_DENY: u8 = 3; // ACL default deny (port not matched)
 pub const DROP_QOS_INGRESS: u8 = 4; // QoS ingress rate limit drop
 pub const DROP_QOS_EGRESS: u8 = 5; // QoS egress rate limit drop
 
+// IaaS Network drop reasons
+pub const DROP_PORT_IDENTITY_MISS: u8 = 20;
+pub const DROP_ANTI_SPOOF: u8 = 21;
+pub const DROP_SG_INGRESS: u8 = 22;
+pub const DROP_SG_EGRESS: u8 = 23;
+pub const DROP_ROUTE_MISS: u8 = 24;
+pub const DROP_ROUTE_BLACKHOLE: u8 = 25;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct DropKey {
@@ -379,6 +387,9 @@ pub const TRACE_RESULT_DROP_ACL_PORT: u8 = 2;
 #[allow(dead_code)]
 pub const TRACE_RESULT_DROP_ACL_DEFAULT: u8 = 3;
 pub const TRACE_RESULT_DROP_QOS: u8 = 4;
+pub const TRACE_RESULT_DROP_IDENTITY: u8 = 5;
+pub const TRACE_RESULT_DROP_SECURITY: u8 = 6;
+pub const TRACE_RESULT_DROP_ROUTE: u8 = 7;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -483,6 +494,11 @@ pub const FLAG_IS_FORWARD: u16 = 1 << 6;
 pub const FLAG_NEED_IDS: u16 = 1 << 7;
 pub const FLAG_LB_HIT: u16 = 1 << 8;
 
+// IaaS Network pipeline flags (bits 9-11)
+pub const FLAG_PORT_RESOLVED: u16 = 1 << 9;
+pub const FLAG_ANTI_SPOOF_PASSED: u16 = 1 << 10;
+pub const FLAG_ROUTE_RESOLVED: u16 = 1 << 11;
+
 /// Per-CPU scratch buffer for passing state between pipeline phases.
 /// Lives in PIPE_SCRATCH PerCpuArray — zero stack overhead.
 #[repr(C)]
@@ -513,6 +529,15 @@ pub struct PipelineCtx {
     pub matched_proto: u8,
     pub matched_direction: u8,
     pub _pad2: [u8; 2],
+
+    // IaaS Network: port identity + route results
+    pub port_network_id: u32,
+    pub port_segment_id: u32,
+    pub port_sg_id: u32,
+    pub route_id: u16,
+    pub route_next_hop_type: u8,
+    pub port_flags: u8,
+    pub route_egress_ifindex: u32,
 }
 
 // --- Global firewall config (feature switches) ---
@@ -644,6 +669,98 @@ pub struct SslWriteScratch {
     pub ssl_ptr: u64,
     pub write_ts: u64,
 }
+
+// --- Port Identity (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct PortIdentityKey {
+    pub tap_id: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct PortIdentityValue {
+    pub mac: [u8; 6],
+    pub flags: u16, // bit0=anti_spoof_enabled, bit1=has_allowed_pairs
+    pub network_id: u32,
+    pub segment_id: u32,
+    pub tenant_id: u32,
+    pub primary_ipv4: u32,
+    pub primary_ipv6: [u8; 16],
+    pub sg_id: u32,
+    pub ip_count: u16,
+    pub pad: [u8; 2],
+}
+
+/// PortIdentityValue.flags constants
+pub const PORT_FLAG_ANTI_SPOOF: u16 = 1;
+pub const PORT_FLAG_HAS_ALLOWED_PAIRS: u16 = 2;
+
+// --- Anti-Spoof (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct AntiSpoofKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct AntiSpoofValue {
+    pub flags: u8,
+    pub pad: [u8; 3],
+}
+
+// --- Route (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct RouteValue {
+    pub next_hop_ip: [u8; 16],
+    pub egress_ifindex: u32,
+    pub route_id: u16,
+    pub next_hop_type: u8, // 0=local_port, 1=gateway, 2=blackhole, 3=host
+    pub priority: u8,
+    pub flags: u8,
+    pub pad: [u8; 3],
+}
+
+/// RouteValue.next_hop_type constants
+pub const NEXT_HOP_LOCAL_PORT: u8 = 0;
+pub const NEXT_HOP_GATEWAY: u8 = 1;
+pub const NEXT_HOP_BLACKHOLE: u8 = 2;
+pub const NEXT_HOP_HOST: u8 = 3;
+
+// --- SecurityGroup (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SgRuleKey {
+    pub tap_id: u32,
+    pub sg_id: u32,
+    pub direction: u8,
+    pub proto: u8,
+    pub pad: [u8; 2],
+    pub remote_prefix: [u8; 16],
+    pub prefix_len: u8,
+    pub pad2: [u8; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SgRuleValue {
+    pub action: u8,
+    pub priority: u8,
+    pub port_start: u16,
+    pub port_end: u16,
+    pub rule_id: u16,
+}
+
+/// SgRuleKey.direction constants
+pub const SG_DIR_INGRESS: u8 = 0;
+pub const SG_DIR_EGRESS: u8 = 1;
 
 // --- Service LB (L4 Load Balancer) ---
 

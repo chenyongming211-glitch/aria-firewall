@@ -4,13 +4,15 @@ use aya_ebpf::maps::{
 };
 
 pub use crate::common::{
-    CtConfig, CtContractKey, CtContractValue, CtKey4, CtKey6, CtValue, DropKey, DropValue,
-    FirewallConfig, FlowStatsValue, GlobalMirrorKey, GroupStatsKey, GroupStatsValue, IfaceCtx,
-    KernelDropConfig, KernelDropFilterValue, KernelDropKey, KernelDropValue, MirrorConfig,
-    MirrorKey, MirrorStatsValue, PipelineCtx, PolicyKey, PolicyValue, PortKey, QosConfig, QosKey,
-    QosStatsValue, RuleStatsValue, SslConnValue, SslErrorEvent, SslHttpScratch, SslHttpValue,
-    SslParseBuf, SslReadScratch, SslScratch, SslWriteScratch, TapConfig, TcpRtValue, TokenBucket,
-    TraceEvent, TraceEventKey, TraceEventV6, TraceFilter, TraceStreamEvent,
+    AntiSpoofKey, AntiSpoofValue, CtConfig, CtContractKey, CtContractValue, CtKey4, CtKey6,
+    CtValue, DropKey, DropValue, FirewallConfig, FlowStatsValue, GlobalMirrorKey, GroupStatsKey,
+    GroupStatsValue, IfaceCtx, KernelDropConfig, KernelDropFilterValue, KernelDropKey,
+    KernelDropValue, MirrorConfig, MirrorKey, MirrorStatsValue, PipelineCtx, PolicyKey,
+    PolicyValue, PortIdentityKey, PortIdentityValue, PortKey, QosConfig, QosKey, QosStatsValue,
+    RouteValue, RuleStatsValue, SgRuleKey, SgRuleValue, SslConnValue, SslErrorEvent,
+    SslHttpScratch, SslHttpValue, SslParseBuf, SslReadScratch, SslScratch, SslWriteScratch,
+    TapConfig, TcpRtValue, TokenBucket, TraceEvent, TraceEventKey, TraceEventV6, TraceFilter,
+    TraceStreamEvent,
 };
 use crate::parser::PacketInfo;
 
@@ -213,7 +215,8 @@ pub static TRACE_EVENT_BUF: PerCpuArray<TraceEvent> = PerCpuArray::with_max_entr
 pub static TRACE_EVENT_V6_BUF: PerCpuArray<TraceEventV6> = PerCpuArray::with_max_entries(1, 0);
 
 #[map(name = "TRACE_STREAM_EVENT_BUF")]
-pub static TRACE_STREAM_EVENT_BUF: PerCpuArray<TraceStreamEvent> = PerCpuArray::with_max_entries(1, 0);
+pub static TRACE_STREAM_EVENT_BUF: PerCpuArray<TraceStreamEvent> =
+    PerCpuArray::with_max_entries(1, 0);
 
 // --- SSL Observability maps ---
 
@@ -307,5 +310,23 @@ pub static SVC_LB_STATS: PerCpuHashMap<SvcLbStatsKey, SvcLbStatsValue> =
     PerCpuHashMap::with_max_entries(8192, 0);
 
 #[map(name = "SVC_LB_STATS_BUF")]
-pub static SVC_LB_STATS_BUF: PerCpuArray<SvcLbStatsValue> =
-    PerCpuArray::with_max_entries(1, 0);
+pub static SVC_LB_STATS_BUF: PerCpuArray<SvcLbStatsValue> = PerCpuArray::with_max_entries(1, 0);
+
+// --- IaaS Network: Port Identity / Anti-Spoof / Route / SecurityGroup maps ---
+
+#[map(name = "PORT_IDENTITY_MAP")]
+pub static PORT_IDENTITY_MAP: HashMap<PortIdentityKey, PortIdentityValue> =
+    HashMap::with_max_entries(1024, 0);
+
+#[map(name = "ANTI_SPOOF_MAP")]
+pub static ANTI_SPOOF_MAP: HashMap<AntiSpoofKey, AntiSpoofValue> =
+    HashMap::with_max_entries(8192, 0);
+
+#[map(name = "ROUTE_TABLE_V4")]
+pub static ROUTE_TABLE_V4: LpmTrie<[u8; 8], RouteValue> = LpmTrie::with_max_entries(4096, 0);
+
+#[map(name = "ROUTE_TABLE_V6")]
+pub static ROUTE_TABLE_V6: LpmTrie<[u8; 20], RouteValue> = LpmTrie::with_max_entries(2048, 0);
+
+#[map(name = "SG_RULE_MAP")]
+pub static SG_RULE_MAP: HashMap<SgRuleKey, SgRuleValue> = HashMap::with_max_entries(16384, 0);

@@ -514,10 +514,21 @@ Southbound API 面向：
 
 ### Phase 3：单节点 IaaS 网络最小闭环
 
-- 目标：完成单节点基础 IaaS 网络能力
-- 产出：Port attachment、anti-spoof、L3 routing、stateful firewall、SNAT/DNAT/FIP
+- 目标：完成单节点基础 IaaS 网络能力，并将现有 ACL/QoS/Mirror 迁移到 Controller 下发
+- 产出：Port attachment、anti-spoof、L3 routing、stateful firewall、SNAT/DNAT/FIP（Mode B 仅设计）、ACL/QoS/Mirror Controller 下发
 - 参考： [RFC-005 Routing / NAT 基础数据面 v1](rfcs/rfc-005-routing-nat-datapath.md)
-- 验收：单节点实例互联、隔离、出公网和安全控制全部跑通
+- 子阶段：
+  - Phase 3（主体）：SecurityGroup + Route + Port — 新 map、新 eBPF 模块、Agent materialize
+  - Phase 3.5：ACL → Controller `NetworkPolicy` 下发，复用现有 `POLICY_TABLE`
+  - Phase 3.6：QoS → Controller `QosPolicy` 下发，复用现有 `QOS_CONFIG`
+  - Phase 3.7：Mirror → Controller `MirrorPolicy` 下发，复用现有 `MIRROR_POLICY`
+- 当前实现状态（2026-04-11）：
+  - 已进入 Mode A 真实 map materialize 阶段，当前节点侧已新增 `PORT_IDENTITY_MAP / ANTI_SPOOF_MAP / ROUTE_TABLE_V4 / ROUTE_TABLE_V6 / SG_RULE_MAP`
+  - `ebpf/src/port.rs`、`ebpf/src/route.rs`、`ebpf/src/sg.rs` 已开始接入现有 TC ingress 流水线，与 LB/CT 共享 `PipelineCtx`
+  - Agent 已开始把 `Port / RouteTable / SecurityGroup` 编译成真实 map 条目，并为 `identity / ports / security / routes` 域回报真实 `applied / failed`
+  - `Mode B` 的 `SNAT / DNAT / Floating IP / NAT Gateway` 仍为文档预留，冻结在 `RFC-005A`
+- 验收：单节点实例互联、隔离、安全控制全部跑通；所有策略类能力统一通过 Controller 下发；本地 CLI 写入降级为 debug-only
+- 详细迁移计划见 §18
 
 ### Phase 4：统一事件模型与 Diagnose 平台化
 
@@ -573,7 +584,7 @@ Southbound API 面向：
 | `agent/src/service_chain.rs` | Chain 资源的早期原型 |
 | `agent/src/api_handlers/metrics.rs` | 统一指标导出入口 |
 | `tcprt / ssl / trace / drops` | 未来统一事件模型中的专用事件类型 |
-| `group / policy / qos / mirror` | 未来平台对象编译后的局部能力，不再是长期顶层模型 |
+| `group / policy / qos / mirror` | Phase 3.5-3.7 迁移到 Controller 下发，复用现有 eBPF map，本地 CLI 降级为 debug-only（详见 §18） |
 
 ## 13. 当前最重要的缺口
 
@@ -582,7 +593,7 @@ Southbound API 面向：
 - 缺少正式的 IaaS 资源模型
 - 缺少 Controller 和 southbound 协议
 - 缺少统一事件模型与聚合层
-- 缺少 routing / port / anti-spoof / NAT 这一组基础 IaaS 数据面闭环
+- 单节点 `Port / Anti-Spoof / Route / SecurityGroup` 已进入实现阶段，但仍缺 `Mode B NAT / Floating IP`、多节点 forwarding 和后续平台化迁移闭环
 
 ## 14. 近期行动项
 
@@ -632,6 +643,99 @@ Southbound API 面向：
 - 修改 Phase 路线和优先级
 
 本文档的目标不是限制实现，而是防止路线漂移。
+
+## 18. 现有能力平台化迁移计划
+
+### 18.1 问题背景
+
+当前仓库已有一批通过本地 CLI / REST API 直接操作 eBPF map 的成熟能力（ACL、QoS、Mirror、Conntrack、Trace、TCP-RT、Drops、SSL）。这些能力的数据面代码（eBPF map + 内核态逻辑）已经稳定，但控制入口仍然是节点本地 API，没有接入 Controller → southbound → Agent 编译链路。
+
+Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径，使用独立的新 map（SG_RULE_MAP / ROUTE_TABLE / PORT_IDENTITY_MAP）。这意味着同一个节点上会存在两套控制路径：
+
+- **路径 A（现有）**：`ariactl CLI → 本地 REST API → 直接写 POLICY_TABLE / QOS_CONFIG / MIRROR_POLICY`
+- **路径 B（新增）**：`Controller → southbound → Agent compile → 写 SG_RULE_MAP / ROUTE_TABLE / PORT_IDENTITY_MAP`
+
+长期目标是所有策略类能力统一走路径 B，本地 CLI 降级为 debug-only。
+
+### 18.2 迁移原则
+
+- **复用现有 eBPF map，不重写数据面**：ACL / QoS / Mirror 的 eBPF 代码（policy.rs / qos.rs / mirror.rs）和 map schema 已经稳定，迁移时只补 Controller 对象定义 + Agent 编译链路，不改 eBPF 内核态代码
+- **观测类能力不需要 Controller 下发**：Trace / TCP-RT / Drops / SSL / Conntrack 是节点级自动运行的观测能力，通过 Node 级配置或 Agent 配置文件管理即可
+- **每个能力独立迁移，不做 big-bang**：按 ACL → QoS → Mirror 顺序逐个迁移，每个能力一个独立 commit
+
+### 18.3 各能力迁移方案
+
+| 现有能力 | 复用的 eBPF map | 需要新增的 Controller 对象 | Agent 编译逻辑 | 迁移阶段 |
+|---------|----------------|-------------------------|--------------|---------|
+| ACL（policy） | `POLICY_TABLE` + `PORT_BITMAP_POOL` + `SRC/DST_IPV4/V6_TRIE` | `NetworkPolicy`（含 IP Group 定义 + 五元组规则） | NetworkPolicy → PolicyKey/PolicyValue + LPM entries | Phase 3.5 |
+| QoS | `QOS_CONFIG` + `QOS_TOKEN_BUCKET` | `QosPolicy`（含速率、突发、优先级、模式） | QosPolicy → QosKey/QosConfig + TokenBucket | Phase 3.6 |
+| Mirror | `MIRROR_POLICY` + `MIRROR_GLOBAL` | `MirrorPolicy`（含源/目的组、协议、方向、目标接口） | MirrorPolicy → MirrorKey/MirrorConfig | Phase 3.7 |
+| Conntrack | `CT_TABLE_V4/V6` + `CT_CONFIG` | 不需要（自动工作） | CT_CONFIG 超时参数通过 Node 级配置下发 | 不需要迁移 |
+| Trace | `TRACE_FILTER` + `TRACE_LOG` | 不需要（按需启动的调试能力） | 保持本地 API 控制 | 不需要迁移 |
+| TCP-RT | `TCPRT_TABLE_V4/V6` | 不需要（自动采集） | 通过 TapConfig 开关控制 | 不需要迁移 |
+| Drops | `DROP_REASON_STATS` | 不需要（自动统计） | 保持本地 API 读取 | 不需要迁移 |
+| Kernel Drops | `KERNEL_DROP_STATS` | 不需要（自动统计） | 保持本地 API 读取 | 不需要迁移 |
+| SSL/HTTP | `SSL_*` 系列 map | 不需要（host-global 观测） | 通过 SSL_GLOBAL_CONFIG 开关控制 | 不需要迁移 |
+
+### 18.4 每个迁移阶段的具体工作
+
+**Phase 3.5 — ACL 平台化（NetworkPolicy）**
+
+1. Controller `store.rs` 新增 `NetworkPolicy` 对象定义（含 IP Group 引用 + 五元组规则列表 + 方向 + 动作）
+2. Controller northbound API 新增 `NetworkPolicy` CRUD
+3. Controller southbound `desired-state` 投影 `NetworkPolicy` 到节点
+4. Agent `platform_agent.rs` 新增编译逻辑：
+   - 从 NetworkPolicy 提取 IP Group → 写入 `SRC/DST_IPV4/V6_TRIE`
+   - 从 NetworkPolicy 提取规则 → 写入 `POLICY_TABLE` + `PORT_BITMAP_POOL`
+5. 新增 `materialize_policy_maps` 函数，与现有 `materialize_service_maps` 并列
+
+**Phase 3.6 — QoS 平台化（QosPolicy）**
+
+1. Controller `store.rs` 新增 `QosPolicy` 对象定义（含 IP Group 引用 + 速率 + 突发 + 优先级 + 模式 + 方向）
+2. Controller northbound API 新增 `QosPolicy` CRUD
+3. Controller southbound 投影 `QosPolicy`
+4. Agent 新增编译逻辑：QosPolicy → `QOS_CONFIG` + `QOS_TOKEN_BUCKET`
+5. 新增 `materialize_qos_maps` 函数
+
+**Phase 3.7 — Mirror 平台化（MirrorPolicy）**
+
+1. Controller `store.rs` 新增 `MirrorPolicy` 对象定义（含源/目的 IP Group + 协议 + 方向 + 目标接口）
+2. Controller northbound API 新增 `MirrorPolicy` CRUD
+3. Controller southbound 投影 `MirrorPolicy`
+4. Agent 新增编译逻辑：MirrorPolicy → `MIRROR_POLICY` + `MIRROR_GLOBAL`
+5. 新增 `materialize_mirror_maps` 函数
+
+### 18.5 迁移时间线
+
+```
+Phase 3    ：SecurityGroup + Route + Port（新 map，新 eBPF 模块）
+Phase 3.5  ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）
+Phase 3.6  ：QoS → Controller QosPolicy 下发（复用 QOS_CONFIG）
+Phase 3.7  ：Mirror → Controller MirrorPolicy 下发（复用 MIRROR_POLICY）
+Phase 3 完成后：本地 CLI 写入路径降级为 debug-only，所有策略通过 Controller 下发
+```
+
+### 18.6 本地 CLI 降级策略
+
+Phase 3.7 完成后：
+
+- `ariactl policy / qos / mirror` 的写入操作（add / delete / batch）标记为 deprecated，仅保留用于紧急运维和调试
+- `ariactl policy / qos / mirror` 的读取操作（list / with-stats）继续保留，作为节点侧只读观测入口
+- 所有策略的主写入路径统一走 Controller northbound API
+- Agent 在 Controller 模式下，如果检测到本地 CLI 写入了与 Controller 下发冲突的规则，应在 apply-status 中标记 warning
+
+### 18.7 SecurityGroup 与现有 ACL 的关系
+
+Phase 3 的 `SG_RULE_MAP` 和现有的 `POLICY_TABLE` 是两个独立的 map，语义不同：
+
+- `POLICY_TABLE`：基于 IP Group ID 的 8 级 fallback 匹配，适合传统 ACL 场景
+- `SG_RULE_MAP`：基于 Port 身份 + 远端前缀 + 方向分段检查，适合 IaaS 安全组场景
+
+两者长期共存，不互相替代：
+
+- SecurityGroup 绑定到 Port，走 Phase 3 的新流水线（Port Identity → Anti-Spoof → SG → Route）
+- NetworkPolicy 绑定到 IP Group，走现有流水线（LPM → Policy 8 级 fallback）
+- 同一个接口上两者可以叠加生效：SG 先检查（pre-route），ACL 后检查（post-CT）
 
 ## 17. 变更约束
 

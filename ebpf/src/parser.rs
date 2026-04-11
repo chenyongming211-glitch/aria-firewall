@@ -16,6 +16,8 @@ pub struct PacketInfo {
     pub is_ipv6: bool,
     pub tcp_flags: u8,
     pub _pad: [u8; 1],
+    pub src_mac: [u8; 6],
+    pub _pad2: [u8; 2],
 }
 
 const ETH_HLEN: usize = 14;
@@ -138,6 +140,13 @@ pub unsafe fn parse_eth_ipv4(
     (*out).payload_len = payload_len;
     (*out).vlan_id = vlan_id;
     (*out)._pad = [0; 1];
+    // Source MAC: bytes 6..12 of Ethernet header
+    let mut m = 0usize;
+    while m < 6 {
+        (*out).src_mac[m] = read8(eth_offset, 6 + m);
+        m += 1;
+    }
+    (*out)._pad2 = [0; 2];
 
     true
 }
@@ -284,6 +293,13 @@ pub unsafe fn parse_eth_ipv6(
     (*out).payload_len = payload_len;
     (*out).vlan_id = vlan_id;
     (*out)._pad = [0; 1];
+    // Source MAC: bytes 6..12 of Ethernet header
+    let mut m = 0usize;
+    while m < 6 {
+        (*out).src_mac[m] = read8(eth_offset, 6 + m);
+        m += 1;
+    }
+    (*out)._pad2 = [0; 2];
 
     true
 }

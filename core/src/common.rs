@@ -427,6 +427,14 @@ pub const DROP_ACL_DEFAULT_DENY: u8 = 3;
 pub const DROP_QOS_INGRESS: u8 = 4;
 pub const DROP_QOS_EGRESS: u8 = 5;
 
+// IaaS Network drop reasons
+pub const DROP_PORT_IDENTITY_MISS: u8 = 20;
+pub const DROP_ANTI_SPOOF: u8 = 21;
+pub const DROP_SG_INGRESS: u8 = 22;
+pub const DROP_SG_EGRESS: u8 = 23;
+pub const DROP_ROUTE_MISS: u8 = 24;
+pub const DROP_ROUTE_BLACKHOLE: u8 = 25;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct DropKey {
@@ -596,6 +604,105 @@ pub const CT_NEW: u8 = 1;
 pub const CT_ESTABLISHED: u8 = 2;
 pub const DIR_INGRESS: u8 = 0;
 pub const DIR_EGRESS: u8 = 1;
+
+// --- Port Identity (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct PortIdentityKey {
+    pub tap_id: u32,
+}
+unsafe impl Pod for PortIdentityKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct PortIdentityValue {
+    pub mac: [u8; 6],
+    pub flags: u16, // bit0=anti_spoof_enabled, bit1=has_allowed_pairs
+    pub network_id: u32,
+    pub segment_id: u32,
+    pub tenant_id: u32,
+    pub primary_ipv4: u32,
+    pub primary_ipv6: [u8; 16],
+    pub sg_id: u32,
+    pub ip_count: u16,
+    pub pad: [u8; 2],
+}
+unsafe impl Pod for PortIdentityValue {}
+
+/// PortIdentityValue.flags constants
+pub const PORT_FLAG_ANTI_SPOOF: u16 = 1;
+pub const PORT_FLAG_HAS_ALLOWED_PAIRS: u16 = 2;
+
+// --- Anti-Spoof (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct AntiSpoofKey {
+    pub tap_id: u32,
+    pub address: [u8; 16],
+}
+unsafe impl Pod for AntiSpoofKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct AntiSpoofValue {
+    pub flags: u8,
+    pub pad: [u8; 3],
+}
+unsafe impl Pod for AntiSpoofValue {}
+
+// --- Route (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct RouteValue {
+    pub next_hop_ip: [u8; 16],
+    pub egress_ifindex: u32,
+    pub route_id: u16,
+    pub next_hop_type: u8, // 0=local_port, 1=gateway, 2=blackhole, 3=host
+    pub priority: u8,
+    pub flags: u8,
+    pub pad: [u8; 3],
+}
+unsafe impl Pod for RouteValue {}
+
+/// RouteValue.next_hop_type constants
+pub const NEXT_HOP_LOCAL_PORT: u8 = 0;
+pub const NEXT_HOP_GATEWAY: u8 = 1;
+pub const NEXT_HOP_BLACKHOLE: u8 = 2;
+pub const NEXT_HOP_HOST: u8 = 3;
+
+// --- SecurityGroup (IaaS Network) ---
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SgRuleKey {
+    pub tap_id: u32,
+    pub sg_id: u32,
+    pub direction: u8,
+    pub proto: u8,
+    pub pad: [u8; 2],
+    pub remote_prefix: [u8; 16],
+    pub prefix_len: u8,
+    pub pad2: [u8; 3],
+}
+unsafe impl Pod for SgRuleKey {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct SgRuleValue {
+    pub action: u8,
+    pub priority: u8,
+    pub port_start: u16,
+    pub port_end: u16,
+    pub rule_id: u16,
+}
+unsafe impl Pod for SgRuleValue {}
+
+/// SgRuleKey.direction constants
+pub const SG_DIR_INGRESS: u8 = 0;
+pub const SG_DIR_EGRESS: u8 = 1;
 
 // --- Service LB (L4 Load Balancer) ---
 

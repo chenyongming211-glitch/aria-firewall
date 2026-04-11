@@ -37,6 +37,7 @@ struct CompiledPortBinding {
     port_id: String,
     tenant_id: String,
     network_id: String,
+    segment_id: Option<String>,
     security_group_ids: Vec<String>,
     fixed_ips: Vec<String>,
     allowed_address_pairs: Vec<String>,
@@ -46,11 +47,70 @@ struct CompiledPortBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct AntiSpoofIr {
+    address: [u8; 16],
+    flags: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortIdentityIr {
+    port_id: String,
+    network_id: String,
+    tap_id: u32,
+    ifindex: u32,
+    sg_program_id: u32,
+    tenant_local_id: u32,
+    network_local_id: u32,
+    segment_local_id: u32,
+    mac: [u8; 6],
+    primary_ipv4: u32,
+    primary_ipv6: [u8; 16],
+    anti_spoof_enabled: bool,
+    anti_spoof_entries: Vec<AntiSpoofIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CompiledRouteTableView {
     route_table_id: String,
     network_id: String,
     route_count: usize,
     default_route: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RouteIr {
+    route_table_id: String,
+    port_id: String,
+    tap_id: u32,
+    destination: [u8; 16],
+    prefix_len: u8,
+    is_ipv6: bool,
+    next_hop_type: u8,
+    next_hop_ref: String,
+    next_hop_ip: [u8; 16],
+    egress_ifindex: u32,
+    route_id: u16,
+    priority: u8,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SgRuleIr {
+    port_id: String,
+    tap_id: u32,
+    sg_program_id: u32,
+    source_security_group_id: String,
+    direction: u8,
+    proto: u8,
+    remote_prefix: [u8; 16],
+    prefix_len: u8,
+    action: u8,
+    priority: u8,
+    port_start: u16,
+    port_end: u16,
+    rule_id: u16,
+    shadow_apply_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -191,7 +251,13 @@ struct CompiledNodeState {
     network_ids: Vec<String>,
     security_group_ids: Vec<String>,
     port_bindings: Vec<CompiledPortBinding>,
+    #[serde(default)]
+    port_identities: Vec<PortIdentityIr>,
     route_tables: Vec<CompiledRouteTableView>,
+    #[serde(default)]
+    route_entries: Vec<RouteIr>,
+    #[serde(default)]
+    sg_rules: Vec<SgRuleIr>,
     health_checks: Vec<CompiledHealthCheckView>,
     backend_sets: Vec<CompiledBackendSetView>,
     services: Vec<CompiledServiceView>,
@@ -673,7 +739,7 @@ impl PlatformAgent {
                         .map(|state| state.compiled_at.clone());
                     let attached_ports = compiled_state
                         .as_ref()
-                        .map(|state| state.port_bindings.len())
+                        .map(attached_port_count)
                         .unwrap_or(0);
                     if let Err(heartbeat_error) = self
                         .send_heartbeat(attached_ports, last_reconcile_at, Some(error))
@@ -724,11 +790,12 @@ impl PlatformAgent {
                 .map(|state| state.compiled_at.clone());
             let mut attached_ports = compiled_state
                 .as_ref()
-                .map(|state| state.port_bindings.len())
+                .map(attached_port_count)
                 .unwrap_or(0);
             let mut heartbeat_error: Option<String> = None;
 
             if needs_compile {
+                let previous_compiled_state = compiled_state.clone();
                 let cache_entry = DesiredStateCacheEntry {
                     cached_at: unix_timestamp_string(),
                     envelope: desired_state.clone(),
@@ -744,10 +811,10 @@ impl PlatformAgent {
                     node_id: &self.config.node_id,
                     desired: &desired_state,
                     capability: &self.capability,
-                    previous_compiled_state: compiled_state.as_ref(),
+                    previous_compiled_state: previous_compiled_state.as_ref(),
                     previous_runtime_inventory: runtime_inventory.as_ref(),
                 });
-                attached_ports = outcome.compiled_state.port_bindings.len();
+                attached_ports = attached_port_count(&outcome.compiled_state);
                 last_reconcile_at = Some(outcome.compiled_state.compiled_at.clone());
 
                 if let Err(error) = self
@@ -885,6 +952,68 @@ impl PlatformAgent {
                     );
                 }
 
+                // Materialize phase-3 single-node IaaS maps first so service
+                // datapath keeps building on resolved port/route/security state.
+                match materialize_phase3_maps(
+                    &self.config.pin_path,
+                    previous_compiled_state.as_ref(),
+                    &outcome.compiled_state,
+                ) {
+                    Ok(result) => {
+                        info!(
+                            port_identities = result.port_identities_written,
+                            anti_spoof_entries = result.anti_spoof_entries_written,
+                            sg_rules = result.sg_rules_written,
+                            route_v4 = result.route_v4_written,
+                            route_v6 = result.route_v6_written,
+                            "materialized phase-3 iaas maps into eBPF datapath"
+                        );
+                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                            if matches!(
+                                domain.domain.as_str(),
+                                "identity" | "ports" | "security" | "routes"
+                            ) {
+                                domain.execution_status = "applied".to_string();
+                                domain.shadow_apply_only = false;
+                            }
+                        }
+                        for ds in &mut outcome.apply_report.domain_statuses {
+                            if matches!(
+                                ds.domain.as_str(),
+                                "identity" | "ports" | "security" | "routes"
+                            ) {
+                                ds.status = "applied".to_string();
+                                ds.shadow_apply_only = false;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "failed to materialize phase-3 iaas maps");
+                        heartbeat_error = Some(error.clone());
+                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                            if matches!(
+                                domain.domain.as_str(),
+                                "identity" | "ports" | "security" | "routes"
+                            ) {
+                                domain.execution_status = "failed".to_string();
+                                domain.shadow_apply_only = false;
+                                domain
+                                    .warnings
+                                    .push(format!("materialize failed: {}", error));
+                            }
+                        }
+                        for ds in &mut outcome.apply_report.domain_statuses {
+                            if matches!(
+                                ds.domain.as_str(),
+                                "identity" | "ports" | "security" | "routes"
+                            ) {
+                                ds.status = "failed".to_string();
+                                ds.shadow_apply_only = false;
+                            }
+                        }
+                    }
+                }
+
                 // Materialize service maps into pinned eBPF maps.
                 if !outcome.compiled_state.service_programs.is_empty() {
                     // Use tap_id 1 for the shared managed runtime.
@@ -897,15 +1026,17 @@ impl PlatformAgent {
                     ) {
                         Ok((frontends, backends, revnats)) => {
                             info!(
-                                frontends, backends, revnats,
-                                "materialized service maps into eBPF datapath"
+                                frontends,
+                                backends, revnats, "materialized service maps into eBPF datapath"
                             );
                             // Update services domain status to "applied".
                             for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                                 if domain.domain == "services" {
                                     domain.execution_status = "applied".to_string();
                                     domain.shadow_apply_only = false;
-                                    domain.warnings.retain(|w| !w.contains("not materialized yet"));
+                                    domain
+                                        .warnings
+                                        .retain(|w| !w.contains("not materialized yet"));
                                 }
                             }
                             for ds in &mut outcome.apply_report.domain_statuses {
@@ -920,7 +1051,9 @@ impl PlatformAgent {
                             for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                                 if domain.domain == "services" {
                                     domain.execution_status = "failed".to_string();
-                                    domain.warnings.push(format!("materialize failed: {}", error));
+                                    domain
+                                        .warnings
+                                        .push(format!("materialize failed: {}", error));
                                 }
                             }
                             for ds in &mut outcome.apply_report.domain_statuses {
@@ -932,15 +1065,36 @@ impl PlatformAgent {
                     }
                 }
 
+                if let Err(error) = self
+                    .state_store
+                    .save_runtime_execution_summary(&outcome.runtime_execution_summary)
+                    .await
+                {
+                    warn!(error = %error, "failed to persist materialized runtime execution summary");
+                    heartbeat_error = Some(error);
+                } else {
+                    runtime_execution_summary = Some(outcome.runtime_execution_summary.clone());
+                }
+
                 // Run health check probes for services with health checks.
                 {
-                    let probe_targets: Vec<(crate::health_check::BackendTarget, crate::health_check::ProbeConfig)> =
-                        outcome.compiled_state.service_programs.iter()
-                            .filter_map(|program| {
-                                let hc = program.health_check.as_ref()?;
-                                let bs = program.backend_set.as_ref()?;
-                                Some(bs.backends.iter()
-                                    .filter(|b| b.admin_state != "disabled" && b.resolved_locality == "local")
+                    let probe_targets: Vec<(
+                        crate::health_check::BackendTarget,
+                        crate::health_check::ProbeConfig,
+                    )> = outcome
+                        .compiled_state
+                        .service_programs
+                        .iter()
+                        .filter_map(|program| {
+                            let hc = program.health_check.as_ref()?;
+                            let bs = program.backend_set.as_ref()?;
+                            Some(
+                                bs.backends
+                                    .iter()
+                                    .filter(|b| {
+                                        b.admin_state != "disabled"
+                                            && b.resolved_locality == "local"
+                                    })
                                     .filter_map(|b| {
                                         let ip = b.resolved_ip_hint.as_deref()?;
                                         Some((
@@ -952,18 +1106,23 @@ impl PlatformAgent {
                                             },
                                             crate::health_check::ProbeConfig {
                                                 protocol: hc.probe_protocol.clone(),
-                                                interval: std::time::Duration::from_secs(hc.interval_seconds as u64),
-                                                timeout: std::time::Duration::from_secs(hc.timeout_seconds as u64),
+                                                interval: std::time::Duration::from_secs(
+                                                    hc.interval_seconds as u64,
+                                                ),
+                                                timeout: std::time::Duration::from_secs(
+                                                    hc.timeout_seconds as u64,
+                                                ),
                                                 healthy_threshold: hc.healthy_threshold,
                                                 unhealthy_threshold: hc.unhealthy_threshold,
                                                 target_port: hc.target_port,
                                             },
                                         ))
                                     })
-                                    .collect::<Vec<_>>())
-                            })
-                            .flatten()
-                            .collect();
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .flatten()
+                        .collect();
 
                     if !probe_targets.is_empty() {
                         let changed = self.health_executor.probe_round(&probe_targets).await;
@@ -1412,6 +1571,9 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     let mut failed_objects = Vec::new();
     let mut warnings = Vec::new();
     let mut port_bindings = Vec::new();
+    let mut port_identities = Vec::new();
+    let mut used_tap_ids = BTreeMap::new();
+    let mut used_ifindices = BTreeMap::new();
 
     for port in &context.desired.ports {
         if let Some(bound_node_id) = port.spec.node_id.as_deref() {
@@ -1480,12 +1642,154 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             port_id: port.metadata.id.clone(),
             tenant_id: port.spec.tenant_id.clone(),
             network_id: port.spec.network_id.clone(),
+            segment_id: port.spec.segment_id.clone(),
             security_group_ids: port.spec.security_group_ids.clone(),
             fixed_ips: port.spec.fixed_ips.clone(),
             allowed_address_pairs: port.spec.allowed_address_pairs.clone(),
             mac_address: port.spec.mac_address.clone(),
             anti_spoof_enabled: port.spec.anti_spoof_enabled,
             admin_state_up: port.spec.admin_state_up,
+        });
+
+        let tap_id = match required_runtime_label(port, "runtime.tap_id") {
+            Ok(value) => value,
+            Err(reason) => {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "port".to_string(),
+                    id: port.metadata.id.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
+        let ifindex = match required_runtime_label(port, "runtime.ifindex") {
+            Ok(value) => value,
+            Err(reason) => {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "port".to_string(),
+                    id: port.metadata.id.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
+        if let Some(existing_port_id) = used_tap_ids.insert(tap_id, port.metadata.id.clone()) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "port".to_string(),
+                id: port.metadata.id.clone(),
+                reason: format!(
+                    "runtime.tap_id '{}' is already claimed by port '{}'",
+                    tap_id, existing_port_id
+                ),
+            });
+            continue;
+        }
+        if let Some(existing_port_id) = used_ifindices.insert(ifindex, port.metadata.id.clone()) {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "port".to_string(),
+                id: port.metadata.id.clone(),
+                reason: format!(
+                    "runtime.ifindex '{}' is already claimed by port '{}'",
+                    ifindex, existing_port_id
+                ),
+            });
+            continue;
+        }
+        if !port.spec.admin_state_up {
+            warnings.push(format!(
+                "port '{}' is administratively down; skipping phase-3 map materialization until it is enabled",
+                port.metadata.id
+            ));
+            continue;
+        }
+
+        let mac = match parse_mac_address(&port.spec.mac_address) {
+            Ok(value) => value,
+            Err(reason) => {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "port".to_string(),
+                    id: port.metadata.id.clone(),
+                    reason,
+                });
+                continue;
+            }
+        };
+
+        let mut anti_spoof_entries = Vec::new();
+        let mut primary_ipv4 = 0u32;
+        let mut primary_ipv6 = [0u8; 16];
+        for fixed_ip in &port.spec.fixed_ips {
+            match parse_allowed_ip(fixed_ip) {
+                Ok(address) => {
+                    if primary_ipv4 == 0 {
+                        if let Some(ipv4) = extract_ipv4_u32(&address) {
+                            primary_ipv4 = ipv4;
+                        }
+                    }
+                    if primary_ipv6 == [0; 16] {
+                        if let Some(ipv6) = extract_ipv6_bytes(&address) {
+                            primary_ipv6 = ipv6;
+                        }
+                    }
+                    anti_spoof_entries.push(AntiSpoofIr { address, flags: 1 });
+                }
+                Err(reason) => {
+                    failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "port".to_string(),
+                        id: port.metadata.id.clone(),
+                        reason: format!("invalid fixed_ip '{}': {}", fixed_ip, reason),
+                    });
+                    anti_spoof_entries.clear();
+                    break;
+                }
+            }
+        }
+        if anti_spoof_entries.is_empty() && !port.spec.fixed_ips.is_empty() {
+            continue;
+        }
+        for allowed_pair in &port.spec.allowed_address_pairs {
+            match parse_allowed_ip(allowed_pair) {
+                Ok(address) => anti_spoof_entries.push(AntiSpoofIr { address, flags: 2 }),
+                Err(reason) => {
+                    failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "port".to_string(),
+                        id: port.metadata.id.clone(),
+                        reason: format!(
+                            "invalid allowed_address_pair '{}': {}",
+                            allowed_pair, reason
+                        ),
+                    });
+                    anti_spoof_entries.clear();
+                    break;
+                }
+            }
+        }
+        if anti_spoof_entries.is_empty()
+            && (!port.spec.fixed_ips.is_empty() || !port.spec.allowed_address_pairs.is_empty())
+        {
+            continue;
+        }
+
+        port_identities.push(PortIdentityIr {
+            port_id: port.metadata.id.clone(),
+            network_id: port.spec.network_id.clone(),
+            tap_id,
+            ifindex,
+            sg_program_id: tap_id,
+            tenant_local_id: stable_local_id(&port.spec.tenant_id),
+            network_local_id: stable_local_id(&port.spec.network_id),
+            segment_local_id: port
+                .spec
+                .segment_id
+                .as_deref()
+                .map(stable_local_id)
+                .unwrap_or(0),
+            mac,
+            primary_ipv4,
+            primary_ipv6,
+            anti_spoof_enabled: port.spec.anti_spoof_enabled,
+            anti_spoof_entries,
+            shadow_apply_only: true,
         });
     }
 
@@ -1706,6 +2010,89 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         });
     }
 
+    let port_identity_by_port_id = port_identities
+        .iter()
+        .map(|port| (port.port_id.as_str(), port))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut route_entries = Vec::new();
+    for route_table in &context.desired.route_tables {
+        if !network_by_id.contains_key(&route_table.spec.network_id) {
+            continue;
+        }
+
+        if route_table.spec.default_route.is_some() {
+            warnings.push(format!(
+                "route_table '{}' default_route is not materialized yet; use explicit routes during phase-3 mode-a rollout",
+                route_table.metadata.id
+            ));
+        }
+
+        for port_identity in port_identities
+            .iter()
+            .filter(|port| port.network_id == route_table.spec.network_id)
+        {
+            for route in &route_table.spec.routes {
+                match build_route_ir(route_table, route, port_identity, &port_identity_by_port_id) {
+                    Ok(route_ir) => route_entries.push(route_ir),
+                    Err(reason) => failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "route_table".to_string(),
+                        id: route_table.metadata.id.clone(),
+                        reason,
+                    }),
+                }
+            }
+        }
+    }
+
+    let mut sg_rule_entries = BTreeMap::new();
+    let mut failed_security_groups = BTreeSet::new();
+    for port in &port_bindings {
+        let Some(port_identity) = port_identity_by_port_id.get(port.port_id.as_str()) else {
+            continue;
+        };
+
+        let mut attached_groups = port
+            .security_group_ids
+            .iter()
+            .filter_map(|security_group_id| security_group_by_id.get(security_group_id))
+            .collect::<Vec<_>>();
+        attached_groups.sort_by(|left, right| left.metadata.id.cmp(&right.metadata.id));
+
+        for security_group in attached_groups {
+            let mut rules = security_group.spec.rules.iter().collect::<Vec<_>>();
+            rules.sort_by_key(|rule| rule.priority);
+
+            for rule in rules {
+                match build_sg_rule_ir(port_identity, security_group.metadata.id.as_str(), rule) {
+                    Ok(rule_ir) => {
+                        let rule_key = (
+                            rule_ir.tap_id,
+                            rule_ir.sg_program_id,
+                            rule_ir.direction,
+                            rule_ir.proto,
+                            rule_ir.remote_prefix,
+                            rule_ir.prefix_len,
+                            rule_ir.port_start,
+                            rule_ir.port_end,
+                        );
+                        sg_rule_entries.entry(rule_key).or_insert(rule_ir);
+                    }
+                    Err(reason) => {
+                        if failed_security_groups.insert(security_group.metadata.id.clone()) {
+                            failed_objects.push(ApplyObjectFailure {
+                                resource_kind: "security_group".to_string(),
+                                id: security_group.metadata.id.clone(),
+                                reason,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let sg_rules = sg_rule_entries.into_values().collect::<Vec<_>>();
+
     let service_programs = build_service_programs(
         context.desired,
         &compiled_health_checks,
@@ -1765,6 +2152,10 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         .iter()
         .filter(|failure| failure.resource_kind == "route_table")
         .count();
+    let security_failure_count = failed_objects
+        .iter()
+        .filter(|failure| failure.resource_kind == "security_group")
+        .count();
     let service_failure_count = failed_objects
         .iter()
         .filter(|failure| {
@@ -1787,7 +2178,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         CompileDomainSummary {
             domain: "ports".to_string(),
             input_objects: context.desired.ports.len(),
-            compiled_objects: port_bindings.len(),
+            compiled_objects: port_identities.len(),
             failed_objects: port_failure_count,
             status: if port_failure_count == 0 {
                 "shadow_ready".to_string()
@@ -1799,15 +2190,19 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         CompileDomainSummary {
             domain: "security".to_string(),
             input_objects: context.desired.security_groups.len(),
-            compiled_objects: security_group_by_id.len(),
-            failed_objects: 0,
-            status: "shadow_ready".to_string(),
+            compiled_objects: sg_rules.len(),
+            failed_objects: security_failure_count,
+            status: if security_failure_count == 0 {
+                "shadow_ready".to_string()
+            } else {
+                "shadow_degraded".to_string()
+            },
             shadow_apply_only: true,
         },
         CompileDomainSummary {
             domain: "routes".to_string(),
             input_objects: context.desired.route_tables.len(),
-            compiled_objects: compiled_route_tables.len(),
+            compiled_objects: route_entries.len(),
             failed_objects: route_failure_count,
             status: if route_failure_count == 0 {
                 "shadow_ready".to_string()
@@ -1854,7 +2249,10 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         network_ids: network_by_id.keys().cloned().collect(),
         security_group_ids: security_group_by_id.keys().cloned().collect(),
         port_bindings,
+        port_identities,
         route_tables: compiled_route_tables,
+        route_entries,
+        sg_rules,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,
@@ -1933,6 +2331,329 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             degraded_reasons,
         },
     }
+}
+
+fn required_runtime_label(port: &aria_api::PortResource, key: &str) -> Result<u32, String> {
+    let value = port
+        .metadata
+        .labels
+        .get(key)
+        .ok_or_else(|| format!("missing required runtime label '{}'", key))?;
+    let parsed = value
+        .parse::<u32>()
+        .map_err(|_| format!("runtime label '{}' must be a positive integer", key))?;
+    if parsed == 0 {
+        return Err(format!("runtime label '{}' must be non-zero", key));
+    }
+    Ok(parsed)
+}
+
+fn parse_mac_address(value: &str) -> Result<[u8; 6], String> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if parts.len() != 6 {
+        return Err("mac_address must contain 6 octets".to_string());
+    }
+    let mut mac = [0u8; 6];
+    for (idx, part) in parts.iter().enumerate() {
+        mac[idx] = u8::from_str_radix(part, 16)
+            .map_err(|_| format!("invalid mac_address octet '{}'", part))?;
+    }
+    Ok(mac)
+}
+
+fn parse_allowed_ip(value: &str) -> Result<[u8; 16], String> {
+    let ip = strip_cidr_suffix(value)
+        .parse::<std::net::IpAddr>()
+        .map_err(|error| format!("invalid IP address: {error}"))?;
+    Ok(match ip {
+        std::net::IpAddr::V4(ipv4) => ipv4_to_v4mapped_bytes(ipv4.octets()),
+        std::net::IpAddr::V6(ipv6) => ipv6.octets(),
+    })
+}
+
+fn extract_ipv4_u32(address: &[u8; 16]) -> Option<u32> {
+    if is_v4_mapped(address) {
+        Some(u32::from_be_bytes([
+            address[12],
+            address[13],
+            address[14],
+            address[15],
+        ]))
+    } else {
+        None
+    }
+}
+
+fn extract_ipv6_bytes(address: &[u8; 16]) -> Option<[u8; 16]> {
+    if is_v4_mapped(address) || address == &[0; 16] {
+        None
+    } else {
+        Some(*address)
+    }
+}
+
+fn stable_local_id(value: &str) -> u32 {
+    let mut hash = 0x811c9dc5u32;
+    for byte in value.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    if hash == 0 {
+        1
+    } else {
+        hash
+    }
+}
+
+fn stable_local_id16(value: &str) -> u16 {
+    let mut hash = stable_local_id(value) as u16;
+    if hash == 0 {
+        hash = 1;
+    }
+    hash
+}
+
+fn ipv4_to_v4mapped_bytes(ip: [u8; 4]) -> [u8; 16] {
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ip[0], ip[1], ip[2], ip[3],
+    ]
+}
+
+fn is_v4_mapped(address: &[u8; 16]) -> bool {
+    address[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]
+}
+
+fn parse_cidr_string(value: &str) -> Result<(std::net::IpAddr, u8), String> {
+    let (ip_raw, prefix_raw) = value
+        .split_once('/')
+        .ok_or_else(|| "expected CIDR notation".to_string())?;
+    let ip = ip_raw
+        .parse::<std::net::IpAddr>()
+        .map_err(|error| format!("invalid CIDR IP '{}': {error}", ip_raw))?;
+    let prefix = prefix_raw
+        .parse::<u8>()
+        .map_err(|_| format!("invalid CIDR prefix '{}'", prefix_raw))?;
+    match ip {
+        std::net::IpAddr::V4(_) if prefix <= 32 => Ok((ip, prefix)),
+        std::net::IpAddr::V6(_) if prefix <= 128 => Ok((ip, prefix)),
+        std::net::IpAddr::V4(_) => Err("IPv4 prefix must be <= 32".to_string()),
+        std::net::IpAddr::V6(_) => Err("IPv6 prefix must be <= 128".to_string()),
+    }
+}
+
+fn route_next_hop_type(value: &str) -> Result<u8, String> {
+    Ok(match value {
+        "local" | "local_port" | "port" => aria_core::common::NEXT_HOP_LOCAL_PORT,
+        "gateway" => aria_core::common::NEXT_HOP_GATEWAY,
+        "host" | "node" => aria_core::common::NEXT_HOP_HOST,
+        "blackhole" => aria_core::common::NEXT_HOP_BLACKHOLE,
+        other => return Err(format!("unsupported next_hop_type '{}'", other)),
+    })
+}
+
+fn next_hop_ip_for_port(port_identity: &PortIdentityIr) -> [u8; 16] {
+    if port_identity.primary_ipv4 != 0 {
+        ipv4_to_v4mapped_bytes(port_identity.primary_ipv4.to_be_bytes())
+    } else if port_identity.primary_ipv6 != [0; 16] {
+        port_identity.primary_ipv6
+    } else {
+        [0; 16]
+    }
+}
+
+fn build_route_ir(
+    route_table: &aria_api::RouteTableResource,
+    route: &aria_api::RouteSpec,
+    port_identity: &PortIdentityIr,
+    port_identity_by_port_id: &BTreeMap<&str, &PortIdentityIr>,
+) -> Result<RouteIr, String> {
+    let (destination_ip, prefix_len) = parse_cidr_string(&route.destination)?;
+    let (is_ipv6, destination) = match destination_ip {
+        std::net::IpAddr::V4(ipv4) => (false, ipv4_to_v4mapped_bytes(ipv4.octets())),
+        std::net::IpAddr::V6(ipv6) => (true, ipv6.octets()),
+    };
+    let next_hop_type = route_next_hop_type(route.next_hop_type.as_str())?;
+
+    let (next_hop_ip, egress_ifindex) = match next_hop_type {
+        aria_core::common::NEXT_HOP_LOCAL_PORT => {
+            let target = port_identity_by_port_id
+                .get(route.next_hop_ref.as_str())
+                .ok_or_else(|| {
+                    format!(
+                        "route '{}' references local port '{}' that is not materializable on this node",
+                        route.destination, route.next_hop_ref
+                    )
+                })?;
+            (next_hop_ip_for_port(target), target.ifindex)
+        }
+        aria_core::common::NEXT_HOP_GATEWAY => {
+            let next_hop_ip = route
+                .next_hop_ref
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .map(|ip| match ip {
+                    std::net::IpAddr::V4(ipv4) => ipv4_to_v4mapped_bytes(ipv4.octets()),
+                    std::net::IpAddr::V6(ipv6) => ipv6.octets(),
+                })
+                .unwrap_or([0; 16]);
+            (next_hop_ip, 0)
+        }
+        aria_core::common::NEXT_HOP_HOST | aria_core::common::NEXT_HOP_BLACKHOLE => ([0; 16], 0),
+        _ => ([0; 16], 0),
+    };
+
+    Ok(RouteIr {
+        route_table_id: route_table.metadata.id.clone(),
+        port_id: port_identity.port_id.clone(),
+        tap_id: port_identity.tap_id,
+        destination,
+        prefix_len,
+        is_ipv6,
+        next_hop_type,
+        next_hop_ref: route.next_hop_ref.clone(),
+        next_hop_ip,
+        egress_ifindex,
+        route_id: stable_local_id16(&format!(
+            "{}:{}:{}:{}",
+            route_table.metadata.id, port_identity.port_id, route.destination, route.next_hop_ref
+        )),
+        priority: route.preference.min(u8::MAX as u32) as u8,
+        shadow_apply_only: true,
+    })
+}
+
+fn build_sg_rule_ir(
+    port_identity: &PortIdentityIr,
+    security_group_id: &str,
+    rule: &aria_api::SecurityRuleSpec,
+) -> Result<SgRuleIr, String> {
+    if rule.audit_mode {
+        return Err("audit_mode rules are not materialized in phase-3 mode-a".to_string());
+    }
+
+    let direction = match rule.direction.as_str() {
+        "ingress" => aria_core::common::SG_DIR_INGRESS,
+        "egress" => aria_core::common::SG_DIR_EGRESS,
+        other => return Err(format!("unsupported direction '{}'", other)),
+    };
+    let proto = match rule.protocol.as_deref() {
+        None | Some("any") => 0,
+        Some("tcp") => libc::IPPROTO_TCP as u8,
+        Some("udp") => libc::IPPROTO_UDP as u8,
+        Some("icmp") => libc::IPPROTO_ICMP as u8,
+        Some("icmpv6") => libc::IPPROTO_ICMPV6 as u8,
+        Some(other) => return Err(format!("unsupported protocol '{}'", other)),
+    };
+    let action = match rule.action.as_str() {
+        "allow" => 1,
+        "deny" => 0,
+        other => return Err(format!("unsupported action '{}'", other)),
+    };
+    let (port_start, port_end) = parse_security_port_range(rule.port_range.as_deref())?;
+    let selector = if direction == aria_core::common::SG_DIR_INGRESS {
+        rule.src_selector.as_deref()
+    } else {
+        rule.dst_selector.as_deref()
+    };
+    let (remote_prefix, prefix_len) =
+        parse_security_remote_selector(selector, rule.ethertype.as_str())?;
+
+    Ok(SgRuleIr {
+        port_id: port_identity.port_id.clone(),
+        tap_id: port_identity.tap_id,
+        sg_program_id: port_identity.sg_program_id,
+        source_security_group_id: security_group_id.to_string(),
+        direction,
+        proto,
+        remote_prefix,
+        prefix_len,
+        action,
+        priority: rule.priority.min(u8::MAX as u32) as u8,
+        port_start,
+        port_end,
+        rule_id: stable_local_id16(&format!(
+            "{}:{}:{}:{}:{:?}:{:?}",
+            security_group_id,
+            port_identity.port_id,
+            rule.direction,
+            rule.priority,
+            rule.src_selector,
+            rule.dst_selector
+        )),
+        shadow_apply_only: true,
+    })
+}
+
+fn parse_security_remote_selector(
+    selector: Option<&str>,
+    ethertype: &str,
+) -> Result<([u8; 16], u8), String> {
+    let Some(selector) = selector else {
+        return Ok(([0; 16], 0));
+    };
+    if selector.is_empty() {
+        return Ok(([0; 16], 0));
+    }
+
+    let (ip, prefix_len) = parse_cidr_string(selector)?;
+    match ip {
+        std::net::IpAddr::V4(ipv4) => {
+            if ethertype == "ipv6" {
+                return Err("ipv6 rule cannot use an ipv4 selector".to_string());
+            }
+            if prefix_len == 0 {
+                Ok(([0; 16], 0))
+            } else if prefix_len == 32 {
+                Ok((ipv4_to_v4mapped_bytes(ipv4.octets()), 128))
+            } else {
+                Err("phase-3 mode-a only materializes ipv4 host selectors or /0".to_string())
+            }
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            if ethertype == "ipv4" {
+                return Err("ipv4 rule cannot use an ipv6 selector".to_string());
+            }
+            if prefix_len == 0 {
+                Ok(([0; 16], 0))
+            } else if prefix_len == 128 {
+                Ok((ipv6.octets(), 128))
+            } else {
+                Err("phase-3 mode-a only materializes ipv6 host selectors or /0".to_string())
+            }
+        }
+    }
+}
+
+fn parse_security_port_range(port_range: Option<&str>) -> Result<(u16, u16), String> {
+    let Some(port_range) = port_range else {
+        return Ok((0, 0));
+    };
+    let port_range = port_range.trim();
+    if port_range.is_empty() {
+        return Ok((0, 0));
+    }
+    if port_range.contains(',') || port_range.contains(':') {
+        return Err("phase-3 mode-a only supports a single port or a single range".to_string());
+    }
+    if let Some((start_raw, end_raw)) = port_range.split_once('-') {
+        let start = start_raw
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| "invalid port range start".to_string())?;
+        let end = end_raw
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| "invalid port range end".to_string())?;
+        if start > end {
+            return Err("port range start must be <= end".to_string());
+        }
+        return Ok((start, end));
+    }
+
+    let port = port_range
+        .parse::<u16>()
+        .map_err(|_| "invalid port".to_string())?;
+    Ok((port, port))
 }
 
 fn build_service_programs(
@@ -2552,36 +3273,56 @@ fn build_runtime_plan(
         .map(total_maglev_service_programs)
         .unwrap_or_default();
     let next_service_maglev_count = total_maglev_service_programs(next_state);
+    let previous_port_identity_count = previous_state
+        .map(|state| state.port_identities.len())
+        .unwrap_or_default();
+    let next_port_identity_count = next_state.port_identities.len();
+    let previous_anti_spoof_count = previous_state
+        .map(total_anti_spoof_entries)
+        .unwrap_or_default();
+    let next_anti_spoof_count = total_anti_spoof_entries(next_state);
+    let previous_sg_rule_count = previous_state
+        .map(|state| state.sg_rules.len())
+        .unwrap_or_default();
+    let next_sg_rule_count = next_state.sg_rules.len();
+    let previous_route_v4_count = previous_state
+        .map(total_route_v4_entries)
+        .unwrap_or_default();
+    let next_route_v4_count = total_route_v4_entries(next_state);
+    let previous_route_v6_count = previous_state
+        .map(total_route_v6_entries)
+        .unwrap_or_default();
+    let next_route_v6_count = total_route_v6_entries(next_state);
 
     let mut bindings = Vec::new();
-    if capability.supports_tc && !next_state.port_bindings.is_empty() {
+    if capability.supports_tc && next_port_identity_count > 0 {
         bindings.push(AttachBindingPlan {
             hook_family: "tc_ingress".to_string(),
             scope: "port-bindings".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.port_bindings.len(),
+            object_count: next_port_identity_count,
         });
         bindings.push(AttachBindingPlan {
             hook_family: "tc_egress".to_string(),
             scope: "port-bindings".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.port_bindings.len(),
+            object_count: next_port_identity_count,
         });
     }
-    if capability.supports_xdp && !next_state.port_bindings.is_empty() {
+    if capability.supports_xdp && next_port_identity_count > 0 {
         bindings.push(AttachBindingPlan {
             hook_family: "xdp".to_string(),
             scope: "anti-spoof-fastpath".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.port_bindings.len(),
+            object_count: next_port_identity_count,
         });
     }
-    if capability.supports_tc && !next_state.route_tables.is_empty() {
+    if capability.supports_tc && (next_route_v4_count > 0 || next_route_v6_count > 0) {
         bindings.push(AttachBindingPlan {
             hook_family: "tc_egress".to_string(),
             scope: "route-tables".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.route_tables.len(),
+            object_count: next_route_v4_count + next_route_v6_count,
         });
     }
     if capability.supports_tc && ports_removed > 0 {
@@ -2640,39 +3381,74 @@ fn build_runtime_plan(
             object_count: next_state.network_ids.len(),
         });
     }
-    if !next_state.security_group_ids.is_empty() {
+    if next_sg_rule_count > 0 {
         entries.push(MapPlanEntry {
-            map_family: "security_program".to_string(),
+            map_family: "sg_rule_map".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.security_group_ids.len(),
+            object_count: next_sg_rule_count,
         });
     }
-    if !next_state.port_bindings.is_empty() {
+    if next_port_identity_count > 0 {
         entries.push(MapPlanEntry {
-            map_family: "port_bindings".to_string(),
+            map_family: "port_identity_map".to_string(),
             operation: "refresh_shadow".to_string(),
-            object_count: next_state.port_bindings.len(),
+            object_count: next_port_identity_count,
         });
     }
-    if ports_removed > 0 {
+    if next_anti_spoof_count > 0 {
         entries.push(MapPlanEntry {
-            map_family: "port_bindings".to_string(),
+            map_family: "anti_spoof_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_anti_spoof_count,
+        });
+    }
+    if previous_port_identity_count > next_port_identity_count {
+        entries.push(MapPlanEntry {
+            map_family: "port_identity_map".to_string(),
             operation: "cleanup_shadow".to_string(),
-            object_count: ports_removed,
+            object_count: previous_port_identity_count - next_port_identity_count,
         });
     }
-    if !next_state.route_tables.is_empty() {
+    if previous_anti_spoof_count > next_anti_spoof_count {
         entries.push(MapPlanEntry {
-            map_family: "route_program".to_string(),
-            operation: "refresh_shadow".to_string(),
-            object_count: next_state.route_tables.len(),
-        });
-    }
-    if route_tables_removed > 0 {
-        entries.push(MapPlanEntry {
-            map_family: "route_program".to_string(),
+            map_family: "anti_spoof_map".to_string(),
             operation: "cleanup_shadow".to_string(),
-            object_count: route_tables_removed,
+            object_count: previous_anti_spoof_count - next_anti_spoof_count,
+        });
+    }
+    if next_route_v4_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "route_table_v4".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_route_v4_count,
+        });
+    }
+    if next_route_v6_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "route_table_v6".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_route_v6_count,
+        });
+    }
+    if previous_route_v4_count > next_route_v4_count {
+        entries.push(MapPlanEntry {
+            map_family: "route_table_v4".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_route_v4_count - next_route_v4_count,
+        });
+    }
+    if previous_route_v6_count > next_route_v6_count {
+        entries.push(MapPlanEntry {
+            map_family: "route_table_v6".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_route_v6_count - next_route_v6_count,
+        });
+    }
+    if previous_sg_rule_count > next_sg_rule_count {
+        entries.push(MapPlanEntry {
+            map_family: "sg_rule_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_sg_rule_count - next_sg_rule_count,
         });
     }
     if !next_state.health_checks.is_empty() {
@@ -3689,6 +4465,235 @@ fn build_socket_selection_plan(
     }
 }
 
+struct Phase3MaterializeResult {
+    port_identities_written: usize,
+    anti_spoof_entries_written: usize,
+    sg_rules_written: usize,
+    route_v4_written: usize,
+    route_v6_written: usize,
+}
+
+fn clear_phase3_state_for_port(
+    pin_path: &str,
+    tap_id: u32,
+    ifindex: Option<u32>,
+) -> Result<(), String> {
+    use aria_core::common::TapMapRuntime;
+    use aria_core::ebpf_ops::{clear_iface_ctx, delete_tap_config};
+    use aria_core::port_ops::{clear_anti_spoof_entries, delete_port_identity};
+    use aria_core::route_ops::clear_route_entries_for_tap;
+    use aria_core::sg_ops::clear_sg_rules;
+
+    if let Some(ifindex) = ifindex {
+        let _ = clear_iface_ctx(pin_path, ifindex);
+    }
+    let runtime = TapMapRuntime::new(pin_path, tap_id);
+    let _ = delete_tap_config(runtime);
+    delete_port_identity(pin_path, tap_id)?;
+    clear_anti_spoof_entries(pin_path, tap_id)?;
+    clear_sg_rules(pin_path, tap_id, Some(tap_id))?;
+    clear_route_entries_for_tap(pin_path, tap_id)?;
+    Ok(())
+}
+
+fn materialize_phase3_maps(
+    pin_path: &str,
+    previous_state: Option<&CompiledNodeState>,
+    compiled_state: &CompiledNodeState,
+) -> Result<Phase3MaterializeResult, String> {
+    use aria_core::common::{
+        PortIdentityValue, RouteValue, SgRuleKey, SgRuleValue, TapConfig, TapMapRuntime,
+        PORT_FLAG_ANTI_SPOOF, PORT_FLAG_HAS_ALLOWED_PAIRS,
+    };
+    use aria_core::ebpf_ops::{clear_iface_ctx, sync_iface_ctx, write_tap_config};
+    use aria_core::port_ops::{
+        clear_anti_spoof_entries, write_anti_spoof_entries, write_port_identity, AntiSpoofEntry,
+    };
+    use aria_core::route_ops::{clear_route_entries_for_tap, write_route_v4, write_route_v6};
+    use aria_core::sg_ops::{clear_sg_rules, write_sg_rule};
+
+    let previous_ports = previous_state
+        .map(|state| {
+            state
+                .port_identities
+                .iter()
+                .map(|port| (port.port_id.as_str(), port))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let current_tap_ids = compiled_state
+        .port_identities
+        .iter()
+        .map(|port| port.tap_id)
+        .collect::<BTreeSet<_>>();
+    let previous_tap_ids = previous_state
+        .map(|state| {
+            state
+                .port_identities
+                .iter()
+                .map(|port| port.tap_id)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    for current_port in &compiled_state.port_identities {
+        if let Some(previous_port) = previous_ports.get(current_port.port_id.as_str()) {
+            if previous_port.ifindex != current_port.ifindex {
+                let _ = clear_iface_ctx(pin_path, previous_port.ifindex);
+            }
+        }
+    }
+
+    for removed_tap_id in previous_tap_ids.difference(&current_tap_ids) {
+        let previous_ifindex = previous_state.and_then(|state| {
+            state
+                .port_identities
+                .iter()
+                .find(|port| port.tap_id == *removed_tap_id)
+                .map(|port| port.ifindex)
+        });
+        clear_phase3_state_for_port(pin_path, *removed_tap_id, previous_ifindex)?;
+    }
+
+    let mut anti_spoof_entries_written = 0usize;
+    for port in &compiled_state.port_identities {
+        let runtime = TapMapRuntime::new(pin_path, port.tap_id);
+        sync_iface_ctx(runtime, port.ifindex)?;
+        write_tap_config(
+            runtime,
+            TapConfig {
+                conntrack_enabled: 1,
+                monitoring_enabled: 1,
+                acl_enabled: 1,
+                qos_enabled: 0,
+                mirror_enabled: 0,
+                tcprt_enabled: 1,
+                pad: [0; 2],
+            },
+        )?;
+
+        let mut flags = 0u16;
+        if port.anti_spoof_enabled {
+            flags |= PORT_FLAG_ANTI_SPOOF;
+        }
+        if port
+            .anti_spoof_entries
+            .iter()
+            .any(|entry| entry.flags & 0x02 != 0)
+        {
+            flags |= PORT_FLAG_HAS_ALLOWED_PAIRS;
+        }
+
+        write_port_identity(
+            pin_path,
+            port.tap_id,
+            PortIdentityValue {
+                mac: port.mac,
+                flags,
+                network_id: port.network_local_id,
+                segment_id: port.segment_local_id,
+                tenant_id: port.tenant_local_id,
+                primary_ipv4: port.primary_ipv4,
+                primary_ipv6: port.primary_ipv6,
+                sg_id: port.sg_program_id,
+                ip_count: port.anti_spoof_entries.len().min(u16::MAX as usize) as u16,
+                pad: [0; 2],
+            },
+        )?;
+
+        clear_anti_spoof_entries(pin_path, port.tap_id)?;
+        anti_spoof_entries_written += write_anti_spoof_entries(
+            pin_path,
+            port.tap_id,
+            &port
+                .anti_spoof_entries
+                .iter()
+                .map(|entry| AntiSpoofEntry {
+                    address: entry.address,
+                    flags: entry.flags,
+                })
+                .collect::<Vec<_>>(),
+        )?;
+    }
+
+    for tap_id in &current_tap_ids {
+        clear_sg_rules(pin_path, *tap_id, Some(*tap_id))?;
+    }
+    let mut sg_rules_written = 0usize;
+    for rule in &compiled_state.sg_rules {
+        write_sg_rule(
+            pin_path,
+            &SgRuleKey {
+                tap_id: rule.tap_id,
+                sg_id: rule.sg_program_id,
+                direction: rule.direction,
+                proto: rule.proto,
+                pad: [0; 2],
+                remote_prefix: rule.remote_prefix,
+                prefix_len: rule.prefix_len,
+                pad2: [0; 3],
+            },
+            &SgRuleValue {
+                action: rule.action,
+                priority: rule.priority,
+                port_start: rule.port_start,
+                port_end: rule.port_end,
+                rule_id: rule.rule_id,
+            },
+        )?;
+        sg_rules_written += 1;
+    }
+
+    for tap_id in &current_tap_ids {
+        clear_route_entries_for_tap(pin_path, *tap_id)?;
+    }
+    let mut route_v4_written = 0usize;
+    let mut route_v6_written = 0usize;
+    for route in &compiled_state.route_entries {
+        let value = RouteValue {
+            next_hop_ip: route.next_hop_ip,
+            egress_ifindex: route.egress_ifindex,
+            route_id: route.route_id,
+            next_hop_type: route.next_hop_type,
+            priority: route.priority,
+            flags: 0,
+            pad: [0; 3],
+        };
+        if route.is_ipv6 {
+            write_route_v6(
+                pin_path,
+                route.tap_id,
+                route.destination,
+                route.prefix_len,
+                value,
+            )?;
+            route_v6_written += 1;
+        } else {
+            write_route_v4(
+                pin_path,
+                route.tap_id,
+                [
+                    route.destination[12],
+                    route.destination[13],
+                    route.destination[14],
+                    route.destination[15],
+                ],
+                route.prefix_len,
+                value,
+            )?;
+            route_v4_written += 1;
+        }
+    }
+
+    Ok(Phase3MaterializeResult {
+        port_identities_written: compiled_state.port_identities.len(),
+        anti_spoof_entries_written,
+        sg_rules_written,
+        route_v4_written,
+        route_v6_written,
+    })
+}
+
 /// Materialize compiled service state into pinned eBPF maps.
 /// Returns (frontends_written, backends_written, revnats_written) on success.
 fn materialize_service_maps(
@@ -3697,12 +4702,14 @@ fn materialize_service_maps(
     service_programs: &[ServiceProgramIr],
     health_executor: &crate::health_check::HealthCheckExecutor,
 ) -> Result<(usize, usize, usize), String> {
-    use aria_core::common::{SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY, SVC_FRONTEND_FLAG_USE_MAGLEV, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM};
+    use aria_core::common::{
+        SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY,
+        SVC_FRONTEND_FLAG_USE_MAGLEV, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
+    };
     use aria_core::svc_ops::{
-        clear_service_maps_for_tap, compute_maglev_table, ipv4_to_v4mapped,
-        write_maglev_table, write_service_backends, write_service_frontends,
-        write_service_revnats, SvcBackendEntry, SvcFrontendEntry, SvcMaglevTableEntry,
-        SvcRevNatEntry,
+        clear_service_maps_for_tap, compute_maglev_table, ipv4_to_v4mapped, write_maglev_table,
+        write_service_backends, write_service_frontends, write_service_revnats, SvcBackendEntry,
+        SvcFrontendEntry, SvcMaglevTableEntry, SvcRevNatEntry,
     };
 
     clear_service_maps_for_tap(pin_path, tap_id)
@@ -3764,7 +4771,11 @@ fn materialize_service_maps(
         };
 
         let is_maglev = program.frontend.lb_policy == "maglev";
-        let lb_algo = if is_maglev { SVC_LB_ALGO_MAGLEV } else { SVC_LB_ALGO_RANDOM };
+        let lb_algo = if is_maglev {
+            SVC_LB_ALGO_MAGLEV
+        } else {
+            SVC_LB_ALGO_RANDOM
+        };
 
         for listener in &program.frontend.listener_ports {
             let mut flags = SVC_FRONTEND_FLAG_LOCAL_ONLY;
@@ -3896,14 +4907,8 @@ fn build_backend_choice_shape(
         })
         .collect();
 
-    let local_candidates = candidates
-        .iter()
-        .filter(|c| c.locality == "local")
-        .count();
-    let remote_candidates = candidates
-        .iter()
-        .filter(|c| c.locality == "remote")
-        .count();
+    let local_candidates = candidates.iter().filter(|c| c.locality == "local").count();
+    let remote_candidates = candidates.iter().filter(|c| c.locality == "remote").count();
     let total_weight: u32 = candidates.iter().map(|c| c.weight as u32).sum();
     let local_weight: u32 = candidates
         .iter()
@@ -3965,6 +4970,38 @@ fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
         .iter()
         .map(|program| program.frontend.listener_ports.len())
         .sum()
+}
+
+fn total_anti_spoof_entries(state: &CompiledNodeState) -> usize {
+    state
+        .port_identities
+        .iter()
+        .map(|port| port.anti_spoof_entries.len())
+        .sum()
+}
+
+fn attached_port_count(state: &CompiledNodeState) -> usize {
+    if state.port_identities.is_empty() {
+        state.port_bindings.len()
+    } else {
+        state.port_identities.len()
+    }
+}
+
+fn total_route_v4_entries(state: &CompiledNodeState) -> usize {
+    state
+        .route_entries
+        .iter()
+        .filter(|route| !route.is_ipv6)
+        .count()
+}
+
+fn total_route_v6_entries(state: &CompiledNodeState) -> usize {
+    state
+        .route_entries
+        .iter()
+        .filter(|route| route.is_ipv6)
+        .count()
 }
 
 fn total_service_frontend_runtime_entries(state: &CompiledNodeState) -> usize {
@@ -4104,9 +5141,9 @@ fn inventory_domain_from_scope(scope: &str) -> String {
 fn inventory_domain_from_map_family(map_family: &str) -> String {
     match map_family {
         "tenant_index" | "network_index" => "identity".to_string(),
-        "security_program" => "security".to_string(),
-        "port_bindings" => "ports".to_string(),
-        "route_program" => "routes".to_string(),
+        "sg_rule_map" => "security".to_string(),
+        "port_identity_map" | "anti_spoof_map" => "ports".to_string(),
+        "route_table_v4" | "route_table_v6" => "routes".to_string(),
         "health_check_catalog"
         | "backend_set_catalog"
         | "service_catalog"

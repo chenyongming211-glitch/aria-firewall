@@ -17,6 +17,7 @@
 - [RFC-003 Controller-Agent Southbound 协议 v1](rfc-003-southbound-protocol.md)
 - [RFC-004 Node datapath 编译模型 v1](rfc-004-node-datapath-compiler.md)
 - [RFC-005 Routing / NAT 基础数据面 v1](rfc-005-routing-nat-datapath.md)
+- [RFC-005A 单节点 IaaS Map Schema v1](rfc-005a-single-node-iaas-map-schema.md)
 - [RFC-006 Diagnose 服务端化与 Relay v1](rfc-006-diagnose-relay.md)
 - [RFC-007 权限、租户与审计模型 v1](rfc-007-tenant-authz-audit.md)
 - [RFC-008 Service / Backend / HealthCheck 模型 v1](rfc-008-service-backend-healthcheck.md)
@@ -33,4 +34,4 @@
 
 ## 当前状态
 
-当前规划内的 RFC 已全部落地。后续如果新增 RFC，应以新的规划轮次追加，不再视为当前必写清单。
+当前规划内的主 RFC 已全部落地。`RFC-005A` 作为 Phase 3 的补充设计，用于冻结单节点 IaaS map schema 与 Mode B NAT 设计预留。
