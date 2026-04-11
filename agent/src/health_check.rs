@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Health state of a single backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

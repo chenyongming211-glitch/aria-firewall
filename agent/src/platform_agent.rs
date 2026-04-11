@@ -681,7 +681,7 @@ impl PlatformAgent {
         }
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let mut interval = time::interval(self.config.poll_interval);
         interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         interval.tick().await;
