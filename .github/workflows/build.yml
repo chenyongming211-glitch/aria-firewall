@@ -74,6 +74,7 @@ jobs:
           ldd target/x86_64-unknown-linux-musl/release/aria-agent 2>&1 || true
 
       - name: Prepare release files
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           mkdir -p release
           cp target/x86_64-unknown-linux-musl/release/ariactl release/
@@ -99,6 +100,7 @@ jobs:
           ls -lh firewall-binaries-x86_64.zip
 
       - name: Upload artifacts
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
