@@ -705,6 +705,12 @@ Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径
    - 从 NetworkPolicy 提取规则 → 写入 `POLICY_TABLE` + `PORT_BITMAP_POOL`
 5. 新增 `materialize_policy_maps` 函数，与现有 `materialize_service_maps` 并列
 
+当前状态（2026-04-11）：
+
+- 已完成 `IpGroup / NetworkPolicy` 的共享 schema、controller store、northbound CRUD、OpenAPI 和 southbound `desired-state` 对象投影
+- 已完成 tenant/network/IP Group 引用校验，以及 `IpGroup -> NetworkPolicy` 删除保护
+- 尚未完成 agent 侧 `compile_policy_state / materialize_policy_maps`，当前仍以“controller 对象层 + 下发骨架”作为第一刀
+
 **Phase 3.6 — QoS 平台化（QosPolicy）**
 
 1. Controller `store.rs` 新增 `QosPolicy` 对象定义（含 IP Group 引用 + 速率 + 突发 + 优先级 + 模式 + 方向）

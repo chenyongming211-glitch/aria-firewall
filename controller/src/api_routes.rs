@@ -93,6 +93,26 @@ pub fn build_router(store: SharedStore) -> Router {
                 .delete(api_handlers::delete_route_table),
         )
         .route(
+            "/api/v1/ip-groups",
+            get(api_handlers::list_ip_groups).post(api_handlers::create_ip_group),
+        )
+        .route(
+            "/api/v1/ip-groups/{id}",
+            get(api_handlers::get_ip_group)
+                .put(api_handlers::update_ip_group)
+                .delete(api_handlers::delete_ip_group),
+        )
+        .route(
+            "/api/v1/network-policies",
+            get(api_handlers::list_network_policies).post(api_handlers::create_network_policy),
+        )
+        .route(
+            "/api/v1/network-policies/{id}",
+            get(api_handlers::get_network_policy)
+                .put(api_handlers::update_network_policy)
+                .delete(api_handlers::delete_network_policy),
+        )
+        .route(
             "/api/v1/health-checks",
             get(api_handlers::list_health_checks).post(api_handlers::create_health_check),
         )

@@ -10,7 +10,16 @@ use aria_api::{
     MessageResponse, NetworkListQuery, NetworkListResponse, NetworkPolicyListQuery,
     NetworkPolicyListResponse, NetworkPolicyResource, NetworkPolicyStatus, NetworkResource,
     NetworkStatus, NodeCapability, NodeListQuery, NodeListResponse, NodeResource, NodeStatus,
-    PlatformApiError, PortListQuery, PortListResponse, PortResource, PortStatus, ResourceCreateMetadata
+    PlatformApiError, PortListQuery, PortListResponse, PortResource, PortStatus,
+    ResourceCreateMetadata, ResourceMetadata, ResourceUpdateMetadata, RouteTableListQuery,
+    RouteTableListResponse, RouteTableResource, RouteTableStatus, SecurityGroupListQuery,
+    SecurityGroupListResponse, SecurityGroupResource, SecurityGroupStatus, ServiceListQuery,
+    ServiceListResponse, ServiceResource, ServiceStatus, SouthboundNodeStatusResponse,
+    TenantListQuery, TenantListResponse, TenantResource, TenantStatus, UpdateBackendSetRequest,
+    UpdateHealthCheckRequest, UpdateIpGroupRequest, UpdateNetworkPolicyRequest,
+    UpdateNetworkRequest, UpdateNodeRequest, UpdatePortRequest, UpdateRouteTableRequest,
+    UpdateSecurityGroupRequest, UpdateServiceRequest, UpdateTenantRequest,
+};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -393,6 +402,8 @@ fn route_table_status() -> RouteTableStatus {
     RouteTableStatus {
         phase: "ready".to_string(),
     }
+}
+
 }
 
 fn health_check_status() -> HealthCheckStatus {
@@ -1098,333 +1109,6 @@ pub async fn delete_port(
         (status = 400, description = "Invalid list query", body = PlatformApiError)
     )
 )]
-// --- NetworkPolicy (Phase 3.5b: ACL platform migration) ---
-
-fn network_policy_status(rule_count: usize) -> NetworkPolicyStatus {
-    NetworkPolicyStatus {
-        phase: "ready".into(),
-        rule_count,
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/network-policies",
-    operation_id = "listNetworkPolicies",
-    tag = "network-policies",
-    params(NetworkPolicyListQuery),
-    responses(
-        (status = 200, description = "List network policies", body = NetworkPolicyListResponse),
-        (status = 400, description = "Invalid list query", body = PlatformApiError)
-    )
-)]
-pub async fn list_network_policies(
-    State(store): State<AppState>,
-    Query(query): Query<NetworkPolicyListQuery>,
-) -> Result<Json<NetworkPolicyListResponse>, ControllerError> {
-    let selector = parse_label_selector(query.label_selector.as_deref())?;
-    let items = store
-        .list_network_policies()
-        .await
-        .into_iter()
-        .filter(|np| {
-            labels_match(&np.metadata.labels, &selector)
-                && optional_eq(query.tenant_id.as_deref(), &np.spec.tenant_id)
-                && optional_eq(query.network_id.as_deref(), &np.spec.network_id)
-        })
-        .collect::<Vec<_>>();
-    let (items, next_page_token, total_count) =
-        paginate(items, query.limit, query.page_token.as_deref())?;
-    Ok(Json(NetworkPolicyListResponse {
-        items,
-        next_page_token,
-        total_count,
-    }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/network-policies",
-    operation_id = "createNetworkPolicy",
-    tag = "network-policies",
-    request_body = CreateNetworkPolicyRequest,
-    responses(
-        (status = 201, description = "Create network policy", body = NetworkPolicyResource),
-        (status = 400, description = "Invalid network policy references", body = PlatformApiError),
-        (status = 409, description = "Network policy already exists", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn create_network_policy(
-    State(store): State<AppState>,
-    Json(request): Json<CreateNetworkPolicyRequest>,
-) -> Result<(StatusCode, Json<NetworkPolicyResource>), ControllerError> {
-    let rule_count = request.spec.rules.len();
-    let resource = NetworkPolicyResource {
-        metadata: metadata_from_create(request.metadata),
-        spec: request.spec,
-        status: network_policy_status(rule_count),
-    };
-    let created = store.create_network_policy(resource).await?;
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/network-policies/{id}",
-    operation_id = "getNetworkPolicy",
-    tag = "network-policies",
-    params(("id" = String, Path, description = "Network policy ID")),
-    responses(
-        (status = 200, description = "Get network policy", body = NetworkPolicyResource),
-        (status = 404, description = "Network policy not found", body = PlatformApiError)
-    )
-)]
-pub async fn get_network_policy(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<NetworkPolicyResource>, ControllerError> {
-    let resource = store
-        .get_network_policy(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "network_policy",
-            id,
-        })?;
-    Ok(Json(resource))
-}
-
-#[utoipa::path(
-    put,
-    path = "/api/v1/network-policies/{id}",
-    operation_id = "updateNetworkPolicy",
-    tag = "network-policies",
-    params(("id" = String, Path, description = "Network policy ID")),
-    request_body = UpdateNetworkPolicyRequest,
-    responses(
-        (status = 200, description = "Update network policy", body = NetworkPolicyResource),
-        (status = 400, description = "Invalid network policy references", body = PlatformApiError),
-        (status = 404, description = "Network policy not found", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn update_network_policy(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<UpdateNetworkPolicyRequest>,
-) -> Result<Json<NetworkPolicyResource>, ControllerError> {
-    let existing = store
-        .get_network_policy(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "network_policy",
-            id: id.clone(),
-        })?;
-    let rule_count = request.spec.rules.len();
-    let resource = NetworkPolicyResource {
-        metadata: metadata_from_update(&existing.metadata, request.metadata),
-        spec: request.spec,
-        status: NetworkPolicyStatus {
-            phase: existing.status.phase,
-            rule_count,
-        },
-    };
-    let updated = store.update_network_policy(&id, resource).await?;
-    Ok(Json(updated))
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/v1/network-policies/{id}",
-    operation_id = "deleteNetworkPolicy",
-    tag = "network-policies",
-    params(("id" = String, Path, description = "Network policy ID")),
-    responses(
-        (status = 200, description = "Delete network policy", body = MessageResponse),
-        (status = 404, description = "Network policy not found", body = PlatformApiError),
-        (status = 409, description = "Network policy still has dependent resources", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn delete_network_policy(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<MessageResponse>, ControllerError> {
-    store
-        .get_network_policy(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "network_policy",
-            id: id.clone(),
-        })?;
-    store.delete_network_policy(&id).await?;
-    Ok(Json(deleted_message("network_policy", &id)))
-}
-
-// --- IpGroup (Phase 3.5a: Groups platform migration) ---
-
-fn ip_group_status(cidr_count: usize) -> IpGroupStatus {
-    IpGroupStatus {
-        phase: "ready".into(),
-        cidr_count,
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/ip-groups",
-    operation_id = "listIpGroups",
-    tag = "ip-groups",
-    params(IpGroupListQuery),
-    responses(
-        (status = 200, description = "List IP groups", body = IpGroupListResponse),
-        (status = 400, description = "Invalid list query", body = PlatformApiError)
-    )
-)]
-pub async fn list_ip_groups(
-    State(store): State<AppState>,
-    Query(query): Query<IpGroupListQuery>,
-) -> Result<Json<IpGroupListResponse>, ControllerError> {
-    let selector = parse_label_selector(query.label_selector.as_deref())?;
-    let items = store
-        .list_ip_groups()
-        .await
-        .into_iter()
-        .filter(|ip_group| {
-            labels_match(&ip_group.metadata.labels, &selector)
-                && optional_eq(query.tenant_id.as_deref(), &ip_group.spec.tenant_id)
-                && optional_eq(query.network_id.as_deref(), &ip_group.spec.network_id)
-                && optional_eq(query.status.as_deref(), &ip_group.status.phase)
-        })
-        .collect::<Vec<_>>();
-    let (items, next_page_token, total_count) =
-        paginate(items, query.limit, query.page_token.as_deref())?;
-    Ok(Json(IpGroupListResponse {
-        items,
-        next_page_token,
-        total_count,
-    }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/ip-groups",
-    operation_id = "createIpGroup",
-    tag = "ip-groups",
-    request_body = CreateIpGroupRequest,
-    responses(
-        (status = 201, description = "Create IP group", body = IpGroupResource),
-        (status = 400, description = "Invalid IP group references", body = PlatformApiError),
-        (status = 409, description = "IP group already exists", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn create_ip_group(
-    State(store): State<AppState>,
-    Json(request): Json<CreateIpGroupRequest>,
-) -> Result<(StatusCode, Json<IpGroupResource>), ControllerError> {
-    let cidr_count = request.spec.cidrs.len();
-    let resource = IpGroupResource {
-        metadata: metadata_from_create(request.metadata),
-        spec: request.spec,
-        status: ip_group_status(cidr_count),
-    };
-    let created = store.create_ip_group(resource).await?;
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/ip-groups/{id}",
-    operation_id = "getIpGroup",
-    tag = "ip-groups",
-    params(("id" = String, Path, description = "IP group ID")),
-    responses(
-        (status = 200, description = "Get IP group", body = IpGroupResource),
-        (status = 404, description = "IP group not found", body = PlatformApiError)
-    )
-)]
-pub async fn get_ip_group(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<IpGroupResource>, ControllerError> {
-    let resource = store
-        .get_ip_group(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "ip_group",
-            id,
-        })?;
-    Ok(Json(resource))
-}
-
-#[utoipa::path(
-    put,
-    path = "/api/v1/ip-groups/{id}",
-    operation_id = "updateIpGroup",
-    tag = "ip-groups",
-    params(("id" = String, Path, description = "IP group ID")),
-    request_body = UpdateIpGroupRequest,
-    responses(
-        (status = 200, description = "Update IP group", body = IpGroupResource),
-        (status = 400, description = "Invalid IP group references", body = PlatformApiError),
-        (status = 404, description = "IP group not found", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn update_ip_group(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-    Json(request): Json<UpdateIpGroupRequest>,
-) -> Result<Json<IpGroupResource>, ControllerError> {
-    let existing = store
-        .get_ip_group(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "ip_group",
-            id: id.clone(),
-        })?;
-    let cidr_count = request.spec.cidrs.len();
-    let resource = IpGroupResource {
-        metadata: metadata_from_update(&existing.metadata, request.metadata),
-        spec: request.spec,
-        status: IpGroupStatus {
-            phase: existing.status.phase,
-            cidr_count,
-        },
-    };
-    let updated = store.update_ip_group(&id, resource).await?;
-    Ok(Json(updated))
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/v1/ip-groups/{id}",
-    operation_id = "deleteIpGroup",
-    tag = "ip-groups",
-    params(("id" = String, Path, description = "IP group ID")),
-    responses(
-        (status = 200, description = "Delete IP group", body = MessageResponse),
-        (status = 404, description = "IP group not found", body = PlatformApiError),
-        (status = 409, description = "IP group still has dependent resources", body = PlatformApiError),
-        (status = 500, description = "Internal controller error", body = PlatformApiError)
-    )
-)]
-pub async fn delete_ip_group(
-    State(store): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<MessageResponse>, ControllerError> {
-    store
-        .get_ip_group(&id)
-        .await
-        .ok_or(ControllerError::NotFound {
-            resource: "ip_group",
-            id: id.clone(),
-        })?;
-    store.delete_ip_group(&id).await?;
-    Ok(Json(deleted_message("ip_group", &id)))
-}
-
 pub async fn list_security_groups(
     State(store): State<AppState>,
     Query(query): Query<SecurityGroupListQuery>,
@@ -1707,6 +1391,326 @@ pub async fn delete_route_table(
 ) -> Result<Json<MessageResponse>, ControllerError> {
     store.delete_route_table(&id).await?;
     Ok(Json(deleted_message("route_table", &id)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/ip-groups",
+    operation_id = "listIpGroups",
+    tag = "ip-groups",
+    params(IpGroupListQuery),
+    responses(
+        (status = 200, description = "List IP groups", body = IpGroupListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
+)]
+pub async fn list_ip_groups(
+    State(store): State<AppState>,
+    Query(query): Query<IpGroupListQuery>,
+) -> Result<Json<IpGroupListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_ip_groups()
+        .await
+        .into_iter()
+        .filter(|ip_group| {
+            labels_match(&ip_group.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &ip_group.spec.tenant_id)
+                && optional_option_eq(
+                    query.network_id.as_deref(),
+                    ip_group.spec.network_id.as_deref(),
+                )
+                && optional_eq(query.status.as_deref(), &ip_group.status.phase)
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(IpGroupListResponse {
+        items,
+        next_page_token,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/ip-groups",
+    operation_id = "createIpGroup",
+    tag = "ip-groups",
+    request_body = CreateIpGroupRequest,
+    responses(
+        (status = 201, description = "Create IP group", body = IpGroupResource),
+        (status = 400, description = "Invalid IP group references", body = PlatformApiError),
+        (status = 409, description = "IP group already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn create_ip_group(
+    State(store): State<AppState>,
+    Json(request): Json<CreateIpGroupRequest>,
+) -> Result<(StatusCode, Json<IpGroupResource>), ControllerError> {
+    let entry_count = request.spec.cidrs.len();
+    let resource = IpGroupResource {
+        metadata: metadata_from_create(request.metadata),
+        spec: request.spec,
+        status: ip_group_status(entry_count),
+    };
+    let created = store.create_ip_group(resource).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/ip-groups/{id}",
+    operation_id = "getIpGroup",
+    tag = "ip-groups",
+    params(("id" = String, Path, description = "IP group ID")),
+    responses(
+        (status = 200, description = "Get IP group", body = IpGroupResource),
+        (status = 404, description = "IP group not found", body = PlatformApiError)
+    )
+)]
+pub async fn get_ip_group(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<IpGroupResource>, ControllerError> {
+    let resource = store
+        .get_ip_group(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "ip_group",
+            id,
+        })?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/ip-groups/{id}",
+    operation_id = "updateIpGroup",
+    tag = "ip-groups",
+    params(("id" = String, Path, description = "IP group ID")),
+    request_body = UpdateIpGroupRequest,
+    responses(
+        (status = 200, description = "Update IP group", body = IpGroupResource),
+        (status = 400, description = "Invalid IP group references", body = PlatformApiError),
+        (status = 404, description = "IP group not found", body = PlatformApiError),
+        (status = 409, description = "IP group still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn update_ip_group(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateIpGroupRequest>,
+) -> Result<Json<IpGroupResource>, ControllerError> {
+    let existing = store
+        .get_ip_group(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "ip_group",
+            id: id.clone(),
+        })?;
+    let cidr_count = request.spec.cidrs.len();
+    let resource = IpGroupResource {
+        metadata: metadata_from_update(&existing.metadata, request.metadata),
+        spec: request.spec,
+        status: IpGroupStatus {
+            phase: existing.status.phase,
+            cidr_count,
+        },
+    };
+    let updated = store.update_ip_group(&id, resource).await?;
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/ip-groups/{id}",
+    operation_id = "deleteIpGroup",
+    tag = "ip-groups",
+    params(("id" = String, Path, description = "IP group ID")),
+    responses(
+        (status = 200, description = "Delete IP group", body = MessageResponse),
+        (status = 404, description = "IP group not found", body = PlatformApiError),
+        (status = 409, description = "IP group still referenced", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn delete_ip_group(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ControllerError> {
+    store
+        .get_ip_group(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "ip_group",
+            id: id.clone(),
+        })?;
+    store.delete_ip_group(&id).await?;
+    Ok(Json(deleted_message("ip_group", &id)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/network-policies",
+    operation_id = "listNetworkPolicies",
+    tag = "network-policies",
+    params(NetworkPolicyListQuery),
+    responses(
+        (status = 200, description = "List network policies", body = NetworkPolicyListResponse),
+        (status = 400, description = "Invalid list query", body = PlatformApiError)
+    )
+)]
+pub async fn list_network_policies(
+    State(store): State<AppState>,
+    Query(query): Query<NetworkPolicyListQuery>,
+) -> Result<Json<NetworkPolicyListResponse>, ControllerError> {
+    let selector = parse_label_selector(query.label_selector.as_deref())?;
+    let items = store
+        .list_network_policies()
+        .await
+        .into_iter()
+        .filter(|policy| {
+            labels_match(&policy.metadata.labels, &selector)
+                && optional_eq(query.tenant_id.as_deref(), &policy.spec.tenant_id)
+                && optional_option_eq(
+                    query.network_id.as_deref(),
+                    policy.spec.network_id.as_deref(),
+                )
+                && optional_eq(query.status.as_deref(), &policy.status.phase)
+                && match query.action.as_deref() {
+                    Some(action) => policy.spec.rules.iter().any(|rule| rule.action == action),
+                    None => true,
+                }
+        })
+        .collect::<Vec<_>>();
+    let (items, next_page_token, total_count) =
+        paginate(items, query.limit, query.page_token.as_deref())?;
+    Ok(Json(NetworkPolicyListResponse {
+        items,
+        next_page_token,
+        total_count,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/network-policies",
+    operation_id = "createNetworkPolicy",
+    tag = "network-policies",
+    request_body = CreateNetworkPolicyRequest,
+    responses(
+        (status = 201, description = "Create network policy", body = NetworkPolicyResource),
+        (status = 400, description = "Invalid network policy references", body = PlatformApiError),
+        (status = 409, description = "Network policy already exists", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn create_network_policy(
+    State(store): State<AppState>,
+    Json(request): Json<CreateNetworkPolicyRequest>,
+) -> Result<(StatusCode, Json<NetworkPolicyResource>), ControllerError> {
+    let rule_count = request.spec.rules.len();
+    let resource = NetworkPolicyResource {
+        metadata: metadata_from_create(request.metadata),
+        spec: request.spec,
+        status: network_policy_status(rule_count),
+    };
+    let created = store.create_network_policy(resource).await?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/network-policies/{id}",
+    operation_id = "getNetworkPolicy",
+    tag = "network-policies",
+    params(("id" = String, Path, description = "Network policy ID")),
+    responses(
+        (status = 200, description = "Get network policy", body = NetworkPolicyResource),
+        (status = 404, description = "Network policy not found", body = PlatformApiError)
+    )
+)]
+pub async fn get_network_policy(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<NetworkPolicyResource>, ControllerError> {
+    let resource = store
+        .get_network_policy(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "network_policy",
+            id,
+        })?;
+    Ok(Json(resource))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/v1/network-policies/{id}",
+    operation_id = "updateNetworkPolicy",
+    tag = "network-policies",
+    params(("id" = String, Path, description = "Network policy ID")),
+    request_body = UpdateNetworkPolicyRequest,
+    responses(
+        (status = 200, description = "Update network policy", body = NetworkPolicyResource),
+        (status = 400, description = "Invalid network policy references", body = PlatformApiError),
+        (status = 404, description = "Network policy not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn update_network_policy(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateNetworkPolicyRequest>,
+) -> Result<Json<NetworkPolicyResource>, ControllerError> {
+    let existing = store
+        .get_network_policy(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "network_policy",
+            id: id.clone(),
+        })?;
+    let rule_count = request.spec.rules.len();
+    let resource = NetworkPolicyResource {
+        metadata: metadata_from_update(&existing.metadata, request.metadata),
+        spec: request.spec,
+        status: NetworkPolicyStatus {
+            phase: existing.status.phase,
+            rule_count,
+        },
+    };
+    let updated = store.update_network_policy(&id, resource).await?;
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/network-policies/{id}",
+    operation_id = "deleteNetworkPolicy",
+    tag = "network-policies",
+    params(("id" = String, Path, description = "Network policy ID")),
+    responses(
+        (status = 200, description = "Delete network policy", body = MessageResponse),
+        (status = 404, description = "Network policy not found", body = PlatformApiError),
+        (status = 500, description = "Internal controller error", body = PlatformApiError)
+    )
+)]
+pub async fn delete_network_policy(
+    State(store): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<MessageResponse>, ControllerError> {
+    store
+        .get_network_policy(&id)
+        .await
+        .ok_or(ControllerError::NotFound {
+            resource: "network_policy",
+            id: id.clone(),
+        })?;
+    store.delete_network_policy(&id).await?;
+    Ok(Json(deleted_message("network_policy", &id)))
 }
 
 #[utoipa::path(

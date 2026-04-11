@@ -329,6 +329,55 @@ pub struct ServiceListQuery {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct IpGroupListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct NetworkPolicyListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "allow")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "name": "prod",
@@ -1087,7 +1136,6 @@ pub struct RouteTableListResponse {
     pub total_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "tenant_id": "tenant-0001",
     "network_id": "network-0001",
@@ -1595,14 +1643,6 @@ pub struct IpGroupListResponse {
     pub total_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, IntoParams, ToSchema)]
-pub struct IpGroupListQuery {
-    pub limit: Option<usize>,
-    pub page_token: Option<String>,
-    pub label_selector: Option<String>,
-    pub tenant_id: Option<String>,
-    pub network_id: Option<String>,
-}
 
 // --- NetworkPolicy (Phase 3.5b: ACL platform migration) ---
 

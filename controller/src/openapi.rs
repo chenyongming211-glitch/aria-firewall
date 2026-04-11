@@ -44,6 +44,16 @@ use utoipa::OpenApi;
         crate::api_handlers::get_route_table,
         crate::api_handlers::update_route_table,
         crate::api_handlers::delete_route_table,
+        crate::api_handlers::list_ip_groups,
+        crate::api_handlers::create_ip_group,
+        crate::api_handlers::get_ip_group,
+        crate::api_handlers::update_ip_group,
+        crate::api_handlers::delete_ip_group,
+        crate::api_handlers::list_network_policies,
+        crate::api_handlers::create_network_policy,
+        crate::api_handlers::get_network_policy,
+        crate::api_handlers::update_network_policy,
+        crate::api_handlers::delete_network_policy,
         crate::api_handlers::list_health_checks,
         crate::api_handlers::create_health_check,
         crate::api_handlers::get_health_check,
@@ -131,6 +141,21 @@ use utoipa::OpenApi;
             aria_api::CreateRouteTableRequest,
             aria_api::UpdateRouteTableRequest,
             aria_api::RouteTableListResponse,
+            aria_api::IpGroupSpec,
+            aria_api::IpGroupStatus,
+            aria_api::IpGroupResource,
+            aria_api::IpGroupListQuery,
+            aria_api::CreateIpGroupRequest,
+            aria_api::UpdateIpGroupRequest,
+            aria_api::IpGroupListResponse,
+            aria_api::NetworkPolicyRule,
+            aria_api::NetworkPolicySpec,
+            aria_api::NetworkPolicyStatus,
+            aria_api::NetworkPolicyResource,
+            aria_api::NetworkPolicyListQuery,
+            aria_api::CreateNetworkPolicyRequest,
+            aria_api::UpdateNetworkPolicyRequest,
+            aria_api::NetworkPolicyListResponse,
             aria_api::HealthCheckSpec,
             aria_api::HealthCheckStatus,
             aria_api::HealthCheckResource,
@@ -182,6 +207,8 @@ use utoipa::OpenApi;
         (name = "ip-groups", description = "IP address group resources"),
         (name = "security-groups", description = "Security group resources"),
         (name = "route-tables", description = "Route table resources"),
+        (name = "ip-groups", description = "Reusable IP-group resources for policy compilation"),
+        (name = "network-policies", description = "Controller-managed ACL policy resources"),
         (name = "health-checks", description = "Health check policy resources"),
         (name = "backend-sets", description = "Backend member set resources"),
         (name = "services", description = "L4 service and VIP resources"),
@@ -206,6 +233,8 @@ mod tests {
         assert!(doc.pointer("/paths/~1api~1v1~1ports").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1security-groups").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1route-tables").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1ip-groups").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1network-policies").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1health-checks").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1backend-sets").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1services").is_some());
@@ -250,6 +279,10 @@ mod tests {
         assert!(doc
             .pointer("/components/schemas/RouteTableResource")
             .is_some());
+        assert!(doc.pointer("/components/schemas/IpGroupResource").is_some());
+        assert!(doc
+            .pointer("/components/schemas/NetworkPolicyResource")
+            .is_some());
         assert!(doc
             .pointer("/components/schemas/HealthCheckResource")
             .is_some());
@@ -259,6 +292,12 @@ mod tests {
         assert!(doc.pointer("/components/schemas/ServiceResource").is_some());
         assert!(doc
             .pointer("/components/schemas/DesiredStateEnvelope")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/ip_groups")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/network_policies")
             .is_some());
         assert!(doc
             .pointer("/components/schemas/DesiredStateEnvelope/properties/health_checks")
@@ -296,6 +335,16 @@ mod tests {
             doc.pointer("/paths/~1api~1v1~1route-tables~1{id}/put/operationId")
                 .and_then(|value| value.as_str()),
             Some("updateRouteTable")
+        );
+        assert_eq!(
+            doc.pointer("/paths/~1api~1v1~1ip-groups/post/operationId")
+                .and_then(|value| value.as_str()),
+            Some("createIpGroup")
+        );
+        assert_eq!(
+            doc.pointer("/paths/~1api~1v1~1network-policies/get/operationId")
+                .and_then(|value| value.as_str()),
+            Some("listNetworkPolicies")
         );
         assert_eq!(
             doc.pointer("/paths/~1api~1v1~1health-checks/post/operationId")
@@ -377,6 +426,28 @@ mod tests {
         assert!(health_check_params.iter().any(|param| {
             param.get("name").and_then(|value| value.as_str()) == Some("protocol")
         }));
+
+        let ip_group_params = doc
+            .pointer("/paths/~1api~1v1~1ip-groups/get/parameters")
+            .and_then(|value| value.as_array())
+            .expect("ip group list parameters should exist");
+        assert!(ip_group_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("tenant_id")
+        }));
+        assert!(ip_group_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("network_id")
+        }));
+
+        let network_policy_params = doc
+            .pointer("/paths/~1api~1v1~1network-policies/get/parameters")
+            .and_then(|value| value.as_array())
+            .expect("network policy list parameters should exist");
+        assert!(network_policy_params.iter().any(|param| {
+            param.get("name").and_then(|value| value.as_str()) == Some("tenant_id")
+        }));
+        assert!(network_policy_params
+            .iter()
+            .any(|param| { param.get("name").and_then(|value| value.as_str()) == Some("action") }));
         assert!(doc
             .pointer(
                 "/components/schemas/SouthboundNodeStatusResponse/properties/last_desired_state"
