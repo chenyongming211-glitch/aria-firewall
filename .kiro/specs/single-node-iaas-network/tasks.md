@@ -117,6 +117,6 @@
 - [x] 更新 `docs/iaas-architecture-roadmap.md` 的 Phase 3 实施进度
 - [x] 更新 `README.md` 的开发进度章节
 - [x] 在 `docs/rfcs/README.md` 中添加 RFC-005A 索引条目
-- [ ] 提交到 GitHub，由 CI 验证编译
+- [x] 提交到 GitHub，由 CI 验证编译
 
 相关设计：全部
