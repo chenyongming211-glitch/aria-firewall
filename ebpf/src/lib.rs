@@ -370,7 +370,18 @@ unsafe fn try_tc_ingress(
     load_runtime_ctx_tc(ctx, p);
     load_feature_flags_tc(p, info);
 
-    if p.tap_id != TAP_ID_UNASSIGNED && port::phase_port_identity(p) {
+    if p.tap_id != TAP_ID_UNASSIGNED {
+        if !port::phase_port_identity(p) {
+            load_packet_ids(info, p);
+            p.drop_reason = DROP_PORT_IDENTITY_MISS;
+            p.action = TC_ACT_SHOT as u32;
+            do_drop(p);
+            if (p.flags & FLAG_TRACING) != 0 {
+                do_trace(ctx, info, p, TRACE_TC_DROP, TRACE_RESULT_DROP_IDENTITY);
+            }
+            return Ok(TC_ACT_SHOT);
+        }
+
         if (p.port_flags as u16 & PORT_FLAG_ANTI_SPOOF) != 0 {
             let anti_spoof_ok = if info.is_ipv6 {
                 port::phase_anti_spoof_v6(info, p)
