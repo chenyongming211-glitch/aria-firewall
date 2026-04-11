@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
-    HealthCheckResource, NetworkResource, NodeCapability, NodeHealthReport, NodeInfo,
-    NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata, RouteTableResource,
-    SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus,
-    TenantResource,
+    HealthCheckResource, IpGroupResource, NetworkPolicyResource, NetworkResource, NodeCapability,
+    NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
+    RouteTableResource, SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse,
+    SouthboundSyncStatus, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,8 @@ impl_stored_resource!(NetworkResource);
 impl_stored_resource!(PortResource);
 impl_stored_resource!(SecurityGroupResource);
 impl_stored_resource!(RouteTableResource);
+impl_stored_resource!(IpGroupResource);
+impl_stored_resource!(NetworkPolicyResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
@@ -134,6 +136,10 @@ struct PersistedControllerState {
     ports: PersistedResourceStore<PortResource>,
     security_groups: PersistedResourceStore<SecurityGroupResource>,
     route_tables: PersistedResourceStore<RouteTableResource>,
+    #[serde(default)]
+    ip_groups: PersistedResourceStore<IpGroupResource>,
+    #[serde(default)]
+    network_policies: PersistedResourceStore<NetworkPolicyResource>,
     health_checks: PersistedResourceStore<HealthCheckResource>,
     backend_sets: PersistedResourceStore<BackendSetResource>,
     services: PersistedResourceStore<ServiceResource>,
@@ -215,6 +221,32 @@ pub trait ControllerStore: Send + Sync {
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError>;
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError>;
+
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource>;
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource>;
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError>;
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError>;
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError>;
+
+    async fn list_network_policies(&self) -> Vec<NetworkPolicyResource>;
+    async fn get_network_policy(&self, id: &str) -> Option<NetworkPolicyResource>;
+    async fn create_network_policy(
+        &self,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError>;
+    async fn update_network_policy(
+        &self,
+        id: &str,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError>;
+    async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError>;
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource>;
     async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource>;
@@ -398,6 +430,8 @@ pub struct InMemoryControllerStore {
     pub ports: ResourceStore<PortResource>,
     pub security_groups: ResourceStore<SecurityGroupResource>,
     pub route_tables: ResourceStore<RouteTableResource>,
+    pub ip_groups: ResourceStore<IpGroupResource>,
+    pub network_policies: ResourceStore<NetworkPolicyResource>,
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
@@ -418,6 +452,8 @@ impl InMemoryControllerStore {
             ports: ResourceStore::new("port", "port"),
             security_groups: ResourceStore::new("security_group", "sg"),
             route_tables: ResourceStore::new("route_table", "rt"),
+            ip_groups: ResourceStore::new("ip_group", "ipg"),
+            network_policies: ResourceStore::new("network_policy", "npol"),
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
@@ -439,6 +475,11 @@ impl InMemoryControllerStore {
             self.security_groups.count().await,
         );
         counts.insert("route_tables".to_string(), self.route_tables.count().await);
+        counts.insert("ip_groups".to_string(), self.ip_groups.count().await);
+        counts.insert(
+            "network_policies".to_string(),
+            self.network_policies.count().await,
+        );
         counts.insert(
             "health_checks".to_string(),
             self.health_checks.count().await,
@@ -626,6 +667,23 @@ impl InMemoryControllerStore {
             })
     }
 
+    async fn ensure_ip_group_exists_inner(
+        &self,
+        ip_group_id: &str,
+        resource: &'static str,
+        field: &'static str,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.ip_groups
+            .get(ip_group_id)
+            .await
+            .ok_or(StoreError::InvalidReference {
+                resource,
+                field,
+                value: ip_group_id.to_string(),
+                referenced_resource: "ip_group",
+            })
+    }
+
     async fn validate_network_resource_inner(
         &self,
         resource: &NetworkResource,
@@ -659,6 +717,116 @@ impl InMemoryControllerStore {
     ) -> Result<(), StoreError> {
         self.ensure_network_exists_inner(&resource.spec.network_id, "route_table", "network_id")
             .await?;
+        Ok(())
+    }
+
+    async fn validate_ip_group_resource_inner(
+        &self,
+        resource: &IpGroupResource,
+    ) -> Result<(), StoreError> {
+        if resource.spec.entries.is_empty() {
+            return Err(StoreError::BadRequest(
+                "ip_group must define at least one CIDR entry".to_string(),
+            ));
+        }
+
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "ip_group", "tenant_id")
+            .await?;
+
+        if let Some(network_id) = resource.spec.network_id.as_deref() {
+            let network = self
+                .ensure_network_exists_inner(network_id, "ip_group", "network_id")
+                .await?;
+            if network.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "ip_group tenant_id '{}' must match network '{}' tenant '{}'",
+                    resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn validate_network_policy_resource_inner(
+        &self,
+        resource: &NetworkPolicyResource,
+    ) -> Result<(), StoreError> {
+        if resource.spec.rules.is_empty() {
+            return Err(StoreError::BadRequest(
+                "network_policy must define at least one rule".to_string(),
+            ));
+        }
+
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "network_policy", "tenant_id")
+            .await?;
+
+        let policy_network = if let Some(network_id) = resource.spec.network_id.as_deref() {
+            let network = self
+                .ensure_network_exists_inner(network_id, "network_policy", "network_id")
+                .await?;
+            if network.spec.tenant_id != resource.spec.tenant_id {
+                return Err(StoreError::BadRequest(format!(
+                    "network_policy tenant_id '{}' must match network '{}' tenant '{}'",
+                    resource.spec.tenant_id, network.metadata.id, network.spec.tenant_id
+                )));
+            }
+            Some(network)
+        } else {
+            None
+        };
+
+        for (index, rule) in resource.spec.rules.iter().enumerate() {
+            if !matches!(rule.direction.as_str(), "ingress" | "egress" | "both") {
+                return Err(StoreError::BadRequest(format!(
+                    "network_policy rule[{index}] direction '{}' must be one of: ingress, egress, both",
+                    rule.direction
+                )));
+            }
+            if !matches!(rule.action.as_str(), "allow" | "deny") {
+                return Err(StoreError::BadRequest(format!(
+                    "network_policy rule[{index}] action '{}' must be one of: allow, deny",
+                    rule.action
+                )));
+            }
+            if !matches!(
+                rule.protocol.as_str(),
+                "any" | "tcp" | "udp" | "icmp" | "icmpv6"
+            ) {
+                return Err(StoreError::BadRequest(format!(
+                    "network_policy rule[{index}] protocol '{}' must be one of: any, tcp, udp, icmp, icmpv6",
+                    rule.protocol
+                )));
+            }
+
+            for (field, group_ids) in [
+                ("src_ip_group_ids", &rule.src_ip_group_ids),
+                ("dst_ip_group_ids", &rule.dst_ip_group_ids),
+            ] {
+                for group_id in group_ids {
+                    let ip_group = self
+                        .ensure_ip_group_exists_inner(group_id, "network_policy", field)
+                        .await?;
+                    if ip_group.spec.tenant_id != resource.spec.tenant_id {
+                        return Err(StoreError::BadRequest(format!(
+                            "network_policy rule[{index}] references ip_group '{}' in tenant '{}' but policy belongs to tenant '{}'",
+                            ip_group.metadata.id, ip_group.spec.tenant_id, resource.spec.tenant_id
+                        )));
+                    }
+                    if let (Some(policy_network), Some(ip_group_network_id)) =
+                        (policy_network.as_ref(), ip_group.spec.network_id.as_deref())
+                    {
+                        if ip_group_network_id != policy_network.metadata.id {
+                            return Err(StoreError::BadRequest(format!(
+                                "network_policy rule[{index}] references ip_group '{}' scoped to network '{}' but policy targets network '{}'",
+                                ip_group.metadata.id, ip_group_network_id, policy_network.metadata.id
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -920,6 +1088,36 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(ip_group) = self
+            .ip_groups
+            .list()
+            .await
+            .into_iter()
+            .find(|ip_group| ip_group.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "ip_group",
+                dependent_id: ip_group.metadata.id,
+            });
+        }
+
+        if let Some(network_policy) = self
+            .network_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|network_policy| network_policy.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "network_policy",
+                dependent_id: network_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -1021,6 +1219,36 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(ip_group) = self
+            .ip_groups
+            .list()
+            .await
+            .into_iter()
+            .find(|ip_group| ip_group.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "ip_group",
+                dependent_id: ip_group.metadata.id,
+            });
+        }
+
+        if let Some(network_policy) = self
+            .network_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|network_policy| network_policy.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "network_policy",
+                dependent_id: network_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -1085,6 +1313,63 @@ impl InMemoryControllerStore {
                 id: network_id.to_string(),
                 dependent_resource: "service",
                 dependent_id: service.metadata.id,
+            });
+        }
+
+        if let Some(ip_group) = self
+            .ip_groups
+            .list()
+            .await
+            .into_iter()
+            .find(|ip_group| ip_group.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "ip_group",
+                dependent_id: ip_group.metadata.id,
+            });
+        }
+
+        if let Some(network_policy) = self
+            .network_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|network_policy| network_policy.spec.network_id.as_deref() == Some(network_id))
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "network_policy",
+                dependent_id: network_policy.metadata.id,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_ip_group_delete_allowed_inner(
+        &self,
+        ip_group_id: &str,
+    ) -> Result<(), StoreError> {
+        if let Some(network_policy) =
+            self.network_policies
+                .list()
+                .await
+                .into_iter()
+                .find(|network_policy| {
+                    network_policy.spec.rules.iter().any(|rule| {
+                        rule.src_ip_group_ids.iter().any(|id| id == ip_group_id)
+                            || rule.dst_ip_group_ids.iter().any(|id| id == ip_group_id)
+                    })
+                })
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "ip_group",
+                id: ip_group_id.to_string(),
+                dependent_resource: "network_policy",
+                dependent_id: network_policy.metadata.id,
             });
         }
 
@@ -1172,6 +1457,8 @@ impl InMemoryControllerStore {
         ports: &[PortResource],
         security_groups: &[SecurityGroupResource],
         route_tables: &[RouteTableResource],
+        ip_groups: &[IpGroupResource],
+        network_policies: &[NetworkPolicyResource],
         health_checks: &[HealthCheckResource],
         backend_sets: &[BackendSetResource],
         services: &[ServiceResource],
@@ -1183,6 +1470,8 @@ impl InMemoryControllerStore {
             ("ports".to_string(), ports.len()),
             ("security_groups".to_string(), security_groups.len()),
             ("route_tables".to_string(), route_tables.len()),
+            ("ip_groups".to_string(), ip_groups.len()),
+            ("network_policies".to_string(), network_policies.len()),
             ("health_checks".to_string(), health_checks.len()),
             ("backend_sets".to_string(), backend_sets.len()),
             ("services".to_string(), services.len()),
@@ -1412,6 +1701,8 @@ impl InMemoryControllerStore {
             ports: self.ports.snapshot().await,
             security_groups: self.security_groups.snapshot().await,
             route_tables: self.route_tables.snapshot().await,
+            ip_groups: self.ip_groups.snapshot().await,
+            network_policies: self.network_policies.snapshot().await,
             health_checks: self.health_checks.snapshot().await,
             backend_sets: self.backend_sets.snapshot().await,
             services: self.services.snapshot().await,
@@ -1427,6 +1718,10 @@ impl InMemoryControllerStore {
         self.ports.restore(snapshot.ports).await;
         self.security_groups.restore(snapshot.security_groups).await;
         self.route_tables.restore(snapshot.route_tables).await;
+        self.ip_groups.restore(snapshot.ip_groups).await;
+        self.network_policies
+            .restore(snapshot.network_policies)
+            .await;
         self.health_checks.restore(snapshot.health_checks).await;
         self.backend_sets.restore(snapshot.backend_sets).await;
         self.services.restore(snapshot.services).await;
@@ -1687,6 +1982,43 @@ impl InMemoryControllerStore {
             .filter(|route_table| network_ids.contains(&route_table.spec.network_id))
             .collect::<Vec<_>>();
 
+        let network_policies = self
+            .network_policies
+            .list()
+            .await
+            .into_iter()
+            .filter(|network_policy| {
+                if network_policy.spec.tenant_id.is_empty() {
+                    return false;
+                }
+                if let Some(network_id) = network_policy.spec.network_id.as_deref() {
+                    network_ids.contains(network_id)
+                } else {
+                    tenant_ids.contains(&network_policy.spec.tenant_id)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let referenced_ip_group_ids = network_policies
+            .iter()
+            .flat_map(|network_policy| {
+                network_policy.spec.rules.iter().flat_map(|rule| {
+                    rule.src_ip_group_ids
+                        .iter()
+                        .chain(rule.dst_ip_group_ids.iter())
+                        .cloned()
+                })
+            })
+            .collect::<BTreeSet<_>>();
+
+        let ip_groups = self
+            .ip_groups
+            .list()
+            .await
+            .into_iter()
+            .filter(|ip_group| referenced_ip_group_ids.contains(&ip_group.metadata.id))
+            .collect::<Vec<_>>();
+
         let backend_sets = self
             .backend_sets
             .list()
@@ -1737,6 +2069,8 @@ impl InMemoryControllerStore {
             &ports,
             &security_groups,
             &route_tables,
+            &ip_groups,
+            &network_policies,
             &health_checks,
             &backend_sets,
             &services,
@@ -1759,6 +2093,8 @@ impl InMemoryControllerStore {
                 ports,
                 security_groups,
                 route_tables,
+                ip_groups,
+                network_policies,
                 health_checks,
                 backend_sets,
                 services,
@@ -2163,6 +2499,112 @@ impl ControllerStore for InMemoryControllerStore {
         self.run_mutation(
             |inner| async move { inner.delete_resource(&inner.route_tables, id).await },
         )
+        .await
+    }
+
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource> {
+        self.list_resource(&self.ip_groups).await
+    }
+
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource> {
+        self.get_resource(&self.ip_groups, id).await
+    }
+
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_ip_group_resource_inner(&resource).await?;
+            inner.create_resource(&inner.ip_groups, resource).await
+        })
+        .await
+    }
+
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            let existing = inner
+                .ip_groups
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "ip_group",
+                    id: id.to_string(),
+                })?;
+            inner.validate_ip_group_resource_inner(&resource).await?;
+            if existing.spec.tenant_id != resource.spec.tenant_id
+                || existing.spec.network_id != resource.spec.network_id
+            {
+                inner.ensure_ip_group_delete_allowed_inner(id).await?;
+            }
+            inner.update_resource(&inner.ip_groups, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_ip_group_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.ip_groups, id).await
+        })
+        .await
+    }
+
+    async fn list_network_policies(&self) -> Vec<NetworkPolicyResource> {
+        self.list_resource(&self.network_policies).await
+    }
+
+    async fn get_network_policy(&self, id: &str) -> Option<NetworkPolicyResource> {
+        self.get_resource(&self.network_policies, id).await
+    }
+
+    async fn create_network_policy(
+        &self,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .validate_network_policy_resource_inner(&resource)
+                .await?;
+            inner
+                .create_resource(&inner.network_policies, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn update_network_policy(
+        &self,
+        id: &str,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .network_policies
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "network_policy",
+                    id: id.to_string(),
+                })?;
+            inner
+                .validate_network_policy_resource_inner(&resource)
+                .await?;
+            inner
+                .update_resource(&inner.network_policies, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.delete_resource(&inner.network_policies, id).await
+        })
         .await
     }
 
@@ -2579,6 +3021,65 @@ impl ControllerStore for FileBackedControllerStore {
 
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
         self.run_persisted(|inner| inner.delete_route_table(id))
+            .await
+    }
+
+    async fn list_ip_groups(&self) -> Vec<IpGroupResource> {
+        self.inner.list_ip_groups().await
+    }
+
+    async fn get_ip_group(&self, id: &str) -> Option<IpGroupResource> {
+        self.inner.get_ip_group(id).await
+    }
+
+    async fn create_ip_group(
+        &self,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.create_ip_group(resource))
+            .await
+    }
+
+    async fn update_ip_group(
+        &self,
+        id: &str,
+        resource: IpGroupResource,
+    ) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.update_ip_group(id, resource))
+            .await
+    }
+
+    async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_ip_group(id)).await
+    }
+
+    async fn list_network_policies(&self) -> Vec<NetworkPolicyResource> {
+        self.inner.list_network_policies().await
+    }
+
+    async fn get_network_policy(&self, id: &str) -> Option<NetworkPolicyResource> {
+        self.inner.get_network_policy(id).await
+    }
+
+    async fn create_network_policy(
+        &self,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.create_network_policy(resource))
+            .await
+    }
+
+    async fn update_network_policy(
+        &self,
+        id: &str,
+        resource: NetworkPolicyResource,
+    ) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.update_network_policy(id, resource))
+            .await
+    }
+
+    async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_network_policy(id))
             .await
     }
 

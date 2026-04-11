@@ -329,6 +329,55 @@ pub struct ServiceListQuery {
     pub status: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct IpGroupListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct NetworkPolicyListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "allow")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "name": "prod",
@@ -1082,6 +1131,232 @@ pub struct UpdateRouteTableRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct RouteTableListResponse {
     pub items: Vec<RouteTableResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "tenant_id": "tenant-0001",
+    "network_id": "network-0001",
+    "name": "frontend-peers",
+    "entries": ["10.0.10.0/24", "10.0.20.15/32"]
+}))]
+pub struct IpGroupSpec {
+    /// Owning tenant for the IP group.
+    #[schema(example = "tenant-0001")]
+    pub tenant_id: String,
+    /// Optional network scope. Omit for tenant-global reusable groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "network-0001")]
+    pub network_id: Option<String>,
+    /// Human-readable group name.
+    #[schema(example = "frontend-peers")]
+    pub name: String,
+    /// CIDR entries contained in the group.
+    #[serde(default)]
+    pub entries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "phase": "ready",
+    "entry_count": 2
+}))]
+pub struct IpGroupStatus {
+    /// Lifecycle phase as observed by the platform.
+    #[schema(example = "ready")]
+    pub phase: String,
+    /// Number of CIDR entries in the group.
+    #[schema(example = 2)]
+    pub entry_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "metadata": {
+        "id": "ipg-0001",
+        "resource_version": "1",
+        "created_at": "1712649600",
+        "updated_at": "1712649600",
+        "labels": {"scope": "prod"}
+    },
+    "spec": {
+        "tenant_id": "tenant-0001",
+        "network_id": "network-0001",
+        "name": "frontend-peers",
+        "entries": ["10.0.10.0/24", "10.0.20.15/32"]
+    },
+    "status": {
+        "phase": "ready",
+        "entry_count": 2
+    }
+}))]
+pub struct IpGroupResource {
+    pub metadata: ResourceMetadata,
+    pub spec: IpGroupSpec,
+    pub status: IpGroupStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateIpGroupRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceCreateMetadata>,
+    pub spec: IpGroupSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateIpGroupRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceUpdateMetadata>,
+    pub spec: IpGroupSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct IpGroupListResponse {
+    pub items: Vec<IpGroupResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+    pub total_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "name": "allow-web",
+    "direction": "ingress",
+    "action": "allow",
+    "protocol": "tcp",
+    "ports": "80,443",
+    "src_ip_group_ids": ["ipg-0001"],
+    "dst_ip_group_ids": ["ipg-0002"]
+}))]
+pub struct NetworkPolicyRuleSpec {
+    /// Optional stable name for the rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "allow-web")]
+    pub name: Option<String>,
+    /// Rule direction such as `ingress`, `egress`, or `both`.
+    #[schema(example = "ingress")]
+    pub direction: String,
+    /// Rule action such as `allow` or `deny`.
+    #[schema(example = "allow")]
+    pub action: String,
+    /// Protocol selector such as `tcp`, `udp`, `icmp`, or `any`.
+    #[schema(example = "tcp")]
+    pub protocol: String,
+    /// Optional port filter expressed in the legacy normalized policy format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "80,443")]
+    pub ports: Option<String>,
+    /// Referenced source IP-group identifiers.
+    #[serde(default)]
+    pub src_ip_group_ids: Vec<String>,
+    /// Referenced destination IP-group identifiers.
+    #[serde(default)]
+    pub dst_ip_group_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "tenant_id": "tenant-0001",
+    "network_id": "network-0001",
+    "name": "frontend-ingress",
+    "rules": [
+        {
+            "name": "allow-web",
+            "direction": "ingress",
+            "action": "allow",
+            "protocol": "tcp",
+            "ports": "80,443",
+            "src_ip_group_ids": ["ipg-0001"],
+            "dst_ip_group_ids": ["ipg-0002"]
+        }
+    ]
+}))]
+pub struct NetworkPolicySpec {
+    /// Owning tenant for the network policy.
+    #[schema(example = "tenant-0001")]
+    pub tenant_id: String,
+    /// Optional network scope. Omit for tenant-global reusable policies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "network-0001")]
+    pub network_id: Option<String>,
+    /// Human-readable policy name.
+    #[schema(example = "frontend-ingress")]
+    pub name: String,
+    /// Ordered policy rules compiled into datapath maps.
+    #[serde(default)]
+    pub rules: Vec<NetworkPolicyRuleSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "phase": "ready",
+    "rule_count": 1
+}))]
+pub struct NetworkPolicyStatus {
+    /// Lifecycle phase as observed by the platform.
+    #[schema(example = "ready")]
+    pub phase: String,
+    /// Number of rules in the policy.
+    #[schema(example = 1)]
+    pub rule_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "metadata": {
+        "id": "npol-0001",
+        "resource_version": "1",
+        "created_at": "1712649600",
+        "updated_at": "1712649600",
+        "labels": {"scope": "prod"}
+    },
+    "spec": {
+        "tenant_id": "tenant-0001",
+        "network_id": "network-0001",
+        "name": "frontend-ingress",
+        "rules": [
+            {
+                "name": "allow-web",
+                "direction": "ingress",
+                "action": "allow",
+                "protocol": "tcp",
+                "ports": "80,443",
+                "src_ip_group_ids": ["ipg-0001"],
+                "dst_ip_group_ids": ["ipg-0002"]
+            }
+        ]
+    },
+    "status": {
+        "phase": "ready",
+        "rule_count": 1
+    }
+}))]
+pub struct NetworkPolicyResource {
+    pub metadata: ResourceMetadata,
+    pub spec: NetworkPolicySpec,
+    pub status: NetworkPolicyStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CreateNetworkPolicyRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceCreateMetadata>,
+    pub spec: NetworkPolicySpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct UpdateNetworkPolicyRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ResourceUpdateMetadata>,
+    pub spec: NetworkPolicySpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct NetworkPolicyListResponse {
+    pub items: Vec<NetworkPolicyResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
     pub total_count: usize,

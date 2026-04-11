@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
 use crate::{
-    BackendSetResource, HealthCheckResource, NetworkResource, PortResource, RouteTableResource,
-    SecurityGroupResource, ServiceResource, TenantResource,
+    BackendSetResource, HealthCheckResource, IpGroupResource, NetworkPolicyResource,
+    NetworkResource, PortResource, RouteTableResource, SecurityGroupResource, ServiceResource,
+    TenantResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -177,6 +178,8 @@ pub struct DesiredStateDeleteRef {
         "ports": 2,
         "security_groups": 1,
         "route_tables": 1,
+        "ip_groups": 2,
+        "network_policies": 1,
         "health_checks": 1,
         "backend_sets": 1,
         "services": 1,
@@ -187,6 +190,8 @@ pub struct DesiredStateDeleteRef {
     "ports": [],
     "security_groups": [],
     "route_tables": [],
+    "ip_groups": [],
+    "network_policies": [],
     "health_checks": [],
     "backend_sets": [],
     "services": [],
@@ -222,6 +227,12 @@ pub struct DesiredStateEnvelope {
     /// Route-table objects relevant to the node.
     #[serde(default)]
     pub route_tables: Vec<RouteTableResource>,
+    /// IP-group objects relevant to node-local policy compilation.
+    #[serde(default)]
+    pub ip_groups: Vec<IpGroupResource>,
+    /// Network-policy objects relevant to node-local policy compilation.
+    #[serde(default)]
+    pub network_policies: Vec<NetworkPolicyResource>,
     /// Health-check objects relevant to the node.
     #[serde(default)]
     pub health_checks: Vec<HealthCheckResource>,
@@ -247,6 +258,8 @@ pub struct DesiredStateEnvelope {
         "ports": 2,
         "security_groups": 1,
         "route_tables": 1,
+        "ip_groups": 2,
+        "network_policies": 1,
         "health_checks": 1,
         "backend_sets": 1,
         "services": 1,
