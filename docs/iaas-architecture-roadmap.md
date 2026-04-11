@@ -519,9 +519,12 @@ Southbound API 面向：
 - 参考： [RFC-005 Routing / NAT 基础数据面 v1](rfcs/rfc-005-routing-nat-datapath.md)
 - 子阶段：
   - Phase 3（主体）：SecurityGroup + Route + Port — 新 map、新 eBPF 模块、Agent materialize
-  - Phase 3.5：ACL → Controller `NetworkPolicy` 下发，复用现有 `POLICY_TABLE`
+  - Phase 3.5a：Groups → Controller `IpGroup` 下发，复用现有 LPM Trie（ACL 前置依赖）
+  - Phase 3.5b：ACL → Controller `NetworkPolicy` 下发，复用现有 `POLICY_TABLE`
   - Phase 3.6：QoS → Controller `QosPolicy` 下发，复用现有 `QOS_CONFIG`
   - Phase 3.7：Mirror → Controller `MirrorPolicy` 下发，复用现有 `MIRROR_POLICY`
+  - Phase 3.8：Service Chain → Controller `ServiceChain` 下发（TCP-RT/Trace/Diagnose 链路级观测前置）
+  - Phase 3.9：NodeConfig → Controller 统一管理功能开关和 SSL 开关
 - 当前实现状态（2026-04-11）：
   - 已进入 Mode A 真实 map materialize 阶段，当前节点侧已新增 `PORT_IDENTITY_MAP / ANTI_SPOOF_MAP / ROUTE_TABLE_V4 / ROUTE_TABLE_V6 / SG_RULE_MAP`
   - `ebpf/src/port.rs`、`ebpf/src/route.rs`、`ebpf/src/sg.rs` 已开始接入现有 TC ingress 流水线，与 LB/CT 共享 `PipelineCtx`
@@ -660,24 +663,37 @@ Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径
 ### 18.2 迁移原则
 
 - **复用现有 eBPF map，不重写数据面**：ACL / QoS / Mirror 的 eBPF 代码（policy.rs / qos.rs / mirror.rs）和 map schema 已经稳定，迁移时只补 Controller 对象定义 + Agent 编译链路，不改 eBPF 内核态代码
-- **观测类能力不需要 Controller 下发**：Trace / TCP-RT / Drops / SSL / Conntrack 是节点级自动运行的观测能力，通过 Node 级配置或 Agent 配置文件管理即可
-- **每个能力独立迁移，不做 big-bang**：按 ACL → QoS → Mirror 顺序逐个迁移，每个能力一个独立 commit
+- **策略类和观测编排类都需要 Controller 下发**：不仅 ACL/QoS/Mirror 等策略类能力需要迁移，Service Chain（TCP-RT/Trace/Diagnose 链路级观测的前置依赖）和功能开关（Config）也需要统一由 Controller 管理
+- **纯自动运行的统计类不需要 Controller 下发**：Drops / Kernel Drops / Stats / Metrics 等自动采集的统计数据，不需要 Controller 下发配置
+- **每个能力独立迁移，不做 big-bang**：按顺序逐个迁移，每个能力一个独立 commit
 
 ### 18.3 各能力迁移方案
 
 | 现有能力 | 复用的 eBPF map | 需要新增的 Controller 对象 | Agent 编译逻辑 | 迁移阶段 |
 |---------|----------------|-------------------------|--------------|---------|
-| ACL（policy） | `POLICY_TABLE` + `PORT_BITMAP_POOL` + `SRC/DST_IPV4/V6_TRIE` | `NetworkPolicy`（含 IP Group 定义 + 五元组规则） | NetworkPolicy → PolicyKey/PolicyValue + LPM entries | Phase 3.5 |
+| Groups | `SRC/DST_IPV4/V6_TRIE` | `IpGroup`（含 CIDR 列表） | IpGroup → LPM Trie entries | Phase 3.5 前置 |
+| ACL（policy） | `POLICY_TABLE` + `PORT_BITMAP_POOL` | `NetworkPolicy`（含 IP Group 引用 + 五元组规则） | NetworkPolicy → PolicyKey/PolicyValue + LPM entries | Phase 3.5 |
 | QoS | `QOS_CONFIG` + `QOS_TOKEN_BUCKET` | `QosPolicy`（含速率、突发、优先级、模式） | QosPolicy → QosKey/QosConfig + TokenBucket | Phase 3.6 |
 | Mirror | `MIRROR_POLICY` + `MIRROR_GLOBAL` | `MirrorPolicy`（含源/目的组、协议、方向、目标接口） | MirrorPolicy → MirrorKey/MirrorConfig | Phase 3.7 |
-| Conntrack | `CT_TABLE_V4/V6` + `CT_CONFIG` | 不需要（自动工作） | CT_CONFIG 超时参数通过 Node 级配置下发 | 不需要迁移 |
-| Trace | `TRACE_FILTER` + `TRACE_LOG` | 不需要（按需启动的调试能力） | 保持本地 API 控制 | 不需要迁移 |
-| TCP-RT | `TCPRT_TABLE_V4/V6` | 不需要（自动采集） | 通过 TapConfig 开关控制 | 不需要迁移 |
+| Service Chain | 无独立 map（agent 内存态） | `ServiceChain`（含 hop 拓扑 + tap 映射） | Chain → agent 本地拓扑，供 TCP-RT/Trace/Diagnose 按链路聚合 | Phase 3.8 |
+| Config（功能开关） | `FIREWALL_CONFIG` + `TAP_CONFIG_MAP` | `NodeConfig`（含 conntrack/monitoring/acl/qos/mirror/tcprt/lb 开关 + conntrack 超时） | NodeConfig → FirewallConfig/TapConfig | Phase 3.9 |
+| SSL 开关 | `SSL_GLOBAL_CONFIG` | 纳入 `NodeConfig`（ssl_enabled） | NodeConfig → SSL_GLOBAL_CONFIG | Phase 3.9 |
+| Conntrack 表 | `CT_TABLE_V4/V6` | 不需要（自动工作） | 超时参数通过 NodeConfig 下发（Phase 3.9） | 不需要独立迁移 |
+| Trace | `TRACE_FILTER` + `TRACE_LOG` | 不需要（按需启动的调试能力） | 保持本地 API 控制，`--chain` 模式依赖 Phase 3.8 的 Chain 下发 | 不需要独立迁移 |
+| TCP-RT | `TCPRT_TABLE_V4/V6` | 不需要（自动采集） | 开关通过 NodeConfig 下发（Phase 3.9），逐跳归因依赖 Phase 3.8 的 Chain 下发 | 不需要独立迁移 |
 | Drops | `DROP_REASON_STATS` | 不需要（自动统计） | 保持本地 API 读取 | 不需要迁移 |
 | Kernel Drops | `KERNEL_DROP_STATS` | 不需要（自动统计） | 保持本地 API 读取 | 不需要迁移 |
-| SSL/HTTP | `SSL_*` 系列 map | 不需要（host-global 观测） | 通过 SSL_GLOBAL_CONFIG 开关控制 | 不需要迁移 |
+| Stats / Metrics | 各统计 map | 不需要（纯聚合读取） | 保持本地 API 读取 | 不需要迁移 |
 
 ### 18.4 每个迁移阶段的具体工作
+
+**Phase 3.5 前置 — Groups 平台化（IpGroup）**
+
+1. Controller `store.rs` 新增 `IpGroup` 对象定义（含 CIDR 列表 + 名称）
+2. Controller northbound API 新增 `IpGroup` CRUD
+3. Controller southbound `desired-state` 投影 `IpGroup` 到节点
+4. Agent `platform_agent.rs` 新增编译逻辑：IpGroup → `SRC/DST_IPV4/V6_TRIE` entries
+5. 新增 `materialize_group_maps` 函数
 
 **Phase 3.5 — ACL 平台化（NetworkPolicy）**
 
@@ -705,23 +721,45 @@ Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径
 4. Agent 新增编译逻辑：MirrorPolicy → `MIRROR_POLICY` + `MIRROR_GLOBAL`
 5. 新增 `materialize_mirror_maps` 函数
 
+**Phase 3.8 — Service Chain 平台化**
+
+Service Chain 是 TCP-RT、Trace、Diagnose 链路级观测能力的共同前置依赖。当前只能通过本地 API 定义，无法跨节点统一管理。
+
+1. Controller `store.rs` 新增 `ServiceChain` 对象定义（含 hop 拓扑 + tap 映射 + hop_type）
+2. Controller northbound API 新增 `ServiceChain` CRUD
+3. Controller southbound 投影 `ServiceChain` 到节点
+4. Agent `platform_agent.rs` 新增编译逻辑：ServiceChain → 本地链路拓扑
+5. `tcprt flow --chain` 和 `trace start --chain` 改为读取 Controller 下发的链路定义
+
+**Phase 3.9 — 节点配置统一管理（NodeConfig）**
+
+当前功能开关（conntrack/monitoring/acl/qos/mirror/tcprt/lb）和 SSL 开关只能通过本地 `config set` 和 `set_ssl_global_config` 控制。多节点部署时无法统一管理。
+
+1. Controller `store.rs` 在 Node 或新增 `NodeConfig` 对象中定义功能开关（conntrack_enabled / monitoring_enabled / acl_enabled / qos_enabled / mirror_enabled / tcprt_enabled / lb_enabled / ssl_enabled）和 conntrack 超时参数
+2. Controller northbound API 新增 `NodeConfig` CRUD 或在 Node 资源中扩展
+3. Controller southbound 投影 `NodeConfig` 到节点
+4. Agent 编译逻辑：NodeConfig → `FIREWALL_CONFIG` / `TAP_CONFIG_MAP` / `SSL_GLOBAL_CONFIG`
+
 ### 18.5 迁移时间线
 
 ```
 Phase 3    ：SecurityGroup + Route + Port（新 map，新 eBPF 模块）
-Phase 3.5  ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）
+Phase 3.5a ：Groups → Controller IpGroup 下发（复用 LPM Trie，ACL 前置依赖）
+Phase 3.5b ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）
 Phase 3.6  ：QoS → Controller QosPolicy 下发（复用 QOS_CONFIG）
 Phase 3.7  ：Mirror → Controller MirrorPolicy 下发（复用 MIRROR_POLICY）
-Phase 3 完成后：本地 CLI 写入路径降级为 debug-only，所有策略通过 Controller 下发
+Phase 3.8  ：Service Chain → Controller ServiceChain 下发（TCP-RT/Trace/Diagnose 链路级观测前置）
+Phase 3.9  ：NodeConfig → Controller 统一管理功能开关和 SSL 开关
+Phase 3.9 完成后：本地 CLI 写入路径降级为 debug-only，所有策略和配置通过 Controller 下发
 ```
 
 ### 18.6 本地 CLI 降级策略
 
-Phase 3.7 完成后：
+Phase 3.9 完成后：
 
-- `ariactl policy / qos / mirror` 的写入操作（add / delete / batch）标记为 deprecated，仅保留用于紧急运维和调试
-- `ariactl policy / qos / mirror` 的读取操作（list / with-stats）继续保留，作为节点侧只读观测入口
-- 所有策略的主写入路径统一走 Controller northbound API
+- `ariactl policy / qos / mirror / chain / config / ssl` 的写入操作标记为 deprecated，仅保留用于紧急运维和调试
+- 所有写入操作的主路径统一走 Controller northbound API
+- `ariactl` 的读取操作（list / with-stats / tcprt / trace / drops / stats / diagnose）继续保留，作为节点侧只读观测和调试入口
 - Agent 在 Controller 模式下，如果检测到本地 CLI 写入了与 Controller 下发冲突的规则，应在 apply-status 中标记 warning
 
 ### 18.7 SecurityGroup 与现有 ACL 的关系
