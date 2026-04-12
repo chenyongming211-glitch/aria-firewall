@@ -95,6 +95,7 @@ pub struct CtValue {
 }
 
 pub const FLAG_LB_CT_ENABLED: u8 = 1 << 0;
+pub const FLAG_LB_CT_AFFINITY: u8 = 1 << 1;
 
 #[repr(C)]
 #[derive(Copy, Clone)]

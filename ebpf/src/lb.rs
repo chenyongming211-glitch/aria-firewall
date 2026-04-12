@@ -10,7 +10,8 @@ use aya_ebpf::helpers::{bpf_get_hash_recalc, bpf_get_prandom_u32, bpf_ktime_get_
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
     SvcFrontendValue, SvcLbStatsCache, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue,
-    FLAG_LB_CT_ENABLED, FLAG_LB_HIT, MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_DISABLED,
+    FLAG_LB_CT_AFFINITY, FLAG_LB_CT_ENABLED, FLAG_LB_HIT, MAGLEV_TABLE_SIZE,
+    SVC_BACKEND_FLAG_DISABLED,
     SVC_BACKEND_FLAG_DRAINING, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY,
     SVC_LB_ALGO_MAGLEV,
 };
@@ -618,7 +619,8 @@ pub unsafe fn phase_lb_ingress_v4(skb: *mut __sk_buff, info: &PacketInfo, p: &mu
         p.lb_service_id = frontend.service_id;
         p.lb_slot = slot;
         p.lb_algo = frontend.lb_algo;
-        p.lb_ct_flags = FLAG_LB_CT_ENABLED;
+        p.lb_ct_flags = FLAG_LB_CT_ENABLED
+            | if aff_hit != 0 { FLAG_LB_CT_AFFINITY } else { 0 };
 
         update_lb_stats(
             p.tap_id,
@@ -722,7 +724,8 @@ pub unsafe fn phase_lb_ingress_v6(skb: *mut __sk_buff, info: &PacketInfo, p: &mu
         p.lb_service_id = frontend.service_id;
         p.lb_slot = slot;
         p.lb_algo = frontend.lb_algo;
-        p.lb_ct_flags = FLAG_LB_CT_ENABLED;
+        p.lb_ct_flags = FLAG_LB_CT_ENABLED
+            | if aff_hit != 0 { FLAG_LB_CT_AFFINITY } else { 0 };
 
         update_lb_stats(
             p.tap_id,

@@ -34,7 +34,8 @@ use common::{
     CT_CONTRACT_HOOK_TC_INGRESS, CT_CONTRACT_REASON_CT_DISABLED, CT_CONTRACT_REASON_CT_MISS,
     DIR_EGRESS, DIR_INGRESS, DROP_ANTI_SPOOF, DROP_PORT_IDENTITY_MISS, DROP_QOS_EGRESS,
     DROP_QOS_INGRESS, DROP_ROUTE_BLACKHOLE, DROP_ROUTE_MISS, DROP_SG_EGRESS, DROP_SG_INGRESS,
-    FLAG_ACL_ON, FLAG_ANTI_SPOOF_PASSED, FLAG_CT_HIT, FLAG_IS_FORWARD, FLAG_LB_CT_ENABLED,
+    FLAG_ACL_ON, FLAG_ANTI_SPOOF_PASSED, FLAG_CT_HIT, FLAG_IS_FORWARD,
+    FLAG_LB_CT_AFFINITY, FLAG_LB_CT_ENABLED,
     FLAG_LB_HIT, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_PORT_RESOLVED, FLAG_QOS_ON, FLAG_TCPRT_ON,
     FLAG_TRACING, IPPROTO_TCP, IPPROTO_UDP, PORT_FLAG_ANTI_SPOOF, SG_DIR_EGRESS, SG_DIR_INGRESS,
     TAP_ID_UNASSIGNED, TRACE_RESULT_DROP_ACL, TRACE_RESULT_DROP_ACL_DEFAULT,
@@ -610,7 +611,11 @@ fn get_matched(p: &PipelineCtx) -> conntrack::MatchedPolicy {
         lb_service_id: p.lb_service_id,
         lb_algo: p.lb_algo,
         lb_flags: p.lb_ct_flags,
-        lb_affinity_hit: 0, // fast-path does not carry affinity context from PipelineCtx
+        lb_affinity_hit: if (p.lb_ct_flags & FLAG_LB_CT_AFFINITY) != 0 {
+            1
+        } else {
+            0
+        },
     }
 }
 
