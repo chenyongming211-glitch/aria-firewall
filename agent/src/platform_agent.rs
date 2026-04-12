@@ -27,13 +27,13 @@ pub struct PlatformAgentConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct DesiredStateCacheEntry {
+pub(crate) struct DesiredStateCacheEntry {
     cached_at: String,
     envelope: DesiredStateEnvelope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledPortBinding {
+pub(crate) struct CompiledPortBinding {
     port_id: String,
     tenant_id: String,
     network_id: String,
@@ -47,13 +47,13 @@ struct CompiledPortBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AntiSpoofIr {
+pub(crate) struct AntiSpoofIr {
     address: [u8; 16],
     flags: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PortIdentityIr {
+pub(crate) struct PortIdentityIr {
     port_id: String,
     network_id: String,
     tap_id: u32,
@@ -71,7 +71,7 @@ struct PortIdentityIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledRouteTableView {
+pub(crate) struct CompiledRouteTableView {
     route_table_id: String,
     network_id: String,
     route_count: usize,
@@ -79,7 +79,7 @@ struct CompiledRouteTableView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RouteIr {
+pub(crate) struct RouteIr {
     route_table_id: String,
     port_id: String,
     tap_id: u32,
@@ -96,7 +96,7 @@ struct RouteIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct IpGroupIr {
+pub(crate) struct IpGroupIr {
     ip_group_id: String,
     numeric_id: u32,
     network_id: String,
@@ -105,7 +105,7 @@ struct IpGroupIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct IpGroupCidrIr {
+pub(crate) struct IpGroupCidrIr {
     cidr: String,
     is_ipv6: bool,
     address: [u8; 16],
@@ -113,7 +113,7 @@ struct IpGroupCidrIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct NetworkPolicyIr {
+pub(crate) struct NetworkPolicyIr {
     policy_id: String,
     network_id: String,
     rules: Vec<NetworkPolicyRuleIr>,
@@ -121,7 +121,7 @@ struct NetworkPolicyIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct NetworkPolicyRuleIr {
+pub(crate) struct NetworkPolicyRuleIr {
     src_numeric_id: u32,
     dst_numeric_id: u32,
     proto: u8,
@@ -131,7 +131,7 @@ struct NetworkPolicyRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct QosPolicyIr {
+pub(crate) struct QosPolicyIr {
     policy_id: String,
     network_id: String,
     rules: Vec<QosPolicyRuleIr>,
@@ -139,7 +139,7 @@ struct QosPolicyIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct QosPolicyRuleIr {
+pub(crate) struct QosPolicyRuleIr {
     ip_group_numeric_id: u32,
     direction: u8,
     rate_bps: u64,
@@ -149,7 +149,7 @@ struct QosPolicyRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SgRuleIr {
+pub(crate) struct SgRuleIr {
     port_id: String,
     tap_id: u32,
     sg_program_id: u32,
@@ -167,7 +167,7 @@ struct SgRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledHealthCheckView {
+pub(crate) struct CompiledHealthCheckView {
     health_check_id: String,
     tenant_id: String,
     network_id: Option<String>,
@@ -176,7 +176,7 @@ struct CompiledHealthCheckView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledBackendSetView {
+pub(crate) struct CompiledBackendSetView {
     backend_set_id: String,
     tenant_id: String,
     network_id: String,
@@ -188,7 +188,7 @@ struct CompiledBackendSetView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledServiceView {
+pub(crate) struct CompiledServiceView {
     service_id: String,
     tenant_id: String,
     network_id: String,
@@ -200,7 +200,7 @@ struct CompiledServiceView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct HealthCheckIr {
+pub(crate) struct HealthCheckIr {
     health_check_id: String,
     tenant_id: String,
     network_id: Option<String>,
@@ -215,7 +215,7 @@ struct HealthCheckIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackendMemberIr {
+pub(crate) struct BackendMemberIr {
     backend_id: String,
     target_type: String,
     target_ref: Option<String>,
@@ -232,7 +232,7 @@ struct BackendMemberIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackendSetIr {
+pub(crate) struct BackendSetIr {
     backend_set_id: String,
     tenant_id: String,
     network_id: String,
@@ -245,14 +245,14 @@ struct BackendSetIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServiceFrontendPortIr {
+pub(crate) struct ServiceFrontendPortIr {
     name: Option<String>,
     service_port: u16,
     target_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServiceFrontendIr {
+pub(crate) struct ServiceFrontendIr {
     service_id: String,
     tenant_id: String,
     network_id: String,
@@ -272,7 +272,7 @@ struct ServiceFrontendIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServiceProgramIr {
+pub(crate) struct ServiceProgramIr {
     service_id: String,
     backend_set_id: Option<String>,
     health_check_id: Option<String>,
@@ -283,7 +283,7 @@ struct ServiceProgramIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompileDomainSummary {
+pub(crate) struct CompileDomainSummary {
     domain: String,
     input_objects: usize,
     compiled_objects: usize,
@@ -293,7 +293,7 @@ struct CompileDomainSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CompiledNodeState {
+pub(crate) struct CompiledNodeState {
     generation: String,
     compiler_version: String,
     node_id: String,
@@ -330,14 +330,14 @@ struct CompiledNodeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReconcileAction {
+pub(crate) struct ReconcileAction {
     domain: String,
     operation: String,
     object_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ReconcilePlan {
+pub(crate) struct ReconcilePlan {
     generation: String,
     previous_generation: Option<String>,
     compiled_at: String,
@@ -349,7 +349,7 @@ struct ReconcilePlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AttachBindingPlan {
+pub(crate) struct AttachBindingPlan {
     hook_family: String,
     scope: String,
     operation: String,
@@ -357,7 +357,7 @@ struct AttachBindingPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AttachPlan {
+pub(crate) struct AttachPlan {
     generation: String,
     compiled_at: String,
     required_hooks: Vec<String>,
@@ -367,14 +367,14 @@ struct AttachPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct MapPlanEntry {
+pub(crate) struct MapPlanEntry {
     map_family: String,
     operation: String,
     object_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct MapPlan {
+pub(crate) struct MapPlan {
     generation: String,
     compiled_at: String,
     entries: Vec<MapPlanEntry>,
@@ -382,7 +382,7 @@ struct MapPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimePlan {
+pub(crate) struct RuntimePlan {
     generation: String,
     compiled_at: String,
     attach_plan: AttachPlan,
@@ -391,7 +391,7 @@ struct RuntimePlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryAttach {
+pub(crate) struct RuntimeInventoryAttach {
     domain: String,
     hook_family: String,
     scope: String,
@@ -400,7 +400,7 @@ struct RuntimeInventoryAttach {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryMapEntry {
+pub(crate) struct RuntimeInventoryMapEntry {
     domain: String,
     map_family: String,
     operation: String,
@@ -408,7 +408,7 @@ struct RuntimeInventoryMapEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryDomainSummary {
+pub(crate) struct RuntimeInventoryDomainSummary {
     domain: String,
     compiled_objects: usize,
     failed_objects: usize,
@@ -419,7 +419,7 @@ struct RuntimeInventoryDomainSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventory {
+pub(crate) struct RuntimeInventory {
     generation: String,
     previous_generation: Option<String>,
     compiled_at: String,
@@ -434,7 +434,7 @@ struct RuntimeInventory {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryAttachDelta {
+pub(crate) struct RuntimeInventoryAttachDelta {
     domain: String,
     hook_family: String,
     scope: String,
@@ -445,7 +445,7 @@ struct RuntimeInventoryAttachDelta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryMapDelta {
+pub(crate) struct RuntimeInventoryMapDelta {
     domain: String,
     map_family: String,
     operation: String,
@@ -455,7 +455,7 @@ struct RuntimeInventoryMapDelta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryDomainDelta {
+pub(crate) struct RuntimeInventoryDomainDelta {
     domain: String,
     previous_attach_operations: usize,
     current_attach_operations: usize,
@@ -467,7 +467,7 @@ struct RuntimeInventoryDomainDelta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeInventoryDiff {
+pub(crate) struct RuntimeInventoryDiff {
     generation: String,
     previous_generation: Option<String>,
     observed_at: String,
@@ -480,7 +480,7 @@ struct RuntimeInventoryDiff {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeDomainIntent {
+pub(crate) struct RuntimeDomainIntent {
     domain: String,
     desired_action: String,
     reason: String,
@@ -495,7 +495,7 @@ struct RuntimeDomainIntent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServiceRuntimeIntentSummary {
+pub(crate) struct ServiceRuntimeIntentSummary {
     service_count: usize,
     frontend_listener_count: usize,
     #[serde(default)]
@@ -529,7 +529,7 @@ struct ServiceRuntimeIntentSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeIntent {
+pub(crate) struct RuntimeIntent {
     generation: String,
     previous_generation: Option<String>,
     compiled_at: String,
@@ -542,7 +542,7 @@ struct RuntimeIntent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeExecutionDomainSummary {
+pub(crate) struct RuntimeExecutionDomainSummary {
     domain: String,
     planned_action: String,
     execution_status: String,
@@ -557,7 +557,7 @@ struct RuntimeExecutionDomainSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServiceRuntimeExecutionSummary {
+pub(crate) struct ServiceRuntimeExecutionSummary {
     service_count: usize,
     frontend_listener_count: usize,
     #[serde(default)]
@@ -591,7 +591,7 @@ struct ServiceRuntimeExecutionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RuntimeExecutionSummary {
+pub(crate) struct RuntimeExecutionSummary {
     generation: String,
     previous_generation: Option<String>,
     compiled_at: String,
@@ -604,7 +604,7 @@ struct RuntimeExecutionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketBackendCandidate {
+pub(crate) struct SocketBackendCandidate {
     backend_id: String,
     target_type: String,
     resolved_ip_hint: Option<String>,
@@ -616,7 +616,7 @@ struct SocketBackendCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketBackendChoiceShape {
+pub(crate) struct SocketBackendChoiceShape {
     total_candidates: usize,
     local_candidates: usize,
     remote_candidates: usize,
@@ -628,7 +628,7 @@ struct SocketBackendChoiceShape {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketSelectionPlanEntry {
+pub(crate) struct SocketSelectionPlanEntry {
     service_id: String,
     service_name: Option<String>,
     vip: String,
@@ -648,7 +648,7 @@ struct SocketSelectionPlanEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketSelectionPlanSummary {
+pub(crate) struct SocketSelectionPlanSummary {
     listener_count: usize,
     node_local_listener_count: usize,
     cross_node_handoff_listener_count: usize,
@@ -668,7 +668,7 @@ struct SocketSelectionPlanSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SocketSelectionPlan {
+pub(crate) struct SocketSelectionPlan {
     generation: String,
     previous_generation: Option<String>,
     compiled_at: String,
@@ -679,7 +679,7 @@ struct SocketSelectionPlan {
 }
 
 #[derive(Debug, Clone)]
-struct CompileOutcome {
+pub(crate) struct CompileOutcome {
     compiled_state: CompiledNodeState,
     reconcile_plan: ReconcilePlan,
     runtime_plan: RuntimePlan,
@@ -692,7 +692,7 @@ struct CompileOutcome {
 }
 
 #[derive(Debug)]
-struct CompilerContext<'a> {
+pub(crate) struct CompilerContext<'a> {
     node_id: &'a str,
     desired: &'a DesiredStateEnvelope,
     capability: &'a NodeCapability,
@@ -700,16 +700,16 @@ struct CompilerContext<'a> {
     previous_runtime_inventory: Option<&'a RuntimeInventory>,
 }
 
-struct SouthboundClient {
+pub(crate) struct SouthboundClient {
     base_url: String,
     client: reqwest::Client,
 }
 
-struct LocalPlatformStateStore {
+pub(crate) struct LocalPlatformStateStore {
     root: PathBuf,
 }
 
-struct PlatformAgent {
+pub(crate) struct PlatformAgent {
     config: PlatformAgentConfig,
     client: SouthboundClient,
     state_store: LocalPlatformStateStore,
@@ -1637,7 +1637,7 @@ impl LocalPlatformStateStore {
     }
 }
 
-fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapability {
+pub(crate) fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapability {
     let mut supported_hooks = vec!["xdp".to_string(), "tc".to_string()];
     supported_hooks.sort();
     supported_hooks.dedup();
@@ -1667,7 +1667,7 @@ fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapability {
     }
 }
 
-fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
+pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     let tenant_ids = context
         .desired
         .tenants
@@ -2589,7 +2589,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     }
 }
 
-fn required_runtime_label(port: &aria_api::PortResource, key: &str) -> Result<u32, String> {
+pub(crate) fn required_runtime_label(port: &aria_api::PortResource, key: &str) -> Result<u32, String> {
     let value = port
         .metadata
         .labels
@@ -2604,7 +2604,7 @@ fn required_runtime_label(port: &aria_api::PortResource, key: &str) -> Result<u3
     Ok(parsed)
 }
 
-fn parse_mac_address(value: &str) -> Result<[u8; 6], String> {
+pub(crate) fn parse_mac_address(value: &str) -> Result<[u8; 6], String> {
     let parts = value.split(':').collect::<Vec<_>>();
     if parts.len() != 6 {
         return Err("mac_address must contain 6 octets".to_string());
@@ -2617,7 +2617,7 @@ fn parse_mac_address(value: &str) -> Result<[u8; 6], String> {
     Ok(mac)
 }
 
-fn parse_allowed_ip(value: &str) -> Result<[u8; 16], String> {
+pub(crate) fn parse_allowed_ip(value: &str) -> Result<[u8; 16], String> {
     let ip = strip_cidr_suffix(value)
         .parse::<std::net::IpAddr>()
         .map_err(|error| format!("invalid IP address: {error}"))?;
@@ -2627,7 +2627,7 @@ fn parse_allowed_ip(value: &str) -> Result<[u8; 16], String> {
     })
 }
 
-fn extract_ipv4_u32(address: &[u8; 16]) -> Option<u32> {
+pub(crate) fn extract_ipv4_u32(address: &[u8; 16]) -> Option<u32> {
     if is_v4_mapped(address) {
         Some(u32::from_be_bytes([
             address[12],
@@ -2640,7 +2640,7 @@ fn extract_ipv4_u32(address: &[u8; 16]) -> Option<u32> {
     }
 }
 
-fn extract_ipv6_bytes(address: &[u8; 16]) -> Option<[u8; 16]> {
+pub(crate) fn extract_ipv6_bytes(address: &[u8; 16]) -> Option<[u8; 16]> {
     if is_v4_mapped(address) || address == &[0; 16] {
         None
     } else {
@@ -2648,7 +2648,7 @@ fn extract_ipv6_bytes(address: &[u8; 16]) -> Option<[u8; 16]> {
     }
 }
 
-fn stable_local_id(value: &str) -> u32 {
+pub(crate) fn stable_local_id(value: &str) -> u32 {
     let mut hash = 0x811c9dc5u32;
     for byte in value.as_bytes() {
         hash ^= u32::from(*byte);
@@ -2661,7 +2661,7 @@ fn stable_local_id(value: &str) -> u32 {
     }
 }
 
-fn stable_local_id16(value: &str) -> u16 {
+pub(crate) fn stable_local_id16(value: &str) -> u16 {
     let mut hash = stable_local_id(value) as u16;
     if hash == 0 {
         hash = 1;
@@ -2669,17 +2669,17 @@ fn stable_local_id16(value: &str) -> u16 {
     hash
 }
 
-fn ipv4_to_v4mapped_bytes(ip: [u8; 4]) -> [u8; 16] {
+pub(crate) fn ipv4_to_v4mapped_bytes(ip: [u8; 4]) -> [u8; 16] {
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ip[0], ip[1], ip[2], ip[3],
     ]
 }
 
-fn is_v4_mapped(address: &[u8; 16]) -> bool {
+pub(crate) fn is_v4_mapped(address: &[u8; 16]) -> bool {
     address[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]
 }
 
-fn parse_cidr_string(value: &str) -> Result<(std::net::IpAddr, u8), String> {
+pub(crate) fn parse_cidr_string(value: &str) -> Result<(std::net::IpAddr, u8), String> {
     let (ip_raw, prefix_raw) = value
         .split_once('/')
         .ok_or_else(|| "expected CIDR notation".to_string())?;
@@ -2697,7 +2697,7 @@ fn parse_cidr_string(value: &str) -> Result<(std::net::IpAddr, u8), String> {
     }
 }
 
-fn route_next_hop_type(value: &str) -> Result<u8, String> {
+pub(crate) fn route_next_hop_type(value: &str) -> Result<u8, String> {
     Ok(match value {
         "local" | "local_port" | "port" => aria_core::common::NEXT_HOP_LOCAL_PORT,
         "gateway" => aria_core::common::NEXT_HOP_GATEWAY,
@@ -2707,7 +2707,7 @@ fn route_next_hop_type(value: &str) -> Result<u8, String> {
     })
 }
 
-fn next_hop_ip_for_port(port_identity: &PortIdentityIr) -> [u8; 16] {
+pub(crate) fn next_hop_ip_for_port(port_identity: &PortIdentityIr) -> [u8; 16] {
     if port_identity.primary_ipv4 != 0 {
         ipv4_to_v4mapped_bytes(port_identity.primary_ipv4.to_be_bytes())
     } else if port_identity.primary_ipv6 != [0; 16] {
@@ -2717,7 +2717,7 @@ fn next_hop_ip_for_port(port_identity: &PortIdentityIr) -> [u8; 16] {
     }
 }
 
-fn build_route_ir(
+pub(crate) fn build_route_ir(
     route_table: &aria_api::RouteTableResource,
     route: &aria_api::RouteSpec,
     port_identity: &PortIdentityIr,
@@ -2778,7 +2778,7 @@ fn build_route_ir(
     })
 }
 
-fn build_sg_rule_ir(
+pub(crate) fn build_sg_rule_ir(
     port_identity: &PortIdentityIr,
     security_group_id: &str,
     rule: &aria_api::SecurityRuleSpec,
@@ -2840,7 +2840,7 @@ fn build_sg_rule_ir(
     })
 }
 
-fn parse_security_remote_selector(
+pub(crate) fn parse_security_remote_selector(
     selector: Option<&str>,
     ethertype: &str,
 ) -> Result<([u8; 16], u8), String> {
@@ -2880,7 +2880,7 @@ fn parse_security_remote_selector(
     }
 }
 
-fn parse_security_port_range(port_range: Option<&str>) -> Result<(u16, u16), String> {
+pub(crate) fn parse_security_port_range(port_range: Option<&str>) -> Result<(u16, u16), String> {
     let Some(port_range) = port_range else {
         return Ok((0, 0));
     };
@@ -2912,7 +2912,7 @@ fn parse_security_port_range(port_range: Option<&str>) -> Result<(u16, u16), Str
     Ok((port, port))
 }
 
-fn build_service_programs(
+pub(crate) fn build_service_programs(
     desired: &DesiredStateEnvelope,
     compiled_health_checks: &[CompiledHealthCheckView],
     compiled_backend_sets: &[CompiledBackendSetView],
@@ -3064,7 +3064,7 @@ fn build_service_programs(
         .collect()
 }
 
-fn build_backend_member_ir(
+pub(crate) fn build_backend_member_ir(
     backend: &aria_api::BackendTargetSpec,
     port_by_id: &BTreeMap<&str, &aria_api::PortResource>,
     node_id: &str,
@@ -3130,19 +3130,19 @@ fn build_backend_member_ir(
     }
 }
 
-fn strip_cidr_suffix(value: &str) -> String {
+pub(crate) fn strip_cidr_suffix(value: &str) -> String {
     value.split('/').next().unwrap_or(value).to_string()
 }
 
-fn default_service_route_mode() -> String {
+pub(crate) fn default_service_route_mode() -> String {
     "native".to_string()
 }
 
-fn default_service_forwarding_mode() -> String {
+pub(crate) fn default_service_forwarding_mode() -> String {
     "node_local_only".to_string()
 }
 
-fn derive_service_forwarding_mode(route_mode: &str, cross_node_forwarding: bool) -> String {
+pub(crate) fn derive_service_forwarding_mode(route_mode: &str, cross_node_forwarding: bool) -> String {
     if !cross_node_forwarding {
         return default_service_forwarding_mode();
     }
@@ -3154,7 +3154,7 @@ fn derive_service_forwarding_mode(route_mode: &str, cross_node_forwarding: bool)
     }
 }
 
-fn build_reconcile_plan(
+pub(crate) fn build_reconcile_plan(
     previous_state: Option<&CompiledNodeState>,
     next_state: &CompiledNodeState,
     warnings: Vec<String>,
@@ -3443,7 +3443,7 @@ fn build_reconcile_plan(
     }
 }
 
-fn build_runtime_plan(
+pub(crate) fn build_runtime_plan(
     previous_state: Option<&CompiledNodeState>,
     next_state: &CompiledNodeState,
     capability: &NodeCapability,
@@ -4005,7 +4005,7 @@ fn build_runtime_plan(
     }
 }
 
-fn build_runtime_inventory(
+pub(crate) fn build_runtime_inventory(
     previous_state: Option<&CompiledNodeState>,
     compiled_state: &CompiledNodeState,
     runtime_plan: &RuntimePlan,
@@ -4082,7 +4082,7 @@ fn build_runtime_inventory(
     }
 }
 
-fn build_runtime_inventory_diff(
+pub(crate) fn build_runtime_inventory_diff(
     previous_inventory: Option<&RuntimeInventory>,
     current_inventory: &RuntimeInventory,
 ) -> RuntimeInventoryDiff {
@@ -4325,7 +4325,7 @@ fn build_runtime_inventory_diff(
     }
 }
 
-fn build_runtime_intent(
+pub(crate) fn build_runtime_intent(
     compiled_state: &CompiledNodeState,
     reconcile_plan: &ReconcilePlan,
     runtime_inventory: &RuntimeInventory,
@@ -4461,7 +4461,7 @@ fn build_runtime_intent(
     }
 }
 
-fn build_runtime_execution_summary(
+pub(crate) fn build_runtime_execution_summary(
     compiled_state: &CompiledNodeState,
     reconcile_plan: &ReconcilePlan,
     runtime_intent: &RuntimeIntent,
@@ -4680,7 +4680,7 @@ fn build_runtime_execution_summary(
     }
 }
 
-fn build_socket_selection_plan(
+pub(crate) fn build_socket_selection_plan(
     previous_state: Option<&CompiledNodeState>,
     compiled_state: &CompiledNodeState,
 ) -> SocketSelectionPlan {
@@ -4819,7 +4819,7 @@ fn build_socket_selection_plan(
     }
 }
 
-struct Phase3MaterializeResult {
+pub(crate) struct Phase3MaterializeResult {
     port_identities_written: usize,
     anti_spoof_entries_written: usize,
     sg_rules_written: usize,
@@ -4830,7 +4830,7 @@ struct Phase3MaterializeResult {
     qos_entries_written: usize,
 }
 
-fn clear_phase3_state_for_port(
+pub(crate) fn clear_phase3_state_for_port(
     pin_path: &str,
     tap_id: u32,
     ifindex: Option<u32>,
@@ -4855,7 +4855,7 @@ fn clear_phase3_state_for_port(
     Ok(())
 }
 
-fn materialize_phase3_maps(
+pub(crate) fn materialize_phase3_maps(
     pin_path: &str,
     previous_state: Option<&CompiledNodeState>,
     compiled_state: &CompiledNodeState,
@@ -5229,7 +5229,7 @@ fn materialize_phase3_maps(
 
 /// Materialize compiled service state into pinned eBPF maps.
 /// Returns (frontends_written, backends_written, revnats_written) on success.
-fn materialize_service_maps(
+pub(crate) fn materialize_service_maps(
     pin_path: &str,
     tap_id: u32,
     service_programs: &[ServiceProgramIr],
@@ -5433,7 +5433,7 @@ fn materialize_service_maps(
     write_result
 }
 
-fn build_backend_choice_shape(
+pub(crate) fn build_backend_choice_shape(
     backend_set: Option<&BackendSetIr>,
     forwarding_mode: &str,
 ) -> SocketBackendChoiceShape {
@@ -5507,7 +5507,7 @@ fn build_backend_choice_shape(
     }
 }
 
-fn normalize_socket_lb_strategy(lb_policy: &str) -> String {
+pub(crate) fn normalize_socket_lb_strategy(lb_policy: &str) -> String {
     match lb_policy {
         "round_robin" | "random" => "random".to_string(),
         "maglev" => "maglev".to_string(),
@@ -5516,7 +5516,7 @@ fn normalize_socket_lb_strategy(lb_policy: &str) -> String {
     }
 }
 
-fn normalize_socket_affinity_strategy(session_affinity: Option<&str>) -> String {
+pub(crate) fn normalize_socket_affinity_strategy(session_affinity: Option<&str>) -> String {
     match session_affinity {
         None | Some("none") => "none".to_string(),
         Some("client_ip") => "client_ip".to_string(),
@@ -5525,7 +5525,7 @@ fn normalize_socket_affinity_strategy(session_affinity: Option<&str>) -> String 
     }
 }
 
-fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5533,7 +5533,7 @@ fn total_service_listener_ports(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_anti_spoof_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_anti_spoof_entries(state: &CompiledNodeState) -> usize {
     state
         .port_identities
         .iter()
@@ -5541,7 +5541,7 @@ fn total_anti_spoof_entries(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn attached_port_count(state: &CompiledNodeState) -> usize {
+pub(crate) fn attached_port_count(state: &CompiledNodeState) -> usize {
     if state.port_identities.is_empty() {
         state.port_bindings.len()
     } else {
@@ -5549,7 +5549,7 @@ fn attached_port_count(state: &CompiledNodeState) -> usize {
     }
 }
 
-fn total_route_v4_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_route_v4_entries(state: &CompiledNodeState) -> usize {
     state
         .route_entries
         .iter()
@@ -5557,7 +5557,7 @@ fn total_route_v4_entries(state: &CompiledNodeState) -> usize {
         .count()
 }
 
-fn total_route_v6_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_route_v6_entries(state: &CompiledNodeState) -> usize {
     state
         .route_entries
         .iter()
@@ -5565,11 +5565,11 @@ fn total_route_v6_entries(state: &CompiledNodeState) -> usize {
         .count()
 }
 
-fn total_service_frontend_runtime_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_service_frontend_runtime_entries(state: &CompiledNodeState) -> usize {
     total_service_listener_ports(state)
 }
 
-fn total_socket_lb_frontends(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_socket_lb_frontends(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5578,7 +5578,7 @@ fn total_socket_lb_frontends(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_packet_lb_frontends(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_packet_lb_frontends(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5589,7 +5589,7 @@ fn total_packet_lb_frontends(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_service_backend_members(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_service_backend_members(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5603,11 +5603,11 @@ fn total_service_backend_members(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_backend_member_runtime_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_backend_member_runtime_entries(state: &CompiledNodeState) -> usize {
     total_service_backend_members(state)
 }
 
-fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5618,7 +5618,7 @@ fn total_service_forwarding_projections(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_node_local_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_node_local_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5626,7 +5626,7 @@ fn total_node_local_service_programs(state: &CompiledNodeState) -> usize {
         .count()
 }
 
-fn total_cross_node_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_cross_node_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5634,7 +5634,7 @@ fn total_cross_node_service_programs(state: &CompiledNodeState) -> usize {
         .count()
 }
 
-fn total_cross_node_native_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_cross_node_native_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5642,7 +5642,7 @@ fn total_cross_node_native_service_programs(state: &CompiledNodeState) -> usize 
         .count()
 }
 
-fn total_cross_node_overlay_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_cross_node_overlay_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5650,7 +5650,7 @@ fn total_cross_node_overlay_service_programs(state: &CompiledNodeState) -> usize
         .count()
 }
 
-fn total_cross_node_hybrid_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_cross_node_hybrid_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5658,7 +5658,7 @@ fn total_cross_node_hybrid_service_programs(state: &CompiledNodeState) -> usize 
         .count()
 }
 
-fn total_service_revnat_entries(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_service_revnat_entries(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5666,7 +5666,7 @@ fn total_service_revnat_entries(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5682,7 +5682,7 @@ fn total_affinity_service_programs(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
+pub(crate) fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
     state
         .service_programs
         .iter()
@@ -5691,7 +5691,7 @@ fn total_maglev_service_programs(state: &CompiledNodeState) -> usize {
         .sum()
 }
 
-fn inventory_domain_from_scope(scope: &str) -> String {
+pub(crate) fn inventory_domain_from_scope(scope: &str) -> String {
     match scope {
         "port-bindings" | "anti-spoof-fastpath" => "ports".to_string(),
         "route-tables" => "routes".to_string(),
@@ -5699,7 +5699,7 @@ fn inventory_domain_from_scope(scope: &str) -> String {
     }
 }
 
-fn inventory_domain_from_map_family(map_family: &str) -> String {
+pub(crate) fn inventory_domain_from_map_family(map_family: &str) -> String {
     match map_family {
         "tenant_index" | "network_index" => "identity".to_string(),
         "sg_rule_map" => "security".to_string(),
@@ -5724,7 +5724,7 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
     }
 }
 
-fn capability_profile(capability: &NodeCapability) -> String {
+pub(crate) fn capability_profile(capability: &NodeCapability) -> String {
     let mut hooks = capability.supported_hooks.clone();
     hooks.sort();
     let hooks = hooks.join("+");
@@ -5736,7 +5736,7 @@ fn capability_profile(capability: &NodeCapability) -> String {
     format!("{hooks}:trace={trace}:nat={}", capability.supports_nat)
 }
 
-async fn parse_platform_error(response: reqwest::Response) -> Option<String> {
+pub(crate) async fn parse_platform_error(response: reqwest::Response) -> Option<String> {
     let status = response.status();
     let body = response.text().await.ok()?;
     if let Ok(error) = serde_json::from_str::<PlatformApiError>(&body) {
@@ -5749,7 +5749,7 @@ async fn parse_platform_error(response: reqwest::Response) -> Option<String> {
     }
 }
 
-fn connection_error(error: reqwest::Error) -> String {
+pub(crate) fn connection_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
         "southbound request timed out".to_string()
     } else if error.is_connect() {
@@ -5761,7 +5761,7 @@ fn connection_error(error: reqwest::Error) -> String {
     }
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     for path in ["/proc/sys/kernel/hostname", "/etc/hostname"] {
         if let Ok(raw) = std::fs::read_to_string(path) {
             let trimmed = raw.trim();
@@ -5773,7 +5773,7 @@ fn hostname() -> String {
     std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_string())
 }
 
-fn unix_timestamp_string() -> String {
+pub(crate) fn unix_timestamp_string() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -5781,7 +5781,7 @@ fn unix_timestamp_string() -> String {
         .to_string()
 }
 
-fn temp_path(path: &Path) -> PathBuf {
+pub(crate) fn temp_path(path: &Path) -> PathBuf {
     let mut tmp = path.to_path_buf();
     let extension = path
         .extension()
