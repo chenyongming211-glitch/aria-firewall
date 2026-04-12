@@ -63,6 +63,16 @@ pub fn build_router(store: SharedStore) -> Router {
                 .delete(api_handlers::delete_network_policy),
         )
         .route(
+            "/api/v1/qos-policies",
+            get(api_handlers::list_qos_policies).post(api_handlers::create_qos_policy),
+        )
+        .route(
+            "/api/v1/qos-policies/{id}",
+            get(api_handlers::get_qos_policy)
+                .put(api_handlers::update_qos_policy)
+                .delete(api_handlers::delete_qos_policy),
+        )
+        .route(
             "/api/v1/ip-groups",
             get(api_handlers::list_ip_groups).post(api_handlers::create_ip_group),
         )

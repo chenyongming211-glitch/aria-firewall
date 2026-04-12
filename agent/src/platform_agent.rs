@@ -131,6 +131,24 @@ struct NetworkPolicyRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct QosPolicyIr {
+    policy_id: String,
+    network_id: String,
+    rules: Vec<QosPolicyRuleIr>,
+    shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QosPolicyRuleIr {
+    ip_group_numeric_id: u32,
+    direction: u8,
+    rate_bps: u64,
+    burst_bytes: u64,
+    priority: u8,
+    mode: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SgRuleIr {
     port_id: String,
     tap_id: u32,
@@ -297,6 +315,8 @@ struct CompiledNodeState {
     ip_groups: Vec<IpGroupIr>,
     #[serde(default)]
     network_policies: Vec<NetworkPolicyIr>,
+    #[serde(default)]
+    qos_policies: Vec<QosPolicyIr>,
     health_checks: Vec<CompiledHealthCheckView>,
     backend_sets: Vec<CompiledBackendSetView>,
     services: Vec<CompiledServiceView>,
@@ -1005,12 +1025,13 @@ impl PlatformAgent {
                             sg_rules = result.sg_rules_written,
                             route_v4 = result.route_v4_written,
                             route_v6 = result.route_v6_written,
+                            qos_rules = result.qos_entries_written,
                             "materialized phase-3 iaas maps into eBPF datapath"
                         );
                         for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                             if matches!(
                                 domain.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes"
+                                "identity" | "ports" | "security" | "routes" | "qos"
                             ) {
                                 domain.execution_status = "applied".to_string();
                                 domain.shadow_apply_only = false;
@@ -1019,7 +1040,7 @@ impl PlatformAgent {
                         for ds in &mut outcome.apply_report.domain_statuses {
                             if matches!(
                                 ds.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes"
+                                "identity" | "ports" | "security" | "routes" | "qos"
                             ) {
                                 ds.status = "applied".to_string();
                                 ds.shadow_apply_only = false;
@@ -1032,7 +1053,7 @@ impl PlatformAgent {
                         for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                             if matches!(
                                 domain.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes"
+                                "identity" | "ports" | "security" | "routes" | "qos"
                             ) {
                                 domain.execution_status = "failed".to_string();
                                 domain.shadow_apply_only = false;
@@ -1044,7 +1065,7 @@ impl PlatformAgent {
                         for ds in &mut outcome.apply_report.domain_statuses {
                             if matches!(
                                 ds.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes"
+                                "identity" | "ports" | "security" | "routes" | "qos"
                             ) {
                                 ds.status = "failed".to_string();
                                 ds.shadow_apply_only = false;
@@ -2169,6 +2190,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     compiled_objects.insert("health_checks".to_string(), compiled_health_checks.len());
     compiled_objects.insert("backend_sets".to_string(), compiled_backend_sets.len());
     compiled_objects.insert("services".to_string(), compiled_services.len());
+    compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
     if !context.desired.deletes.is_empty() {
         compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
     }
@@ -2279,6 +2301,37 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         });
     }
 
+    // --- QosPolicy compilation ---
+    let mut qos_policies = Vec::new();
+    for qp in &context.desired.qos_policies {
+        if !network_id_set.contains(qp.spec.network_id.as_str()) {
+            continue;
+        }
+        let rules: Vec<QosPolicyRuleIr> = qp
+            .spec
+            .rules
+            .iter()
+            .map(|rule| QosPolicyRuleIr {
+                ip_group_numeric_id: stable_local_id(&rule.ip_group_id),
+                direction: rule.direction,
+                rate_bps: rule.rate_bps,
+                burst_bytes: if rule.burst_bytes > 0 {
+                    rule.burst_bytes
+                } else {
+                    aria_core::qos_ops::compute_default_burst(rule.rate_bps)
+                },
+                priority: rule.priority,
+                mode: rule.mode,
+            })
+            .collect();
+        qos_policies.push(QosPolicyIr {
+            policy_id: qp.metadata.id.clone(),
+            network_id: qp.spec.network_id.clone(),
+            rules,
+            shadow_apply_only: true,
+        });
+    }
+
     let domain_summaries = vec![
         CompileDomainSummary {
             domain: "identity".to_string(),
@@ -2351,6 +2404,18 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             status: "shadow_reserved".to_string(),
             shadow_apply_only: true,
         },
+        CompileDomainSummary {
+            domain: "qos".to_string(),
+            input_objects: context.desired.qos_policies.len(),
+            compiled_objects: qos_policies.len(),
+            failed_objects: 0,
+            status: if qos_policies.is_empty() {
+                "shadow_reserved".to_string()
+            } else {
+                "shadow_ready".to_string()
+            },
+            shadow_apply_only: true,
+        },
     ];
 
     let compiled_at = unix_timestamp_string();
@@ -2371,6 +2436,7 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
         sg_rules,
         ip_groups,
         network_policies,
+        qos_policies,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,
@@ -3185,6 +3251,28 @@ fn build_reconcile_plan(
     {
         changed_kinds.push("services".to_string());
     }
+    let previous_qos_count = previous_state
+        .map(|state| state.qos_policies.len())
+        .unwrap_or(0);
+    if previous_state.is_none()
+        || next_state.qos_policies.len() != previous_qos_count
+        || previous_state
+            .map(|state| {
+                state
+                    .qos_policies
+                    .iter()
+                    .map(|qp| qp.policy_id.clone())
+                    .collect::<BTreeSet<_>>()
+                    != next_state
+                        .qos_policies
+                        .iter()
+                        .map(|qp| qp.policy_id.clone())
+                        .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or(true)
+    {
+        changed_kinds.push("qos_policies".to_string());
+    }
 
     let mut actions = Vec::new();
     if full_reconcile {
@@ -3248,6 +3336,26 @@ fn build_reconcile_plan(
             domain: "services".to_string(),
             operation: "cleanup_shadow_services".to_string(),
             object_count: services_cleanup,
+        });
+    }
+    let qos_rule_count: usize = next_state
+        .qos_policies
+        .iter()
+        .map(|qp| qp.rules.len())
+        .sum();
+    if qos_rule_count > 0 {
+        actions.push(ReconcileAction {
+            domain: "qos".to_string(),
+            operation: "refresh_shadow_qos".to_string(),
+            object_count: next_state.qos_policies.len(),
+        });
+    }
+    let qos_removed = previous_qos_count.saturating_sub(next_state.qos_policies.len());
+    if qos_removed > 0 {
+        actions.push(ReconcileAction {
+            domain: "qos".to_string(),
+            operation: "cleanup_shadow_qos".to_string(),
+            object_count: qos_removed,
         });
     }
 
@@ -3750,6 +3858,62 @@ fn build_runtime_plan(
             map_family: "service_maglev_map".to_string(),
             operation: "cleanup_shadow".to_string(),
             object_count: previous_service_maglev_count - next_service_maglev_count,
+        });
+    }
+
+    // --- QoS map plan ---
+    let next_qos_rule_count: usize = next_state
+        .qos_policies
+        .iter()
+        .map(|qp| {
+            let tap_count = next_state
+                .port_identities
+                .iter()
+                .filter(|p| p.network_id == qp.network_id)
+                .count()
+                .max(1);
+            qp.rules.len() * tap_count
+        })
+        .sum();
+    let previous_qos_rule_count: usize = previous_state
+        .map(|state| {
+            state
+                .qos_policies
+                .iter()
+                .map(|qp| {
+                    let tap_count = state
+                        .port_identities
+                        .iter()
+                        .filter(|p| p.network_id == qp.network_id)
+                        .count()
+                        .max(1);
+                    qp.rules.len() * tap_count
+                })
+                .sum()
+        })
+        .unwrap_or(0);
+    if next_qos_rule_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "qos_config_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_qos_rule_count,
+        });
+        entries.push(MapPlanEntry {
+            map_family: "qos_token_bucket_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_qos_rule_count,
+        });
+    }
+    if previous_qos_rule_count > next_qos_rule_count {
+        entries.push(MapPlanEntry {
+            map_family: "qos_config_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_qos_rule_count - next_qos_rule_count,
+        });
+        entries.push(MapPlanEntry {
+            map_family: "qos_token_bucket_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_qos_rule_count - next_qos_rule_count,
         });
     }
 
@@ -4591,6 +4755,7 @@ struct Phase3MaterializeResult {
     route_v6_written: usize,
     ip_group_entries_written: usize,
     policy_entries_written: usize,
+    qos_entries_written: usize,
 }
 
 fn clear_phase3_state_for_port(
@@ -4916,6 +5081,64 @@ fn materialize_phase3_maps(
         }
     }
 
+    // --- QosPolicy QOS_CONFIG / QOS_TOKEN_BUCKET materialization ---
+    // Clear previous Controller-written QoS entries.
+    if let Some(prev) = previous_state {
+        for prev_qp in &prev.qos_policies {
+            for prev_rule in &prev_qp.rules {
+                for tap_id in &current_tap_ids {
+                    let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                    let _ = aria_core::qos_ops::delete_qos_rule(
+                        prev_rule.ip_group_numeric_id,
+                        prev_rule.direction,
+                        runtime,
+                        false, // user_qos_enabled — sync happens after full write
+                    );
+                }
+            }
+        }
+    }
+    let mut qos_entries_written = 0usize;
+    let mut has_any_qos_rule = false;
+    for qp in &compiled_state.qos_policies {
+        let tap_ids = match network_tap_ids.get(qp.network_id.as_str()) {
+            Some(ids) => ids,
+            None => continue,
+        };
+        for rule in &qp.rules {
+            has_any_qos_rule = true;
+            for tap_id in tap_ids {
+                let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                aria_core::qos_ops::add_qos_rule(
+                    rule.ip_group_numeric_id,
+                    rule.direction,
+                    rule.rate_bps,
+                    rule.burst_bytes,
+                    rule.priority,
+                    rule.mode,
+                    runtime,
+                    true, // user_qos_enabled — Controller-managed QoS is always enabled
+                )?;
+                qos_entries_written += 1;
+            }
+        }
+    }
+    // Update qos_enabled flag on each tap that now has (or no longer has) QoS rules.
+    for tap_id in &current_tap_ids {
+        let runtime = TapMapRuntime::new(pin_path, *tap_id);
+        let _ = aria_core::ebpf_ops::update_runtime_config(
+            runtime,
+            None,
+            None,
+            None,
+            Some(has_any_qos_rule),
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+
     Ok(Phase3MaterializeResult {
         port_identities_written: compiled_state.port_identities.len(),
         anti_spoof_entries_written,
@@ -4924,6 +5147,7 @@ fn materialize_phase3_maps(
         route_v6_written,
         ip_group_entries_written,
         policy_entries_written,
+        qos_entries_written,
     })
 }
 
@@ -5391,6 +5615,7 @@ fn inventory_domain_from_map_family(map_family: &str) -> String {
         | "service_affinity_map"
         | "service_maglev_map" => "services".to_string(),
         "nat_program" => "nat".to_string(),
+        "qos_config_map" | "qos_token_bucket_map" | "qos_stats_map" => "qos".to_string(),
         _ => "runtime".to_string(),
     }
 }

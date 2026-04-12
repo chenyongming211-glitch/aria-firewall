@@ -6,8 +6,8 @@ use utoipa::ToSchema;
 
 use crate::{
     BackendSetResource, HealthCheckResource, IpGroupResource, NetworkPolicyResource,
-    NetworkResource, PortResource, RouteTableResource, SecurityGroupResource, ServiceResource,
-    TenantResource,
+    NetworkResource, PortResource, QosPolicyResource, RouteTableResource, SecurityGroupResource,
+    ServiceResource, TenantResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -235,6 +235,9 @@ pub struct DesiredStateEnvelope {
     /// Route-table objects relevant to the node.
     #[serde(default)]
     pub route_tables: Vec<RouteTableResource>,
+    /// QoS policy objects relevant to the node.
+    #[serde(default)]
+    pub qos_policies: Vec<QosPolicyResource>,
     /// Health-check objects relevant to the node.
     #[serde(default)]
     pub health_checks: Vec<HealthCheckResource>,

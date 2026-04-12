@@ -146,8 +146,6 @@ struct PersistedControllerState {
     health_checks: PersistedResourceStore<HealthCheckResource>,
     backend_sets: PersistedResourceStore<BackendSetResource>,
     services: PersistedResourceStore<ServiceResource>,
-    ip_groups: PersistedResourceStore<IpGroupResource>,
-    network_policies: PersistedResourceStore<NetworkPolicyResource>,
     generation: u64,
     #[serde(default)]
     southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
@@ -455,8 +453,6 @@ pub struct InMemoryControllerStore {
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
-    pub ip_groups: ResourceStore<IpGroupResource>,
-    pub network_policies: ResourceStore<NetworkPolicyResource>,
     generation: AtomicU64,
     // High-frequency southbound runtime stays in memory so heartbeat/status
     // updates do not rewrite the controller snapshot on every report.
@@ -480,8 +476,6 @@ impl InMemoryControllerStore {
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
-            ip_groups: ResourceStore::new("ip_group", "ipgroup"),
-            network_policies: ResourceStore::new("network_policy", "npolicy"),
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
             southbound_publishes: RwLock::new(BTreeMap::new()),
@@ -512,7 +506,6 @@ impl InMemoryControllerStore {
         );
         counts.insert("backend_sets".to_string(), self.backend_sets.count().await);
         counts.insert("services".to_string(), self.services.count().await);
-        counts.insert("ip_groups".to_string(), self.ip_groups.count().await);
         counts.insert("network_policies".to_string(), self.network_policies.count().await);
         counts
     }
@@ -1668,8 +1661,6 @@ impl InMemoryControllerStore {
             ("network_policies".to_string(), network_policies.len()),
             ("qos_policies".to_string(), qos_policies.len()),
             ("route_tables".to_string(), route_tables.len()),
-            ("ip_groups".to_string(), ip_groups.len()),
-            ("network_policies".to_string(), network_policies.len()),
             ("health_checks".to_string(), health_checks.len()),
             ("backend_sets".to_string(), backend_sets.len()),
             ("services".to_string(), services.len()),
