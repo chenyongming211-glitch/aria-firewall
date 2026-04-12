@@ -358,3 +358,8 @@ pub(crate) fn temp_path(path: &Path) -> PathBuf {
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
+        .map(|ext| format!("{ext}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    tmp.set_extension(extension);
+    tmp
+}
