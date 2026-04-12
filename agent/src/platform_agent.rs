@@ -2190,7 +2190,6 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     compiled_objects.insert("health_checks".to_string(), compiled_health_checks.len());
     compiled_objects.insert("backend_sets".to_string(), compiled_backend_sets.len());
     compiled_objects.insert("services".to_string(), compiled_services.len());
-    compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
     if !context.desired.deletes.is_empty() {
         compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
     }
@@ -2331,6 +2330,8 @@ fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
             shadow_apply_only: true,
         });
     }
+
+    compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
 
     let domain_summaries = vec![
         CompileDomainSummary {

@@ -192,8 +192,6 @@ pub struct DesiredStateDeleteRef {
     "ip_groups": [],
     "network_policies": [],
     "route_tables": [],
-    "ip_groups": [],
-    "network_policies": [],
     "health_checks": [],
     "backend_sets": [],
     "services": [],
