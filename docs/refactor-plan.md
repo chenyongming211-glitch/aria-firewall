@@ -284,9 +284,11 @@ core/src/wal/
 ## Phase 8: `ebpf/src/common.rs` (944 行)
 
 **风险**: 中（eBPF 目标，但类型拆分较安全）
-**前置**: Phase 6 完成
+**前置**: Phase 6 完成且 CI 通过
 **提交**: 1 commit
 **并行**: 独立执行
+
+**注意**: Phase 6 的 pipeline 拆分可能涉及 common.rs 中某些类型的布局调整（如 cross-file 引用、inline hint 变化等）。必须等 Phase 6 CI 完全通过后，重新审查 common.rs 的实际状态，再确认本拆分方案是否仍然适用。如果 Phase 6 修改了 common.rs 的结构，本方案需要随之调整。
 
 ```
 ebpf/src/common/
