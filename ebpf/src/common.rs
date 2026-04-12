@@ -1,5 +1,5 @@
 #[repr(C)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct PolicyKey {
     pub tap_id: u32,
     pub src_id: u32,
@@ -82,7 +82,18 @@ pub struct CtValue {
     pub last_seen: u64,
     pub pkt_count: u64,
     pub byte_count: u64,
+
+    // LB fast-path cache
+    pub lb_backend_ip: [u8; 16],
+    pub lb_backend_port: u16,
+    pub lb_slot: u16,
+    pub lb_service_id: u32,
+    pub lb_algo: u8,
+    pub lb_flags: u8,
+    pub _pad2: [u8; 2],
 }
+
+pub const FLAG_LB_CT_ENABLED: u8 = 1 << 0;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -540,6 +551,14 @@ pub struct PipelineCtx {
     pub route_next_hop_type: u8,
     pub port_flags: u8,
     pub route_egress_ifindex: u32,
+
+    // LB result for CT caching
+    pub lb_backend_ip: [u8; 16],
+    pub lb_backend_port: u16,
+    pub lb_service_id: u32,
+    pub lb_slot: u16,
+    pub lb_algo: u8,
+    pub lb_ct_flags: u8,
 }
 
 // --- Global firewall config (feature switches) ---
@@ -899,6 +918,19 @@ pub struct SvcLbStatsKey {
     pub backend_slot: u16,
     pub lb_algo: u8,
     pub affinity_hit: u8,
+}
+
+/// Per-CPU LB stats cache for batching updates.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SvcLbStatsCache {
+    pub tap_id: u32,
+    pub service_id: u32,
+    pub backend_slot: u16,
+    pub lb_algo: u8,
+    pub affinity_hit: u8,
+    pub count: u16,
+    pub bytes: u64,
 }
 
 /// LB stats value: hit counts

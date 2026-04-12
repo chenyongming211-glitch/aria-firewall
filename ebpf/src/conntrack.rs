@@ -1,6 +1,6 @@
 use crate::common::{
-    CtKey4, CtKey6, CtValue, PolicyKey, CT_ESTABLISHED, CT_NEW, IPPROTO_ICMP, IPPROTO_ICMPV6,
-    IPPROTO_TCP, IPPROTO_UDP,
+    CtKey4, CtKey6, CtValue, PolicyKey, CT_ESTABLISHED, CT_NEW, FLAG_LB_CT_ENABLED, IPPROTO_ICMP,
+    IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP,
 };
 use crate::maps::{CT_CONFIG, CT_TABLE_V4, CT_TABLE_V6};
 
@@ -78,6 +78,13 @@ pub struct MatchedPolicy {
     pub dst_id: u32,
     pub proto: u8,
     pub direction: u8,
+    // LB cache
+    pub lb_backend_ip: [u8; 16],
+    pub lb_backend_port: u16,
+    pub lb_slot: u16,
+    pub lb_service_id: u32,
+    pub lb_algo: u8,
+    pub lb_flags: u8,
 }
 
 impl MatchedPolicy {
@@ -112,6 +119,12 @@ fn extract_matched(entry: &CtValue, tap_id: u32) -> MatchedPolicy {
         dst_id: entry.matched_dst_id,
         proto: entry.matched_proto,
         direction: entry.direction,
+        lb_backend_ip: entry.lb_backend_ip,
+        lb_backend_port: entry.lb_backend_port,
+        lb_slot: entry.lb_slot,
+        lb_service_id: entry.lb_service_id,
+        lb_algo: entry.lb_algo,
+        lb_flags: entry.lb_flags,
     }
 }
 
@@ -223,6 +236,11 @@ pub unsafe fn ct_create_v4(key: &CtKey4, now: u64, pkt_len: u32, matched: &Match
         last_seen: now,
         pkt_count: 1,
         byte_count: pkt_len as u64,
+        lb_backend_ip: matched.lb_backend_ip,
+        lb_backend_port: matched.lb_backend_port,
+        lb_slot: matched.lb_slot,
+        lb_flags: matched.lb_flags,
+        _pad2: [0; 3],
     };
     let _ = CT_TABLE_V4.insert(key, &val, 0);
 }
@@ -244,6 +262,53 @@ pub unsafe fn ct_create_v6(key: &CtKey6, now: u64, pkt_len: u32, matched: &Match
         last_seen: now,
         pkt_count: 1,
         byte_count: pkt_len as u64,
+        lb_backend_ip: matched.lb_backend_ip,
+        lb_backend_port: matched.lb_backend_port,
+        lb_slot: matched.lb_slot,
+        lb_flags: matched.lb_flags,
+        _pad2: [0; 3],
     };
     let _ = CT_TABLE_V6.insert(key, &val, 0);
+}
+
+/// Update an existing CT entry with LB information for fast-path.
+#[inline(always)]
+pub unsafe fn ct_update_lb_v4(
+    key: &CtKey4,
+    backend_ip: [u8; 16],
+    backend_port: u16,
+    slot: u16,
+    service_id: u32,
+    algo: u8,
+    flags: u8,
+) {
+    if let Some(entry) = CT_TABLE_V4.get_ptr_mut(key) {
+        (*entry).lb_backend_ip = backend_ip;
+        (*entry).lb_backend_port = backend_port;
+        (*entry).lb_slot = slot;
+        (*entry).lb_service_id = service_id;
+        (*entry).lb_algo = algo;
+        (*entry).lb_flags = flags;
+    }
+}
+
+/// Update an existing CT entry with LB information for fast-path (IPv6).
+#[inline(always)]
+pub unsafe fn ct_update_lb_v6(
+    key: &CtKey6,
+    backend_ip: [u8; 16],
+    backend_port: u16,
+    slot: u16,
+    service_id: u32,
+    algo: u8,
+    flags: u8,
+) {
+    if let Some(entry) = CT_TABLE_V6.get_ptr_mut(key) {
+        (*entry).lb_backend_ip = backend_ip;
+        (*entry).lb_backend_port = backend_port;
+        (*entry).lb_slot = slot;
+        (*entry).lb_service_id = service_id;
+        (*entry).lb_algo = algo;
+        (*entry).lb_flags = flags;
+    }
 }

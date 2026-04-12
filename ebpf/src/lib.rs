@@ -559,6 +559,13 @@ unsafe fn set_matched(p: &mut PipelineCtx, m: &conntrack::MatchedPolicy) {
     p.matched_dst_id = m.dst_id;
     p.matched_proto = m.proto;
     p.matched_direction = m.direction;
+    // LB cache
+    p.lb_backend_ip = m.lb_backend_ip;
+    p.lb_backend_port = m.lb_backend_port;
+    p.lb_slot = m.lb_slot;
+    p.lb_service_id = m.lb_service_id;
+    p.lb_algo = m.lb_algo;
+    p.lb_ct_flags = m.lb_flags;
 }
 
 #[inline(always)]
@@ -569,6 +576,13 @@ fn get_matched(p: &PipelineCtx) -> conntrack::MatchedPolicy {
         dst_id: p.matched_dst_id,
         proto: p.matched_proto,
         direction: p.matched_direction,
+        // LB cache
+        lb_backend_ip: p.lb_backend_ip,
+        lb_backend_port: p.lb_backend_port,
+        lb_slot: p.lb_slot,
+        lb_service_id: p.lb_service_id,
+        lb_algo: p.lb_algo,
+        lb_flags: p.lb_ct_flags,
     }
 }
 
@@ -879,6 +893,32 @@ unsafe fn phase_ct_fastpath_tc_ingress_v4(
     p: &mut PipelineCtx,
     ct_key: &CtKey4,
 ) {
+    let matched = get_matched(p);
+
+    if (matched.lb_flags & FLAG_LB_CT_ENABLED) != 0 {
+        let skb = ctx.as_ptr() as *mut __sk_buff;
+        let new_ip = u32::from_be_bytes([
+            matched.lb_backend_ip[12],
+            matched.lb_backend_ip[13],
+            matched.lb_backend_ip[14],
+            matched.lb_backend_ip[15],
+        ]);
+        if lb::apply_dnat_v4_raw(skb, info, new_ip, matched.lb_backend_port) {
+            p.flags |= FLAG_LB_HIT;
+            let info_mut = (info as *const parser::PacketInfo) as *mut parser::PacketInfo;
+            (*info_mut).dst_ip = new_ip;
+            (*info_mut).dst_port = matched.lb_backend_port;
+            lb::update_lb_stats(
+                p.tap_id,
+                matched.lb_service_id,
+                matched.lb_slot,
+                matched.lb_algo,
+                0,
+                p.pkt_len,
+            );
+        }
+    }
+
     if (p.flags & FLAG_TCPRT_ON) != 0 && info.proto == IPPROTO_TCP {
         if (p.flags & FLAG_IS_FORWARD) != 0 {
             tcprt::track_tcp_rt_v4(ct_key, info, p.now, true, true);
@@ -916,6 +956,26 @@ unsafe fn phase_ct_fastpath_tc_ingress_v6(
     p: &mut PipelineCtx,
     ct_key: &CtKey6,
 ) {
+    let matched = get_matched(p);
+
+    if (matched.lb_flags & FLAG_LB_CT_ENABLED) != 0 {
+        let skb = ctx.as_ptr() as *mut __sk_buff;
+        if lb::apply_dnat_v6_raw(skb, info, matched.lb_backend_ip, matched.lb_backend_port) {
+            p.flags |= FLAG_LB_HIT;
+            let info_mut = (info as *const parser::PacketInfo) as *mut parser::PacketInfo;
+            (*info_mut).dst_ip_v6 = matched.lb_backend_ip;
+            (*info_mut).dst_port = matched.lb_backend_port;
+            lb::update_lb_stats(
+                p.tap_id,
+                matched.lb_service_id,
+                matched.lb_slot,
+                matched.lb_algo,
+                0,
+                p.pkt_len,
+            );
+        }
+    }
+
     if (p.flags & FLAG_TCPRT_ON) != 0 && info.proto == IPPROTO_TCP {
         if (p.flags & FLAG_IS_FORWARD) != 0 {
             tcprt::track_tcp_rt_v6(ct_key, info, p.now, true, true);

@@ -66,6 +66,7 @@
 - `2026-04-10`：L4 负载均衡 node-local datapath 已完成首版实现，覆盖 random LB、Maglev 一致性哈希、client_ip session affinity、DNAT/RevNat（IPv4/IPv6）、per-service backend 命中统计（`ariactl stats --lb`）。eBPF 数据面通过 `SVC_FRONTEND_MAP / SVC_BACKEND_MAP / SVC_REVNAT_MAP / SVC_AFFINITY_MAP / SVC_MAGLEV_MAP / SVC_LB_STATS` 六个 map 实现。agent 侧 `materialize_service_maps` 负责从 compiled state 写入 pinned maps，apply-status 已从 shadow 切换为真实 `applied / failed` 报告。cross-node handoff 和 HealthCheck 执行器仍按 RFC 路线后续实现。
 - `2026-04-11`：Phase 3 单节点 IaaS 网络最小闭环（Mode A）已进入真实 map materialize 阶段。当前已新增 `PORT_IDENTITY_MAP / ANTI_SPOOF_MAP / ROUTE_TABLE_V4 / ROUTE_TABLE_V6 / SG_RULE_MAP` 五个 map、`port.rs / route.rs / sg.rs` 三个 eBPF 模块，以及 `core::port_ops / route_ops / sg_ops` 三个 userspace 写入模块。agent 侧已开始把 `Port / RouteTable / SecurityGroup` 编译成真实 map 条目并对 `identity / ports / security / routes` 域回报真实 `applied / failed` 结果；Mode B 的 `EIP / NAT / Floating IP` 仍只保留在 [RFC-005A](docs/rfcs/rfc-005a-single-node-iaas-map-schema.md) 文档中，不进入当前代码路径。
 - `2026-04-11`：`Phase 3.5` 已启动第一刀，controller northbound/southbound 现已新增 `IpGroup / NetworkPolicy` 共享 schema、CRUD、基础引用校验、删除保护和 desired-state 投影。当前这一步只覆盖对象层与 controller 下发骨架，agent 侧 `compile_policy_state / materialize_policy_maps` 仍按后续小步提交继续推进。
+- `2026-04-12`：`Phase 3.6` 的 QoS 平台迁移完成第一阶段落地，controller/store 已接入 `QosPolicy` CRUD 与引用校验，southbound desired-state 投影携带 QoS 对象，agent 能将编译结果物化到 `QOS_CONFIG / QOS_TOKEN_BUCKET` 并同步 `qos_enabled` 标志。
 
 ## 回归脚本
 

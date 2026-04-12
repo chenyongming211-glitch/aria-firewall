@@ -330,3 +330,7 @@ pub static ROUTE_TABLE_V6: LpmTrie<[u8; 20], RouteValue> = LpmTrie::with_max_ent
 
 #[map(name = "SG_RULE_MAP")]
 pub static SG_RULE_MAP: HashMap<SgRuleKey, SgRuleValue> = HashMap::with_max_entries(16384, 0);
+
+/// Per-CPU LB stats cache for batching updates (key=0).
+#[map(name = "LB_STATS_CACHE")]
+pub static LB_STATS_CACHE: PerCpuArray<SvcLbStatsCache> = PerCpuArray::with_max_entries(1, 0);
