@@ -6,10 +6,9 @@ use aria_api::{
     ApplyStatusReport, DesiredStateEnvelope, HeartbeatResponse, NodeAddress, NodeCapability,
     NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeRegisterResponse,
 };
-use tokio::{task::JoinHandle, time};
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-// Sub-modules
 mod compiler;
 mod helpers;
 mod ir_builders;
@@ -692,3 +691,4 @@ impl PlatformAgent {
         self.client.heartbeat(&self.config.node_id, &report).await
     }
 }
+

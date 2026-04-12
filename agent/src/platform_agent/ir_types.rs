@@ -1,4 +1,4 @@
-use aria_api::{ApplyStatusReport, DesiredStateEnvelope};
+use aria_api::{ApplyStatusReport, DesiredStateEnvelope, NodeCapability};
 use serde::{Deserialize, Serialize};
 
 pub(crate) struct DesiredStateCacheEntry {
@@ -673,3 +673,4 @@ pub(crate) struct CompilerContext<'a> {
     pub(crate) previous_compiled_state: Option<&'a CompiledNodeState>,
     pub(crate) previous_runtime_inventory: Option<&'a RuntimeInventory>,
 }
+

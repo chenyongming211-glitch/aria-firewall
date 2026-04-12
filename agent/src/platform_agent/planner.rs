@@ -1,3 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use aria_api::NodeCapability;
 use tracing::info;
 
 use super::helpers::*;
@@ -1173,4 +1176,5 @@ pub(crate) fn build_runtime_inventory_diff(
         shadow_apply_only: true,
     }
 }
+
 
