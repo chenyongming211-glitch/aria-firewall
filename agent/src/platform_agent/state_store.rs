@@ -8,7 +8,7 @@ use super::helpers::temp_path;
 use super::ir_types::*;
 
 pub(crate) struct LocalPlatformStateStore {
-    root: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
 impl LocalPlatformStateStore {

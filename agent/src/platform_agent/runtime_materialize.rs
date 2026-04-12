@@ -3,14 +3,14 @@ use aria_core::common::TapMapRuntime;
 use super::ir_types::*;
 
 pub(crate) struct Phase3MaterializeResult {
-    port_identities_written: usize,
-    anti_spoof_entries_written: usize,
-    sg_rules_written: usize,
-    route_v4_written: usize,
-    route_v6_written: usize,
-    ip_group_entries_written: usize,
-    policy_entries_written: usize,
-    qos_entries_written: usize,
+    pub(crate) port_identities_written: usize,
+    pub(crate) anti_spoof_entries_written: usize,
+    pub(crate) sg_rules_written: usize,
+    pub(crate) route_v4_written: usize,
+    pub(crate) route_v6_written: usize,
+    pub(crate) ip_group_entries_written: usize,
+    pub(crate) policy_entries_written: usize,
+    pub(crate) qos_entries_written: usize,
 }
 
 pub(crate) fn clear_phase3_state_for_port(

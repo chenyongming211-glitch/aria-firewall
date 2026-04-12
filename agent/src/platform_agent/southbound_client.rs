@@ -6,12 +6,11 @@ use aria_api::{
 };
 use serde::de::DeserializeOwned;
 
-use super::helpers::{self, parse_platform_error};
-use super::ir_types::CompiledNodeState;
+use super::helpers::{connection_error, parse_platform_error};
 
 pub(crate) struct SouthboundClient {
-    base_url: String,
-    client: reqwest::Client,
+    pub(crate) base_url: String,
+    pub(crate) client: reqwest::Client,
 }
 
 impl SouthboundClient {

@@ -8,7 +8,7 @@ use aria_api::{
 use tracing::{debug, info, warn};
 
 use super::helpers::{self, capability_profile, hostname, unix_timestamp_string};
-use super::ir_builders;
+use super::ir_builders::*;
 use super::ir_types::*;
 
 pub(crate) fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapability {

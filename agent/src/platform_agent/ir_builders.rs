@@ -1,7 +1,7 @@
 use aria_api;
 use tracing::warn;
 
-use super::helpers::{self, extract_ipv4_u32, extract_ipv6_bytes, is_v4_mapped, ipv4_to_v4mapped_bytes, parse_cidr_string, stable_local_id, stable_local_id16};
+use super::helpers;
 use super::ir_types::*;
 
 pub(crate) fn required_runtime_label(port: &aria_api::PortResource, key: &str) -> Result<u32, String> {

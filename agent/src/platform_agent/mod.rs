@@ -9,8 +9,20 @@ use aria_api::{
 use tokio::{task::JoinHandle, time};
 use tracing::{info, warn};
 
-use compiler::compile_desired_state;
-use helpers::{build_node_capability, hostname, unix_timestamp_string};
+// Sub-modules
+mod compiler;
+mod helpers;
+mod ir_builders;
+mod ir_types;
+mod planner;
+mod runtime_intent;
+mod runtime_materialize;
+mod socket_plan;
+mod southbound_client;
+mod state_store;
+
+use compiler::{build_node_capability, compile_desired_state};
+use helpers::{hostname, unix_timestamp_string};
 use ir_types::{CompiledNodeState, CompileOutcome, CompilerContext, DesiredStateCacheEntry};
 use runtime_materialize::{materialize_phase3_maps, materialize_service_maps};
 use southbound_client::SouthboundClient;
@@ -31,30 +43,13 @@ pub struct PlatformAgentConfig {
     pub max_port_policies: u32,
 }
 
-
-// Sub-modules
-mod compiler;
-mod helpers;
-mod ir_builders;
-mod ir_types;
-mod planner;
-mod runtime_intent;
-mod runtime_materialize;
-mod socket_plan;
-mod southbound_client;
-mod state_store;
-
-// Re-export for main.rs
-pub use ir_types::DesiredStateCacheEntry;
-pub use ir_types::CompiledNodeState;
-
 pub(crate) struct PlatformAgent {
-    config: PlatformAgentConfig,
-    client: SouthboundClient,
-    state_store: LocalPlatformStateStore,
-    start_time: Instant,
-    capability: NodeCapability,
-    health_executor: crate::health_check::HealthCheckExecutor,
+    pub(crate) config: PlatformAgentConfig,
+    pub(crate) client: SouthboundClient,
+    pub(crate) state_store: LocalPlatformStateStore,
+    pub(crate) start_time: Instant,
+    pub(crate) capability: NodeCapability,
+    pub(crate) health_executor: crate::health_check::HealthCheckExecutor,
 }
 
 pub fn start(config: PlatformAgentConfig) -> JoinHandle<()> {
