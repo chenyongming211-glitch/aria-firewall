@@ -71,6 +71,7 @@ agent/src/platform_agent/
 ├── socket_plan.rs          (~260 行)  build_socket_selection_plan（独立性强，单独放）
 ├── runtime_materialize.rs  (~500 行)  materialize_phase3_maps, materialize_service_maps
 ├── runtime_intent.rs       (~350 行)  build_runtime_intent, build_runtime_execution_summary
+│                                      (独立于 planner.rs 以控制文件大小，planner.rs 已 ~1200 行)
 ├── southbound_client.rs    (~110 行)  SouthboundClient
 ├── state_store.rs          (~180 行)  LocalPlatformStateStore
 └── helpers.rs              (~170 行)  工具函数
