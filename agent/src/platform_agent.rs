@@ -1075,26 +1075,30 @@ impl PlatformAgent {
                 }
 
                 // Materialize service maps into pinned eBPF maps.
-                if !outcome.compiled_state.service_programs.is_empty() {
-                    // Materialize service maps for every active tap.
-                    let tap_ids: Vec<u32> = outcome
-                        .compiled_state
-                        .port_identities
-                        .iter()
-                        .map(|p| p.tap_id)
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect();
-                    let tap_ids = if tap_ids.is_empty() {
-                        vec![1u32]
-                    } else {
-                        tap_ids
-                    };
-                    let mut any_failed = false;
+                let current_service_tap_ids: Vec<u32> = outcome
+                    .compiled_state
+                    .port_identities
+                    .iter()
+                    .map(|p| p.tap_id)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                let previous_had_services = previous_compiled_state
+                    .as_ref()
+                    .map(|state| !state.service_programs.is_empty())
+                    .unwrap_or(false);
+                let should_materialize_services =
+                    !outcome.compiled_state.service_programs.is_empty() || previous_had_services;
+
+                if should_materialize_services {
+                    let lb_enabled = !outcome.compiled_state.service_programs.is_empty();
+                    let mut failed_taps = Vec::new();
+                    let mut successful_taps = 0usize;
                     let mut total_frontends = 0usize;
                     let mut total_backends = 0usize;
                     let mut total_revnats = 0usize;
-                    for tap_id in &tap_ids {
+
+                    for tap_id in &current_service_tap_ids {
                         match materialize_service_maps(
                             &self.config.pin_path,
                             *tap_id,
@@ -1102,50 +1106,78 @@ impl PlatformAgent {
                             &self.health_executor,
                         ) {
                             Ok((frontends, backends, revnats)) => {
-                                total_frontends += frontends;
-                                total_backends += backends;
-                                total_revnats += revnats;
+                                let runtime = aria_core::common::TapMapRuntime::new(
+                                    &self.config.pin_path,
+                                    *tap_id,
+                                );
+                                match aria_core::ebpf_ops::update_runtime_config(
+                                    runtime,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    Some(lb_enabled),
+                                ) {
+                                    Ok(()) => {
+                                        successful_taps += 1;
+                                        total_frontends += frontends;
+                                        total_backends += backends;
+                                        total_revnats += revnats;
+                                    }
+                                    Err(error) => {
+                                        warn!(error = %error, tap_id, "failed to update lb_enabled after service materialization");
+                                        failed_taps.push(*tap_id);
+                                    }
+                                }
                             }
                             Err(error) => {
                                 warn!(error = %error, tap_id, "failed to materialize service maps for tap");
-                                any_failed = true;
+                                failed_taps.push(*tap_id);
                             }
                         }
                     }
-                    if !any_failed {
+
+                    let service_status = if failed_taps.is_empty() {
+                        "applied"
+                    } else if successful_taps > 0 {
+                        "partial"
+                    } else {
+                        "failed"
+                    };
+
+                    if successful_taps > 0 {
                         info!(
                             total_frontends,
                             total_backends,
                             total_revnats,
-                            taps = tap_ids.len(),
+                            taps = current_service_tap_ids.len(),
                             "materialized service maps into eBPF datapath"
                         );
-                        // Update services domain status to "applied".
-                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
-                            if domain.domain == "services" {
-                                domain.execution_status = "applied".to_string();
-                                domain.shadow_apply_only = false;
-                                domain
-                                    .warnings
-                                    .retain(|w| !w.contains("not materialized yet"));
+                    }
+
+                    for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                        if domain.domain == "services" {
+                            domain.execution_status = service_status.to_string();
+                            domain.shadow_apply_only = false;
+                            domain
+                                .warnings
+                                .retain(|w| !w.contains("not materialized yet"));
+                            if !failed_taps.is_empty() {
+                                domain.warnings.push(format!(
+                                    "service materialization failed on {} tap(s): {:?}",
+                                    failed_taps.len(),
+                                    failed_taps
+                                ));
                             }
                         }
-                        for ds in &mut outcome.apply_report.domain_statuses {
-                            if ds.domain == "services" {
-                                ds.status = "applied".to_string();
-                            }
-                        }
-                    } else {
-                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
-                            if domain.domain == "services" {
-                                domain.execution_status = "failed".to_string();
-                                domain.shadow_apply_only = false;
-                            }
-                        }
-                        for ds in &mut outcome.apply_report.domain_statuses {
-                            if ds.domain == "services" {
-                                ds.status = "failed".to_string();
-                            }
+                    }
+                    for ds in &mut outcome.apply_report.domain_statuses {
+                        if ds.domain == "services" {
+                            ds.status = service_status.to_string();
+                            ds.shadow_apply_only = false;
                         }
                     }
                 }
@@ -4808,6 +4840,7 @@ fn clear_phase3_state_for_port(
     use aria_core::port_ops::{clear_anti_spoof_entries, delete_port_identity};
     use aria_core::route_ops::clear_route_entries_for_tap;
     use aria_core::sg_ops::clear_sg_rules;
+    use aria_core::svc_ops::clear_service_maps_for_tap;
 
     if let Some(ifindex) = ifindex {
         let _ = clear_iface_ctx(pin_path, ifindex);
@@ -4818,6 +4851,7 @@ fn clear_phase3_state_for_port(
     clear_anti_spoof_entries(pin_path, tap_id)?;
     clear_sg_rules(pin_path, tap_id, Some(tap_id))?;
     clear_route_entries_for_tap(pin_path, tap_id)?;
+    clear_service_maps_for_tap(pin_path, tap_id)?;
     Ok(())
 }
 
@@ -4830,7 +4864,9 @@ fn materialize_phase3_maps(
         PortIdentityValue, RouteValue, SgRuleKey, SgRuleValue, TapConfig, TapMapRuntime,
         PORT_FLAG_ANTI_SPOOF, PORT_FLAG_HAS_ALLOWED_PAIRS,
     };
-    use aria_core::ebpf_ops::{clear_iface_ctx, sync_iface_ctx, write_tap_config};
+    use aria_core::ebpf_ops::{
+        clear_iface_ctx, read_runtime_config, sync_iface_ctx, write_tap_config,
+    };
     use aria_core::port_ops::{
         clear_anti_spoof_entries, write_anti_spoof_entries, write_port_identity, AntiSpoofEntry,
     };
@@ -4884,6 +4920,7 @@ fn materialize_phase3_maps(
     for port in &compiled_state.port_identities {
         let runtime = TapMapRuntime::new(pin_path, port.tap_id);
         sync_iface_ctx(runtime, port.ifindex)?;
+        let existing_runtime = read_runtime_config(runtime).ok();
         write_tap_config(
             runtime,
             TapConfig {
@@ -4893,7 +4930,7 @@ fn materialize_phase3_maps(
                 qos_enabled: 0,
                 mirror_enabled: 0,
                 tcprt_enabled: 1,
-                lb_enabled: 0,
+                lb_enabled: existing_runtime.map(|cfg| cfg.lb_enabled).unwrap_or(0),
                 pad: [0; 1],
             },
         )?;
@@ -5013,15 +5050,14 @@ fn materialize_phase3_maps(
 
     // --- NetworkPolicy POLICY_TABLE materialization ---
     // Build a map from network_id to tap_ids (shared by IpGroup and NetworkPolicy).
-    let network_tap_ids: BTreeMap<&str, Vec<u32>> = compiled_state
-        .port_identities
-        .iter()
-        .fold(BTreeMap::new(), |mut acc, port| {
-            acc.entry(&port.network_id)
-                .or_default()
-                .push(port.tap_id);
-            acc
-        });
+    let network_tap_ids: BTreeMap<&str, Vec<u32>> =
+        compiled_state
+            .port_identities
+            .iter()
+            .fold(BTreeMap::new(), |mut acc, port| {
+                acc.entry(&port.network_id).or_default().push(port.tap_id);
+                acc
+            });
     // Clear previous Controller-written policy entries.
     if let Some(prev) = previous_state {
         for prev_np in &prev.network_policies {
@@ -5199,22 +5235,22 @@ fn materialize_service_maps(
     service_programs: &[ServiceProgramIr],
     health_executor: &crate::health_check::HealthCheckExecutor,
 ) -> Result<(usize, usize, usize), String> {
+    use std::collections::btree_map::Entry;
+
     use aria_core::common::{
         SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_FRONTEND_FLAG_LOCAL_ONLY,
         SVC_FRONTEND_FLAG_USE_MAGLEV, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
     };
     use aria_core::svc_ops::{
-        clear_service_maps_for_tap, compute_maglev_table, ipv4_to_v4mapped, write_maglev_table,
+        clear_service_maps_for_tap, compute_maglev_table, ipv4_to_v4mapped,
+        restore_service_maps_for_tap, snapshot_service_maps_for_tap, write_maglev_table,
         write_service_backends, write_service_frontends, write_service_revnats, SvcBackendEntry,
         SvcFrontendEntry, SvcMaglevTableEntry, SvcRevNatEntry,
     };
 
-    clear_service_maps_for_tap(pin_path, tap_id)
-        .map_err(|e| format!("clear service maps: {}", e))?;
-
     let mut frontend_entries = Vec::new();
     let mut backend_entries = Vec::new();
-    let mut revnat_entries = Vec::new();
+    let mut revnat_entries = BTreeMap::new();
     let mut maglev_entries = Vec::new();
     let mut service_id_counter: u32 = 1;
 
@@ -5295,13 +5331,6 @@ fn materialize_service_maps(
             });
         }
 
-        let service_port = program
-            .frontend
-            .listener_ports
-            .first()
-            .map(|l| l.service_port)
-            .unwrap_or(0);
-
         for (slot, backend) in local_backends.iter().enumerate() {
             let backend_addr = match backend
                 .resolved_ip_hint
@@ -5323,14 +5352,33 @@ fn materialize_service_maps(
                 flags: SVC_BACKEND_FLAG_LOCAL,
             });
 
-            revnat_entries.push(SvcRevNatEntry {
-                tap_id,
-                backend_address: backend_addr,
-                backend_port: backend.service_port,
-                proto,
-                service_address: vip_addr,
-                service_port,
-            });
+            for listener in &program.frontend.listener_ports {
+                let revnat_key = (backend_addr, backend.service_port, proto);
+                let revnat_entry = SvcRevNatEntry {
+                    tap_id,
+                    backend_address: backend_addr,
+                    backend_port: backend.service_port,
+                    proto,
+                    service_address: vip_addr,
+                    service_port: listener.service_port,
+                };
+                match revnat_entries.entry(revnat_key) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(revnat_entry);
+                    }
+                    Entry::Occupied(entry) => {
+                        let existing = entry.get();
+                        if existing.service_address != revnat_entry.service_address
+                            || existing.service_port != revnat_entry.service_port
+                        {
+                            return Err(format!(
+                                "service '{}' has ambiguous revnat mapping for backend port {} on tap {}",
+                                program.service_id, backend.service_port, tap_id
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         // Compute and store Maglev table if lb_policy is maglev.
@@ -5355,18 +5403,34 @@ fn materialize_service_maps(
         }
     }
 
-    let frontends = write_service_frontends(pin_path, &frontend_entries)
-        .map_err(|e| format!("write frontends: {}", e))?;
-    let backends = write_service_backends(pin_path, &backend_entries)
-        .map_err(|e| format!("write backends: {}", e))?;
-    let revnats = write_service_revnats(pin_path, &revnat_entries)
-        .map_err(|e| format!("write revnats: {}", e))?;
-    if !maglev_entries.is_empty() {
-        write_maglev_table(pin_path, &maglev_entries)
-            .map_err(|e| format!("write maglev: {}", e))?;
+    let revnat_entries = revnat_entries.into_values().collect::<Vec<_>>();
+    let snapshot = snapshot_service_maps_for_tap(pin_path, tap_id)
+        .map_err(|e| format!("snapshot service maps: {}", e))?;
+    clear_service_maps_for_tap(pin_path, tap_id)
+        .map_err(|e| format!("clear service maps: {}", e))?;
+
+    let write_result = (|| {
+        let frontends = write_service_frontends(pin_path, &frontend_entries)
+            .map_err(|e| format!("write frontends: {}", e))?;
+        let backends = write_service_backends(pin_path, &backend_entries)
+            .map_err(|e| format!("write backends: {}", e))?;
+        let revnats = write_service_revnats(pin_path, &revnat_entries)
+            .map_err(|e| format!("write revnats: {}", e))?;
+        if !maglev_entries.is_empty() {
+            write_maglev_table(pin_path, &maglev_entries)
+                .map_err(|e| format!("write maglev: {}", e))?;
+        }
+        Ok((frontends, backends, revnats))
+    })();
+
+    if let Err(error) = &write_result {
+        let _ = clear_service_maps_for_tap(pin_path, tap_id);
+        if let Err(restore_error) = restore_service_maps_for_tap(pin_path, &snapshot) {
+            return Err(format!("{}; rollback failed: {}", error, restore_error));
+        }
     }
 
-    Ok((frontends, backends, revnats))
+    write_result
 }
 
 fn build_backend_choice_shape(

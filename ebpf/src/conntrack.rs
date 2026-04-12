@@ -71,6 +71,7 @@ fn reverse_key6(key: &CtKey6) -> CtKey6 {
 }
 
 /// Matched policy info cached in CT entry, returned on fast-path hit.
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct MatchedPolicy {
     pub tap_id: u32,

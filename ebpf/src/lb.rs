@@ -4,14 +4,15 @@
 //! (ingress) and RevNat SNAT rewrite (egress) for the TC pipeline.
 
 use aya_ebpf::bindings::__sk_buff;
-use aya_ebpf::helpers::{bpf_get_hash_recalc, bpf_get_prandom_u32, bpf_ktime_get_ns};
 use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_store_bytes};
+use aya_ebpf::helpers::{bpf_get_hash_recalc, bpf_get_prandom_u32, bpf_ktime_get_ns};
 
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
-    SvcFrontendValue, SvcLbStatsCache, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey,
-    SvcRevNatValue, FLAG_LB_CT_ENABLED, FLAG_LB_HIT, MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL,
-    SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_MAGLEV,
+    SvcFrontendValue, SvcLbStatsCache, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey, SvcRevNatValue,
+    FLAG_LB_CT_ENABLED, FLAG_LB_HIT, MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_DISABLED,
+    SVC_BACKEND_FLAG_DRAINING, SVC_BACKEND_FLAG_LOCAL, SVC_FRONTEND_FLAG_HAS_AFFINITY,
+    SVC_LB_ALGO_MAGLEV,
 };
 use crate::maps::{
     LB_STATS_CACHE, SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_LB_STATS,
@@ -164,7 +165,9 @@ pub unsafe fn apply_dnat_v4_raw(
 /// Rewrite IPv4 dst to backend address + port with incremental checksum.
 #[inline(never)]
 unsafe fn svc_dnat_v4(skb: *mut __sk_buff, info: &PacketInfo, backend: &SvcBackendValue) -> bool {
-    if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0 {
+    if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0
+        || (backend.flags & (SVC_BACKEND_FLAG_DISABLED | SVC_BACKEND_FLAG_DRAINING)) != 0
+    {
         return false;
     }
 
@@ -252,7 +255,9 @@ pub unsafe fn apply_dnat_v6_raw(
 /// Rewrite IPv6 dst to backend address + port. L4 checksum only.
 #[inline(never)]
 unsafe fn svc_dnat_v6(skb: *mut __sk_buff, info: &PacketInfo, backend: &SvcBackendValue) -> bool {
-    if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0 {
+    if (backend.flags & SVC_BACKEND_FLAG_LOCAL) == 0
+        || (backend.flags & (SVC_BACKEND_FLAG_DISABLED | SVC_BACKEND_FLAG_DRAINING)) != 0
+    {
         return false;
     }
 

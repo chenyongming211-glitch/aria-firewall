@@ -34,12 +34,13 @@ use common::{
     CT_CONTRACT_HOOK_TC_INGRESS, CT_CONTRACT_REASON_CT_DISABLED, CT_CONTRACT_REASON_CT_MISS,
     DIR_EGRESS, DIR_INGRESS, DROP_ANTI_SPOOF, DROP_PORT_IDENTITY_MISS, DROP_QOS_EGRESS,
     DROP_QOS_INGRESS, DROP_ROUTE_BLACKHOLE, DROP_ROUTE_MISS, DROP_SG_EGRESS, DROP_SG_INGRESS,
-    FLAG_ACL_ON, FLAG_ANTI_SPOOF_PASSED, FLAG_CT_HIT, FLAG_IS_FORWARD, FLAG_LB_CT_ENABLED, FLAG_LB_HIT, FLAG_LB_ON, FLAG_MIRROR_ON,
-    FLAG_PORT_RESOLVED, FLAG_QOS_ON, FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP, IPPROTO_UDP,
-    PORT_FLAG_ANTI_SPOOF, SG_DIR_EGRESS, SG_DIR_INGRESS, TAP_ID_UNASSIGNED, TRACE_RESULT_DROP_ACL,
-    TRACE_RESULT_DROP_ACL_DEFAULT, TRACE_RESULT_DROP_ACL_PORT, TRACE_RESULT_DROP_IDENTITY,
-    TRACE_RESULT_DROP_QOS, TRACE_RESULT_DROP_ROUTE, TRACE_RESULT_DROP_SECURITY, TRACE_RESULT_PASS,
-    TRACE_TC_DROP, TRACE_TC_EGRESS, TRACE_TC_INGRESS, TRACE_XDP_DROP, XDP_DROP, XDP_PASS,
+    FLAG_ACL_ON, FLAG_ANTI_SPOOF_PASSED, FLAG_CT_HIT, FLAG_IS_FORWARD, FLAG_LB_CT_ENABLED,
+    FLAG_LB_HIT, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_PORT_RESOLVED, FLAG_QOS_ON, FLAG_TCPRT_ON,
+    FLAG_TRACING, IPPROTO_TCP, IPPROTO_UDP, PORT_FLAG_ANTI_SPOOF, SG_DIR_EGRESS, SG_DIR_INGRESS,
+    TAP_ID_UNASSIGNED, TRACE_RESULT_DROP_ACL, TRACE_RESULT_DROP_ACL_DEFAULT,
+    TRACE_RESULT_DROP_ACL_PORT, TRACE_RESULT_DROP_IDENTITY, TRACE_RESULT_DROP_QOS,
+    TRACE_RESULT_DROP_ROUTE, TRACE_RESULT_DROP_SECURITY, TRACE_RESULT_PASS, TRACE_TC_DROP,
+    TRACE_TC_EGRESS, TRACE_TC_INGRESS, TRACE_XDP_DROP, XDP_DROP, XDP_PASS,
 };
 use conntrack::CtLookupResult;
 use maps::{DST_IPV4_TRIE, DST_IPV6_TRIE, SRC_IPV4_TRIE, SRC_IPV6_TRIE};
@@ -80,6 +81,10 @@ pub fn xdp_firewall(ctx: XdpContext) -> u32 {
         (*pipe).flags = 0;
         (*pipe).ct_state = 0;
         (*pipe).drop_reason = 0;
+        (*pipe).matched_src_id = 0;
+        (*pipe).matched_dst_id = 0;
+        (*pipe).matched_proto = 0;
+        (*pipe).matched_direction = 0;
         (*pipe).port_network_id = 0;
         (*pipe).port_segment_id = 0;
         (*pipe).port_sg_id = 0;
@@ -87,6 +92,12 @@ pub fn xdp_firewall(ctx: XdpContext) -> u32 {
         (*pipe).route_next_hop_type = 0;
         (*pipe).port_flags = 0;
         (*pipe).route_egress_ifindex = 0;
+        (*pipe).lb_backend_ip = [0; 16];
+        (*pipe).lb_backend_port = 0;
+        (*pipe).lb_service_id = 0;
+        (*pipe).lb_slot = 0;
+        (*pipe).lb_algo = 0;
+        (*pipe).lb_ct_flags = 0;
         match try_xdp_firewall(&ctx, info_ptr, pipe) {
             Ok(ret) => ret,
             Err(_) => XDP_PASS,
@@ -195,6 +206,10 @@ pub fn tc_egress(ctx: TcContext) -> i32 {
         (*pipe).flags = 0;
         (*pipe).ct_state = 0;
         (*pipe).drop_reason = 0;
+        (*pipe).matched_src_id = 0;
+        (*pipe).matched_dst_id = 0;
+        (*pipe).matched_proto = 0;
+        (*pipe).matched_direction = 0;
         (*pipe).port_network_id = 0;
         (*pipe).port_segment_id = 0;
         (*pipe).port_sg_id = 0;
@@ -202,6 +217,12 @@ pub fn tc_egress(ctx: TcContext) -> i32 {
         (*pipe).route_next_hop_type = 0;
         (*pipe).port_flags = 0;
         (*pipe).route_egress_ifindex = 0;
+        (*pipe).lb_backend_ip = [0; 16];
+        (*pipe).lb_backend_port = 0;
+        (*pipe).lb_service_id = 0;
+        (*pipe).lb_slot = 0;
+        (*pipe).lb_algo = 0;
+        (*pipe).lb_ct_flags = 0;
         match try_tc_egress(&ctx, info_ptr, pipe) {
             Ok(ret) => ret,
             Err(_) => TC_ACT_OK,
@@ -224,9 +245,7 @@ unsafe fn try_tc_egress(
     load_feature_flags_tc(p, info);
 
     // L4 LB RevNat: rewrite backend src → VIP src (before CT).
-    if (p.flags & FLAG_LB_ON) != 0
-        && (info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP)
-    {
+    if (p.flags & FLAG_LB_ON) != 0 && (info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP) {
         let skb = ctx.as_ptr() as *mut __sk_buff;
         if info.is_ipv6 {
             lb::phase_lb_egress_v6(skb, info, p);
@@ -342,6 +361,10 @@ pub fn tc_ingress(ctx: TcContext) -> i32 {
         (*pipe).flags = 0;
         (*pipe).ct_state = 0;
         (*pipe).drop_reason = 0;
+        (*pipe).matched_src_id = 0;
+        (*pipe).matched_dst_id = 0;
+        (*pipe).matched_proto = 0;
+        (*pipe).matched_direction = 0;
         (*pipe).port_network_id = 0;
         (*pipe).port_segment_id = 0;
         (*pipe).port_sg_id = 0;
@@ -349,6 +372,12 @@ pub fn tc_ingress(ctx: TcContext) -> i32 {
         (*pipe).route_next_hop_type = 0;
         (*pipe).port_flags = 0;
         (*pipe).route_egress_ifindex = 0;
+        (*pipe).lb_backend_ip = [0; 16];
+        (*pipe).lb_backend_port = 0;
+        (*pipe).lb_service_id = 0;
+        (*pipe).lb_slot = 0;
+        (*pipe).lb_algo = 0;
+        (*pipe).lb_ct_flags = 0;
         match try_tc_ingress(&ctx, info_ptr, pipe) {
             Ok(ret) => ret,
             Err(_) => TC_ACT_OK,
@@ -414,9 +443,7 @@ unsafe fn try_tc_ingress(
     }
 
     // L4 LB: frontend lookup → backend select → DNAT (before CT).
-    if (p.flags & FLAG_LB_ON) != 0
-        && (info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP)
-    {
+    if (p.flags & FLAG_LB_ON) != 0 && (info.proto == IPPROTO_TCP || info.proto == IPPROTO_UDP) {
         let skb = ctx.as_ptr() as *mut __sk_buff;
         if info.is_ipv6 {
             lb::phase_lb_ingress_v6(skb, info, p);

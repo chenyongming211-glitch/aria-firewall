@@ -83,6 +83,15 @@ pub struct SvcRevNatEntry {
     pub service_port: u16,
 }
 
+/// Best-effort snapshot of the current per-tap service datapath state.
+#[derive(Debug, Clone, Default)]
+pub struct ServiceMapSnapshot {
+    pub frontends: Vec<SvcFrontendEntry>,
+    pub backends: Vec<SvcBackendEntry>,
+    pub revnats: Vec<SvcRevNatEntry>,
+    pub maglev: Vec<SvcMaglevTableEntry>,
+}
+
 /// Write a batch of service frontend entries to the pinned map.
 pub fn write_service_frontends(
     pin_path: &str,
@@ -164,7 +173,99 @@ pub fn write_service_revnats(pin_path: &str, entries: &[SvcRevNatEntry]) -> Resu
     Ok(written)
 }
 
-/// Remove all service-related entries for a given tap_id from all three maps.
+/// Snapshot all service-related datapath entries for a given tap_id.
+pub fn snapshot_service_maps_for_tap(
+    pin_path: &str,
+    tap_id: u32,
+) -> Result<ServiceMapSnapshot, String> {
+    let mut snapshot = ServiceMapSnapshot::default();
+
+    if let Ok(map) = open_frontend_map(pin_path) {
+        let keys: Vec<SvcFrontendKey> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.tap_id == tap_id)
+            .collect();
+        for key in keys {
+            if let Ok(value) = map.get(&key, 0) {
+                snapshot.frontends.push(SvcFrontendEntry {
+                    tap_id: key.tap_id,
+                    address: key.address,
+                    port: key.port,
+                    proto: key.proto,
+                    scope: key.scope,
+                    service_id: value.service_id,
+                    backend_count: value.backend_count,
+                    flags: value.flags,
+                    lb_algo: value.lb_algo,
+                });
+            }
+        }
+    }
+
+    if let Ok(map) = open_backend_map(pin_path) {
+        let keys: Vec<SvcBackendKey> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.tap_id == tap_id)
+            .collect();
+        for key in keys {
+            if let Ok(value) = map.get(&key, 0) {
+                snapshot.backends.push(SvcBackendEntry {
+                    tap_id: key.tap_id,
+                    service_id: key.service_id,
+                    slot: key.slot,
+                    address: value.address,
+                    port: value.port,
+                    weight: value.weight,
+                    flags: value.flags,
+                });
+            }
+        }
+    }
+
+    if let Ok(map) = open_revnat_map(pin_path) {
+        let keys: Vec<SvcRevNatKey> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.tap_id == tap_id)
+            .collect();
+        for key in keys {
+            if let Ok(value) = map.get(&key, 0) {
+                snapshot.revnats.push(SvcRevNatEntry {
+                    tap_id: key.tap_id,
+                    backend_address: key.address,
+                    backend_port: key.port,
+                    proto: key.proto,
+                    service_address: value.service_address,
+                    service_port: value.service_port,
+                });
+            }
+        }
+    }
+
+    if let Ok(map) = open_maglev_map(pin_path) {
+        let keys: Vec<SvcMaglevKey> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.tap_id == tap_id)
+            .collect();
+        for key in keys {
+            if let Ok(value) = map.get(&key, 0) {
+                snapshot.maglev.push(SvcMaglevTableEntry {
+                    tap_id: key.tap_id,
+                    service_id: key.service_id,
+                    table_index: key.table_index,
+                    backend_slot: value.backend_slot,
+                });
+            }
+        }
+    }
+
+    Ok(snapshot)
+}
+
+/// Remove all service-related entries for a given tap_id from all datapath maps.
 pub fn clear_service_maps_for_tap(pin_path: &str, tap_id: u32) -> Result<(), String> {
     // Frontend map
     if let Ok(mut map) = open_frontend_map(pin_path) {
@@ -193,6 +294,18 @@ pub fn clear_service_maps_for_tap(pin_path: &str, tap_id: u32) -> Result<(), Str
     // RevNat map
     if let Ok(mut map) = open_revnat_map(pin_path) {
         let keys_to_remove: Vec<SvcRevNatKey> = map
+            .keys()
+            .filter_map(|k| k.ok())
+            .filter(|k| k.tap_id == tap_id)
+            .collect();
+        for key in keys_to_remove {
+            let _ = map.remove(&key);
+        }
+    }
+
+    // Maglev map
+    if let Ok(mut map) = open_maglev_map(pin_path) {
+        let keys_to_remove: Vec<SvcMaglevKey> = map
             .keys()
             .filter_map(|k| k.ok())
             .filter(|k| k.tap_id == tap_id)
@@ -253,6 +366,26 @@ pub fn write_maglev_table(
         written += 1;
     }
     Ok(written)
+}
+
+/// Restore a previously snapshotted per-tap service datapath state.
+pub fn restore_service_maps_for_tap(
+    pin_path: &str,
+    snapshot: &ServiceMapSnapshot,
+) -> Result<(), String> {
+    if !snapshot.frontends.is_empty() {
+        write_service_frontends(pin_path, &snapshot.frontends)?;
+    }
+    if !snapshot.backends.is_empty() {
+        write_service_backends(pin_path, &snapshot.backends)?;
+    }
+    if !snapshot.revnats.is_empty() {
+        write_service_revnats(pin_path, &snapshot.revnats)?;
+    }
+    if !snapshot.maglev.is_empty() {
+        write_maglev_table(pin_path, &snapshot.maglev)?;
+    }
+    Ok(())
 }
 
 /// Remove all Maglev entries for a given (tap_id, service_id).
