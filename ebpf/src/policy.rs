@@ -68,6 +68,13 @@ pub unsafe fn evaluate_policy(args: &PolicyArgs) -> (u32, u8, MatchedPolicy, boo
                 dst_id: d,
                 proto: p,
                 direction: args.direction,
+                lb_backend_ip: [0; 16],
+                lb_backend_port: 0,
+                lb_slot: 0,
+                lb_service_id: 0,
+                lb_algo: 0,
+                lb_flags: 0,
+                lb_affinity_hit: 0,
             };
             return (result, drop_reason, matched, true);
         }
@@ -80,6 +87,13 @@ pub unsafe fn evaluate_policy(args: &PolicyArgs) -> (u32, u8, MatchedPolicy, boo
         dst_id: 0,
         proto: 0,
         direction: args.direction,
+        lb_backend_ip: [0; 16],
+        lb_backend_port: 0,
+        lb_slot: 0,
+        lb_service_id: 0,
+        lb_algo: 0,
+        lb_flags: 0,
+        lb_affinity_hit: 0,
     };
     (XDP_PASS, 0, matched, false)
 }

@@ -9,9 +9,9 @@ use aya_ebpf::helpers::gen::{bpf_l3_csum_replace, bpf_l4_csum_replace, bpf_skb_s
 
 use crate::common::{
     SvcAffinityKey, SvcAffinityValue, SvcBackendKey, SvcBackendValue, SvcFrontendKey,
-    SvcFrontendValue, SvcLbStatsCache, SvcLbStatsKey, SvcLbStatsValue, SvcMaglevKey, SvcRevNatKey,
+    SvcFrontendValue, SvcLbStatsCache, SvcLbStatsKey, SvcMaglevKey, SvcRevNatKey,
     SvcRevNatValue, FLAG_LB_CT_ENABLED, FLAG_LB_HIT, MAGLEV_TABLE_SIZE, SVC_BACKEND_FLAG_LOCAL,
-    SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_MAGLEV, SVC_LB_ALGO_RANDOM,
+    SVC_FRONTEND_FLAG_HAS_AFFINITY, SVC_LB_ALGO_MAGLEV,
 };
 use crate::maps::{
     LB_STATS_CACHE, SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_LB_STATS,

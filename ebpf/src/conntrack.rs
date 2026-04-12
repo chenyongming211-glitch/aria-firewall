@@ -85,6 +85,7 @@ pub struct MatchedPolicy {
     pub lb_service_id: u32,
     pub lb_algo: u8,
     pub lb_flags: u8,
+    pub lb_affinity_hit: u8,
 }
 
 impl MatchedPolicy {
@@ -125,6 +126,7 @@ fn extract_matched(entry: &CtValue, tap_id: u32) -> MatchedPolicy {
         lb_service_id: entry.lb_service_id,
         lb_algo: entry.lb_algo,
         lb_flags: entry.lb_flags,
+        lb_affinity_hit: entry.lb_affinity_hit,
     }
 }
 
@@ -239,8 +241,11 @@ pub unsafe fn ct_create_v4(key: &CtKey4, now: u64, pkt_len: u32, matched: &Match
         lb_backend_ip: matched.lb_backend_ip,
         lb_backend_port: matched.lb_backend_port,
         lb_slot: matched.lb_slot,
+        lb_service_id: matched.lb_service_id,
+        lb_algo: matched.lb_algo,
         lb_flags: matched.lb_flags,
-        _pad2: [0; 3],
+        lb_affinity_hit: matched.lb_affinity_hit,
+        _pad2: [0; 1],
     };
     let _ = CT_TABLE_V4.insert(key, &val, 0);
 }
@@ -265,8 +270,11 @@ pub unsafe fn ct_create_v6(key: &CtKey6, now: u64, pkt_len: u32, matched: &Match
         lb_backend_ip: matched.lb_backend_ip,
         lb_backend_port: matched.lb_backend_port,
         lb_slot: matched.lb_slot,
+        lb_service_id: matched.lb_service_id,
+        lb_algo: matched.lb_algo,
         lb_flags: matched.lb_flags,
-        _pad2: [0; 3],
+        lb_affinity_hit: matched.lb_affinity_hit,
+        _pad2: [0; 1],
     };
     let _ = CT_TABLE_V6.insert(key, &val, 0);
 }
@@ -281,6 +289,7 @@ pub unsafe fn ct_update_lb_v4(
     service_id: u32,
     algo: u8,
     flags: u8,
+    affinity_hit: u8,
 ) {
     if let Some(entry) = CT_TABLE_V4.get_ptr_mut(key) {
         (*entry).lb_backend_ip = backend_ip;
@@ -288,7 +297,8 @@ pub unsafe fn ct_update_lb_v4(
         (*entry).lb_slot = slot;
         (*entry).lb_service_id = service_id;
         (*entry).lb_algo = algo;
-        (*entry).lb_flags = flags;
+        (*entry).lb_flags = flags | FLAG_LB_CT_ENABLED;
+        (*entry).lb_affinity_hit = affinity_hit;
     }
 }
 
@@ -302,6 +312,7 @@ pub unsafe fn ct_update_lb_v6(
     service_id: u32,
     algo: u8,
     flags: u8,
+    affinity_hit: u8,
 ) {
     if let Some(entry) = CT_TABLE_V6.get_ptr_mut(key) {
         (*entry).lb_backend_ip = backend_ip;
@@ -309,6 +320,7 @@ pub unsafe fn ct_update_lb_v6(
         (*entry).lb_slot = slot;
         (*entry).lb_service_id = service_id;
         (*entry).lb_algo = algo;
-        (*entry).lb_flags = flags;
+        (*entry).lb_flags = flags | FLAG_LB_CT_ENABLED;
+        (*entry).lb_affinity_hit = affinity_hit;
     }
 }

@@ -90,7 +90,8 @@ pub struct CtValue {
     pub lb_service_id: u32,
     pub lb_algo: u8,
     pub lb_flags: u8,
-    pub _pad2: [u8; 2],
+    pub lb_affinity_hit: u8,
+    pub _pad2: [u8; 1],
 }
 
 pub const FLAG_LB_CT_ENABLED: u8 = 1 << 0;

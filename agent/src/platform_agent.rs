@@ -1076,50 +1076,75 @@ impl PlatformAgent {
 
                 // Materialize service maps into pinned eBPF maps.
                 if !outcome.compiled_state.service_programs.is_empty() {
-                    // Use tap_id 1 for the shared managed runtime.
-                    let tap_id = 1u32;
-                    match materialize_service_maps(
-                        &self.config.pin_path,
-                        tap_id,
-                        &outcome.compiled_state.service_programs,
-                        &self.health_executor,
-                    ) {
-                        Ok((frontends, backends, revnats)) => {
-                            info!(
-                                frontends,
-                                backends, revnats, "materialized service maps into eBPF datapath"
-                            );
-                            // Update services domain status to "applied".
-                            for domain in &mut outcome.runtime_execution_summary.domain_summaries {
-                                if domain.domain == "services" {
-                                    domain.execution_status = "applied".to_string();
-                                    domain.shadow_apply_only = false;
-                                    domain
-                                        .warnings
-                                        .retain(|w| !w.contains("not materialized yet"));
-                                }
+                    // Materialize service maps for every active tap.
+                    let tap_ids: Vec<u32> = outcome
+                        .compiled_state
+                        .port_identities
+                        .iter()
+                        .map(|p| p.tap_id)
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                    let tap_ids = if tap_ids.is_empty() {
+                        vec![1u32]
+                    } else {
+                        tap_ids
+                    };
+                    let mut any_failed = false;
+                    let mut total_frontends = 0usize;
+                    let mut total_backends = 0usize;
+                    let mut total_revnats = 0usize;
+                    for tap_id in &tap_ids {
+                        match materialize_service_maps(
+                            &self.config.pin_path,
+                            *tap_id,
+                            &outcome.compiled_state.service_programs,
+                            &self.health_executor,
+                        ) {
+                            Ok((frontends, backends, revnats)) => {
+                                total_frontends += frontends;
+                                total_backends += backends;
+                                total_revnats += revnats;
                             }
-                            for ds in &mut outcome.apply_report.domain_statuses {
-                                if ds.domain == "services" {
-                                    ds.status = "applied".to_string();
-                                }
+                            Err(error) => {
+                                warn!(error = %error, tap_id, "failed to materialize service maps for tap");
+                                any_failed = true;
                             }
                         }
-                        Err(error) => {
-                            warn!(error = %error, "failed to materialize service maps");
-                            heartbeat_error = Some(error.clone());
-                            for domain in &mut outcome.runtime_execution_summary.domain_summaries {
-                                if domain.domain == "services" {
-                                    domain.execution_status = "failed".to_string();
-                                    domain
-                                        .warnings
-                                        .push(format!("materialize failed: {}", error));
-                                }
+                    }
+                    if !any_failed {
+                        info!(
+                            total_frontends,
+                            total_backends,
+                            total_revnats,
+                            taps = tap_ids.len(),
+                            "materialized service maps into eBPF datapath"
+                        );
+                        // Update services domain status to "applied".
+                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                            if domain.domain == "services" {
+                                domain.execution_status = "applied".to_string();
+                                domain.shadow_apply_only = false;
+                                domain
+                                    .warnings
+                                    .retain(|w| !w.contains("not materialized yet"));
                             }
-                            for ds in &mut outcome.apply_report.domain_statuses {
-                                if ds.domain == "services" {
-                                    ds.status = "failed".to_string();
-                                }
+                        }
+                        for ds in &mut outcome.apply_report.domain_statuses {
+                            if ds.domain == "services" {
+                                ds.status = "applied".to_string();
+                            }
+                        }
+                    } else {
+                        for domain in &mut outcome.runtime_execution_summary.domain_summaries {
+                            if domain.domain == "services" {
+                                domain.execution_status = "failed".to_string();
+                                domain.shadow_apply_only = false;
+                            }
+                        }
+                        for ds in &mut outcome.apply_report.domain_statuses {
+                            if ds.domain == "services" {
+                                ds.status = "failed".to_string();
                             }
                         }
                     }
@@ -1191,14 +1216,28 @@ impl PlatformAgent {
                                 changed_backends = changed.len(),
                                 "health check state changed, re-materializing service maps"
                             );
-                            let tap_id = 1u32;
-                            if let Err(e) = materialize_service_maps(
-                                &self.config.pin_path,
-                                tap_id,
-                                &outcome.compiled_state.service_programs,
-                                &self.health_executor,
-                            ) {
-                                warn!(error = %e, "failed to re-materialize after health change");
+                            let hc_tap_ids: Vec<u32> = outcome
+                                .compiled_state
+                                .port_identities
+                                .iter()
+                                .map(|p| p.tap_id)
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .into_iter()
+                                .collect();
+                            let hc_tap_ids = if hc_tap_ids.is_empty() {
+                                vec![1u32]
+                            } else {
+                                hc_tap_ids
+                            };
+                            for tap_id in &hc_tap_ids {
+                                if let Err(e) = materialize_service_maps(
+                                    &self.config.pin_path,
+                                    *tap_id,
+                                    &outcome.compiled_state.service_programs,
+                                    &self.health_executor,
+                                ) {
+                                    warn!(error = %e, tap_id, "failed to re-materialize after health change for tap");
+                                }
                             }
                         }
                     }
