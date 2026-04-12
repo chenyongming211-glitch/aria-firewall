@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
     HealthCheckResource, IpGroupResource, NetworkPolicyResource, NetworkResource, NodeCapability,
-    NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource, ResourceMetadata,
-    RouteTableResource, SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse,
-    SouthboundSyncStatus, TenantResource,
+    NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource, QosPolicyResource,
+    ResourceMetadata, RouteTableResource, SecurityGroupResource, ServiceResource,
+    SouthboundNodeStatusResponse, SouthboundSyncStatus, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,7 @@ impl_stored_resource!(SecurityGroupResource);
 impl_stored_resource!(RouteTableResource);
 impl_stored_resource!(IpGroupResource);
 impl_stored_resource!(NetworkPolicyResource);
+impl_stored_resource!(QosPolicyResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
@@ -140,6 +141,8 @@ struct PersistedControllerState {
     ip_groups: PersistedResourceStore<IpGroupResource>,
     #[serde(default)]
     network_policies: PersistedResourceStore<NetworkPolicyResource>,
+    #[serde(default)]
+    qos_policies: PersistedResourceStore<QosPolicyResource>,
     health_checks: PersistedResourceStore<HealthCheckResource>,
     backend_sets: PersistedResourceStore<BackendSetResource>,
     services: PersistedResourceStore<ServiceResource>,
@@ -249,6 +252,20 @@ pub trait ControllerStore: Send + Sync {
         resource: NetworkPolicyResource,
     ) -> Result<NetworkPolicyResource, StoreError>;
     async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError>;
+
+    // --- QosPolicy (Phase 3.6) ---
+    async fn list_qos_policies(&self) -> Vec<QosPolicyResource>;
+    async fn get_qos_policy(&self, id: &str) -> Option<QosPolicyResource>;
+    async fn create_qos_policy(
+        &self,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError>;
+    async fn update_qos_policy(
+        &self,
+        id: &str,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError>;
+    async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError>;
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource>;
     async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource>;
@@ -434,6 +451,7 @@ pub struct InMemoryControllerStore {
     pub route_tables: ResourceStore<RouteTableResource>,
     pub ip_groups: ResourceStore<IpGroupResource>,
     pub network_policies: ResourceStore<NetworkPolicyResource>,
+    pub qos_policies: ResourceStore<QosPolicyResource>,
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
@@ -458,6 +476,7 @@ impl InMemoryControllerStore {
             route_tables: ResourceStore::new("route_table", "rt"),
             ip_groups: ResourceStore::new("ip_group", "ipg"),
             network_policies: ResourceStore::new("network_policy", "npol"),
+            qos_policies: ResourceStore::new("qos_policy", "qos"),
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
@@ -486,6 +505,7 @@ impl InMemoryControllerStore {
             "network_policies".to_string(),
             self.network_policies.count().await,
         );
+        counts.insert("qos_policies".to_string(), self.qos_policies.count().await);
         counts.insert(
             "health_checks".to_string(),
             self.health_checks.count().await,
@@ -862,6 +882,83 @@ impl InMemoryControllerStore {
         }        Ok(())
     }
 
+    async fn validate_qos_policy_resource_inner(
+        &self,
+        resource: &QosPolicyResource,
+    ) -> Result<(), StoreError> {
+        if resource.spec.rules.is_empty() {
+            return Err(StoreError::BadRequest(
+                "qos_policy must define at least one rule".to_string(),
+            ));
+        }
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "qos_policy", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "qos_policy", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::InvalidReference {
+                resource: "qos_policy",
+                field: "network_id",
+                value: resource.spec.network_id.clone(),
+                referenced_resource: "network",
+            });
+        }
+        // Collect IpGroup IDs in the same network for cross-reference.
+        let ip_group_ids_in_network: BTreeSet<&str> = self
+            .ip_groups
+            .list()
+            .await
+            .iter()
+            .filter(|ig| ig.spec.network_id == resource.spec.network_id)
+            .map(|ig| ig.metadata.id.as_str())
+            .collect();
+        for (i, rule) in resource.spec.rules.iter().enumerate() {
+            if !ip_group_ids_in_network.contains(rule.ip_group_id.as_str()) {
+                return Err(StoreError::InvalidReference {
+                    resource: "qos_policy",
+                    field: format!("rules[{}].ip_group_id", i),
+                    value: rule.ip_group_id.clone(),
+                    referenced_resource: "ip_group",
+                });
+            }
+            if rule.direction > 1 {
+                return Err(StoreError::BadRequest(format!(
+                    "rules[{}].direction must be 0(ingress) or 1(egress), got {}",
+                    i, rule.direction
+                )));
+            }
+            if rule.rate_bps == 0 {
+                return Err(StoreError::BadRequest(format!(
+                    "rules[{}].rate_bps must be > 0",
+                    i
+                )));
+            }
+            if rule.mode > 1 {
+                return Err(StoreError::BadRequest(format!(
+                    "rules[{}].mode must be 0(policing) or 1(shaping), got {}",
+                    i, rule.mode
+                )));
+            }
+        }
+        // Enforce name uniqueness within the same network.
+        for existing in self.qos_policies.list().await {
+            if existing.spec.network_id == resource.spec.network_id
+                && existing.spec.name == resource.spec.name
+                && existing.metadata.id != resource.metadata.id
+            {
+                return Err(StoreError::AlreadyExists {
+                    resource: "qos_policy",
+                    id: format!(
+                        "name '{}' in network '{}'",
+                        resource.spec.name, resource.spec.network_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     async fn validate_health_check_resource_inner(
         &self,
         resource: &HealthCheckResource,
@@ -1150,6 +1247,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(qos_policy) = self
+            .qos_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|qos_policy| qos_policy.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "qos_policy",
+                dependent_id: qos_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -1281,6 +1393,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(qos_policy) = self
+            .qos_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|qos_policy| qos_policy.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "qos_policy",
+                dependent_id: qos_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -1378,6 +1505,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(qos_policy) = self
+            .qos_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|qos_policy| qos_policy.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "qos_policy",
+                dependent_id: qos_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -1402,6 +1544,24 @@ impl InMemoryControllerStore {
                 id: ip_group_id.to_string(),
                 dependent_resource: "network_policy",
                 dependent_id: network_policy.metadata.id,
+            });
+        }
+
+        // Also check QosPolicy references
+        if let Some(qos_policy) = self
+            .qos_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|qp| {
+                qp.spec.rules.iter().any(|rule| rule.ip_group_id == ip_group_id)
+            })
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "ip_group",
+                id: ip_group_id.to_string(),
+                dependent_resource: "qos_policy",
+                dependent_id: qos_policy.metadata.id,
             });
         }
 
@@ -1490,6 +1650,7 @@ impl InMemoryControllerStore {
         security_groups: &[SecurityGroupResource],
         ip_groups: &[IpGroupResource],
         network_policies: &[NetworkPolicyResource],
+        qos_policies: &[QosPolicyResource],
         route_tables: &[RouteTableResource],
         ip_groups: &[IpGroupResource],
         network_policies: &[NetworkPolicyResource],
@@ -1505,6 +1666,7 @@ impl InMemoryControllerStore {
             ("security_groups".to_string(), security_groups.len()),
             ("ip_groups".to_string(), ip_groups.len()),
             ("network_policies".to_string(), network_policies.len()),
+            ("qos_policies".to_string(), qos_policies.len()),
             ("route_tables".to_string(), route_tables.len()),
             ("ip_groups".to_string(), ip_groups.len()),
             ("network_policies".to_string(), network_policies.len()),
@@ -1739,6 +1901,7 @@ impl InMemoryControllerStore {
             route_tables: self.route_tables.snapshot().await,
             ip_groups: self.ip_groups.snapshot().await,
             network_policies: self.network_policies.snapshot().await,
+            qos_policies: self.qos_policies.snapshot().await,
             health_checks: self.health_checks.snapshot().await,
             backend_sets: self.backend_sets.snapshot().await,
             services: self.services.snapshot().await,
@@ -1760,6 +1923,7 @@ impl InMemoryControllerStore {
         self.network_policies
             .restore(snapshot.network_policies)
             .await;
+        self.qos_policies.restore(snapshot.qos_policies).await;
         self.health_checks.restore(snapshot.health_checks).await;
         self.backend_sets.restore(snapshot.backend_sets).await;
         self.services.restore(snapshot.services).await;
@@ -2038,6 +2202,14 @@ impl InMemoryControllerStore {
             .filter(|np| network_ids.contains(&np.spec.network_id))
             .collect::<Vec<_>>();
 
+        let qos_policies = self
+            .qos_policies
+            .list()
+            .await
+            .into_iter()
+            .filter(|qp| network_ids.contains(&qp.spec.network_id))
+            .collect::<Vec<_>>();
+
         let backend_sets = self
             .backend_sets
             .list()
@@ -2089,6 +2261,7 @@ impl InMemoryControllerStore {
             &security_groups,
             &ip_groups,
             &network_policies,
+            &qos_policies,
             &route_tables,
             &ip_groups,
             &network_policies,
@@ -2116,6 +2289,7 @@ impl InMemoryControllerStore {
                 ip_groups,
                 network_policies,
                 route_tables,
+                qos_policies: qos_policies.clone(),
                 ip_groups,
                 network_policies,
                 health_checks,
@@ -2629,6 +2803,53 @@ impl ControllerStore for InMemoryControllerStore {
             inner.delete_resource(&inner.network_policies, id).await
         })
         .await
+    }
+
+    // --- QosPolicy (Phase 3.6) ---
+    async fn list_qos_policies(&self) -> Vec<QosPolicyResource> {
+        self.list_resource(&self.qos_policies).await
+    }
+
+    async fn get_qos_policy(&self, id: &str) -> Option<QosPolicyResource> {
+        self.get_resource(&self.qos_policies, id).await
+    }
+
+    async fn create_qos_policy(
+        &self,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_qos_policy_resource_inner(&resource).await?;
+            inner.create_resource(&inner.qos_policies, resource).await
+        })
+        .await
+    }
+
+    async fn update_qos_policy(
+        &self,
+        id: &str,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .qos_policies
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "qos_policy",
+                    id: id.to_string(),
+                })?;
+            inner.validate_qos_policy_resource_inner(&resource).await?;
+            inner
+                .update_resource(&inner.qos_policies, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move { inner.delete_resource(&inner.qos_policies, id).await })
+            .await
     }
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource> {
@@ -3164,6 +3385,39 @@ impl ControllerStore for FileBackedControllerStore {
             .await
     }
 
+    // --- QosPolicy (Phase 3.6) ---
+    async fn list_qos_policies(&self) -> Vec<QosPolicyResource> {
+        self.inner.list_qos_policies().await
+    }
+
+    async fn get_qos_policy(&self, id: &str) -> Option<QosPolicyResource> {
+        self.inner.get_qos_policy(id).await
+    }
+
+    async fn create_qos_policy(
+        &self,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.create_qos_policy(resource))
+            .await
+    }
+
+    async fn update_qos_policy(
+        &self,
+        id: &str,
+        resource: QosPolicyResource,
+    ) -> Result<QosPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.update_qos_policy(id, resource))
+            .await
+    }
+
+    async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_qos_policy(id)).await
+    }
+
+    async fn record_registration(
+        &self,
+        node_id: &str,
         info: NodeInfo,
         capability: NodeCapability,
     ) -> Result<SouthboundNodeStatusResponse, StoreError> {
