@@ -11,7 +11,7 @@ pub use crate::common::{
     PolicyValue, PortIdentityKey, PortIdentityValue, PortKey, QosConfig, QosKey, QosStatsValue,
     RouteValue, RuleStatsValue, SgRuleKey, SgRuleValue, SslConnValue, SslErrorEvent,
     SslHttpScratch, SslHttpValue, SslParseBuf, SslReadScratch, SslScratch, SslWriteScratch,
-    TapConfig, TcpRtValue, TokenBucket, TraceEvent, TraceEventKey, TraceEventV6, TraceFilter,
+    SvcLbStatsCache, TapConfig, TcpRtValue, TokenBucket, TraceEvent, TraceEventKey, TraceEventV6, TraceFilter,
     TraceStreamEvent,
 };
 use crate::parser::PacketInfo;
