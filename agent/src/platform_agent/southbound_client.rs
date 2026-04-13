@@ -9,12 +9,12 @@ use serde::de::DeserializeOwned;
 use super::helpers::{connection_error, parse_platform_error};
 
 pub(crate) struct SouthboundClient {
-    pub(crate) base_url: String,
-    pub(crate) client: reqwest::Client,
+    base_url: String,
+    client: reqwest::Client,
 }
 
 impl SouthboundClient {
-    pub(crate) fn new
+    pub(crate) fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: reqwest::Client::builder()
@@ -24,7 +24,7 @@ impl SouthboundClient {
         }
     }
 
-    pub(crate) async fn register_node
+    pub(crate) async fn register_node(
         &self,
         node_id: &str,
         request: &NodeRegisterRequest,
@@ -39,7 +39,7 @@ impl SouthboundClient {
         self.parse_response(response).await
     }
 
-    pub(crate) async fn desired_state
+    pub(crate) async fn desired_state(
         &self,
         node_id: &str,
         desired_state_url: &str,
@@ -56,7 +56,7 @@ impl SouthboundClient {
         self.parse_response(response).await
     }
 
-    pub(crate) async fn report_apply_status
+    pub(crate) async fn report_apply_status(
         &self,
         node_id: &str,
         report: &ApplyStatusReport,
@@ -71,7 +71,7 @@ impl SouthboundClient {
         self.parse_response(response).await
     }
 
-    pub(crate) async fn heartbeat
+    pub(crate) async fn heartbeat(
         &self,
         node_id: &str,
         report: &NodeHealthReport,
@@ -86,11 +86,11 @@ impl SouthboundClient {
         self.parse_response(response).await
     }
 
-    pub(crate) fn url
+    pub(crate) fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }
 
-    pub(crate) fn resolve_url
+    pub(crate) fn resolve_url(&self, desired_state_url: &str, fallback_path: &str) -> String {
         if desired_state_url.starts_with("http://") || desired_state_url.starts_with("https://") {
             desired_state_url.to_string()
         } else if desired_state_url.trim().is_empty() {
@@ -100,7 +100,7 @@ impl SouthboundClient {
         }
     }
 
-    pub(crate) async fn parse_response
+    pub(crate) async fn parse_response<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,
     ) -> Result<T, String> {
