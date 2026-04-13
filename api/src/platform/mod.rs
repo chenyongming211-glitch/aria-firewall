@@ -4,8 +4,6 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use utoipa::ToSchema;
 
-use crate::{DesiredStatePublishRecord, SouthboundSyncStatus};
-
 pub mod metadata;
 pub mod query_types;
 pub mod tenant;
