@@ -962,4 +962,3 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
     }
 }
 
-

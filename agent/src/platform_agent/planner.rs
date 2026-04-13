@@ -1177,4 +1177,3 @@ pub(crate) fn build_runtime_inventory_diff(
     }
 }
 
-

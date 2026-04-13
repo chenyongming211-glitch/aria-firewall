@@ -364,4 +364,3 @@ pub(crate) fn temp_path(path: &Path) -> PathBuf {
     tmp.set_extension(extension);
     tmp
 }
-

@@ -1,6 +1,8 @@
 use aria_api::{ApplyStatusReport, DesiredStateEnvelope, NodeCapability};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub(crate) struct DesiredStateCacheEntry {
     pub(crate) cached_at: String,
     pub(crate) envelope: DesiredStateEnvelope,
@@ -673,4 +675,3 @@ pub(crate) struct CompilerContext<'a> {
     pub(crate) previous_compiled_state: Option<&'a CompiledNodeState>,
     pub(crate) previous_runtime_inventory: Option<&'a RuntimeInventory>,
 }
-

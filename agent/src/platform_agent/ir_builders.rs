@@ -571,4 +571,3 @@ pub(crate) fn derive_service_forwarding_mode(route_mode: &str, cross_node_forwar
         _ => "cross_node_native".to_string(),
     }
 }
-

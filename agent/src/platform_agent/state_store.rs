@@ -12,75 +12,75 @@ pub(crate) struct LocalPlatformStateStore {
 }
 
 impl LocalPlatformStateStore {
-    fn new(base_state_dir: PathBuf) -> Self {
+    pub(crate) fn new
         Self {
             root: base_state_dir.join("platform-agent"),
         }
     }
 
-    async fn load_desired_state(&self) -> Option<DesiredStateCacheEntry> {
+    pub(crate) async fn load_desired_state
         self.load_json(self.desired_state_path()).await
     }
 
-    async fn save_desired_state(&self, state: &DesiredStateCacheEntry) -> Result<(), String> {
+    pub(crate) async fn save_desired_state
         self.save_json(self.desired_state_path(), state).await
     }
 
-    async fn load_compiled_state(&self) -> Option<CompiledNodeState> {
+    pub(crate) async fn load_compiled_state
         self.load_json(self.compiled_state_path()).await
     }
 
-    async fn save_compiled_state(&self, state: &CompiledNodeState) -> Result<(), String> {
+    pub(crate) async fn save_compiled_state
         self.save_json(self.compiled_state_path(), state).await
     }
 
-    async fn load_reconcile_plan(&self) -> Option<ReconcilePlan> {
+    pub(crate) async fn load_reconcile_plan
         self.load_json(self.reconcile_plan_path()).await
     }
 
-    async fn save_reconcile_plan(&self, plan: &ReconcilePlan) -> Result<(), String> {
+    pub(crate) async fn save_reconcile_plan
         self.save_json(self.reconcile_plan_path(), plan).await
     }
 
-    async fn load_runtime_plan(&self) -> Option<RuntimePlan> {
+    pub(crate) async fn load_runtime_plan
         self.load_json(self.runtime_plan_path()).await
     }
 
-    async fn save_runtime_plan(&self, plan: &RuntimePlan) -> Result<(), String> {
+    pub(crate) async fn save_runtime_plan
         self.save_json(self.runtime_plan_path(), plan).await
     }
 
-    async fn load_runtime_inventory(&self) -> Option<RuntimeInventory> {
+    pub(crate) async fn load_runtime_inventory
         self.load_json(self.runtime_inventory_path()).await
     }
 
-    async fn save_runtime_inventory(&self, inventory: &RuntimeInventory) -> Result<(), String> {
+    pub(crate) async fn save_runtime_inventory
         self.save_json(self.runtime_inventory_path(), inventory)
             .await
     }
 
-    async fn load_runtime_inventory_diff(&self) -> Option<RuntimeInventoryDiff> {
+    pub(crate) async fn load_runtime_inventory_diff
         self.load_json(self.runtime_inventory_diff_path()).await
     }
 
-    async fn save_runtime_inventory_diff(&self, diff: &RuntimeInventoryDiff) -> Result<(), String> {
+    pub(crate) async fn save_runtime_inventory_diff
         self.save_json(self.runtime_inventory_diff_path(), diff)
             .await
     }
 
-    async fn load_runtime_intent(&self) -> Option<RuntimeIntent> {
+    pub(crate) async fn load_runtime_intent
         self.load_json(self.runtime_intent_path()).await
     }
 
-    async fn save_runtime_intent(&self, intent: &RuntimeIntent) -> Result<(), String> {
+    pub(crate) async fn save_runtime_intent
         self.save_json(self.runtime_intent_path(), intent).await
     }
 
-    async fn load_runtime_execution_summary(&self) -> Option<RuntimeExecutionSummary> {
+    pub(crate) async fn load_runtime_execution_summary
         self.load_json(self.runtime_execution_summary_path()).await
     }
 
-    async fn save_runtime_execution_summary(
+    pub(crate) async fn save_runtime_execution_summary
         &self,
         summary: &RuntimeExecutionSummary,
     ) -> Result<(), String> {
@@ -88,52 +88,52 @@ impl LocalPlatformStateStore {
             .await
     }
 
-    async fn load_socket_selection_plan(&self) -> Option<SocketSelectionPlan> {
+    pub(crate) async fn load_socket_selection_plan
         self.load_json(self.socket_selection_plan_path()).await
     }
 
-    async fn save_socket_selection_plan(&self, plan: &SocketSelectionPlan) -> Result<(), String> {
+    pub(crate) async fn save_socket_selection_plan
         self.save_json(self.socket_selection_plan_path(), plan)
             .await
     }
 
-    fn desired_state_path(&self) -> PathBuf {
+    pub(crate) fn desired_state_path
         self.root.join("desired-state-cache.json")
     }
 
-    fn compiled_state_path(&self) -> PathBuf {
+    pub(crate) fn compiled_state_path
         self.root.join("compiled-node-state.json")
     }
 
-    fn reconcile_plan_path(&self) -> PathBuf {
+    pub(crate) fn reconcile_plan_path
         self.root.join("reconcile-plan.json")
     }
 
-    fn runtime_plan_path(&self) -> PathBuf {
+    pub(crate) fn runtime_plan_path
         self.root.join("runtime-plan.json")
     }
 
-    fn runtime_inventory_path(&self) -> PathBuf {
+    pub(crate) fn runtime_inventory_path
         self.root.join("runtime-inventory.json")
     }
 
-    fn runtime_inventory_diff_path(&self) -> PathBuf {
+    pub(crate) fn runtime_inventory_diff_path
         self.root.join("runtime-inventory-diff.json")
     }
 
-    fn runtime_intent_path(&self) -> PathBuf {
+    pub(crate) fn runtime_intent_path
         self.root.join("runtime-intent.json")
     }
 
-    fn runtime_execution_summary_path(&self) -> PathBuf {
+    pub(crate) fn runtime_execution_summary_path
         self.root.join("runtime-execution-summary.json")
     }
 
-    fn socket_selection_plan_path(&self) -> PathBuf {
+    pub(crate) fn socket_selection_plan_path
         self.root.join("socket-selection-plan.json")
     }
 
-    async fn load_json<T>(&self, path: PathBuf) -> Option<T>
+    pub(crate) async fn load_json
     where
         T: DeserializeOwned,
     {
@@ -147,7 +147,7 @@ impl LocalPlatformStateStore {
         }
     }
 
-    async fn save_json<T>(&self, path: PathBuf, value: &T) -> Result<(), String>
+    pub(crate) async fn save_json
     where
         T: Serialize,
     {
@@ -182,4 +182,3 @@ impl LocalPlatformStateStore {
         Ok(())
     }
 }
-
