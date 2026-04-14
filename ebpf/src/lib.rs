@@ -18,6 +18,7 @@ mod lb;
 mod maps;
 mod mirror;
 mod parser;
+mod pipeline;
 mod policy;
 mod port;
 mod qos;
@@ -45,6 +46,16 @@ use common::{
 };
 use conntrack::CtLookupResult;
 use maps::{DST_IPV4_TRIE, DST_IPV6_TRIE, SRC_IPV4_TRIE, SRC_IPV6_TRIE};
+use pipeline::{
+    ctx::{
+        load_feature_flags_tc, load_feature_flags_xdp, load_runtime_ctx_tc, load_runtime_ctx_xdp,
+        parse_tc_packet,
+    },
+    qos_phases::{
+        apply_edt_prio, phase_qos_egress_tc, phase_qos_ingress_tc, should_apply_ingress_qos,
+    },
+    trace_drop::{do_drop, do_trace, trace_result_from_drop_reason},
+};
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -499,89 +510,6 @@ unsafe fn try_tc_ingress(
 // --- Helpers ---
 
 #[inline(always)]
-unsafe fn load_feature_flags_xdp(p: &mut PipelineCtx, info: &parser::PacketInfo) {
-    if policy::acl_enabled(p.tap_id) {
-        p.flags |= FLAG_ACL_ON;
-    }
-    if trace::should_trace(p.tap_id, info) {
-        p.flags |= FLAG_TRACING;
-    }
-}
-
-#[inline(always)]
-unsafe fn load_feature_flags_tc(p: &mut PipelineCtx, info: &parser::PacketInfo) {
-    if qos::qos_enabled(p.tap_id) {
-        p.flags |= FLAG_QOS_ON;
-    }
-    if tcprt::tcprt_enabled(p.tap_id) {
-        p.flags |= FLAG_TCPRT_ON;
-    }
-    if policy::acl_enabled(p.tap_id) {
-        p.flags |= FLAG_ACL_ON;
-    }
-    if mirror::mirror_enabled(p.tap_id) {
-        p.flags |= FLAG_MIRROR_ON;
-    }
-    if runtime::lb_enabled(p.tap_id) {
-        p.flags |= FLAG_LB_ON;
-    }
-    if trace::should_trace(p.tap_id, info) {
-        p.flags |= FLAG_TRACING;
-    }
-}
-
-#[inline(always)]
-unsafe fn resolve_tap_id_for_ifindex(ifindex: u32) -> u32 {
-    if ifindex == 0 {
-        return TAP_ID_UNASSIGNED;
-    }
-    if let Some(ctx) = maps::IFACE_CTX_MAP.get(&ifindex) {
-        ctx.tap_id
-    } else {
-        TAP_ID_UNASSIGNED
-    }
-}
-
-#[inline(always)]
-unsafe fn load_runtime_ctx_xdp(ctx: &XdpContext, p: &mut PipelineCtx) {
-    let xdp = ctx.as_ptr() as *const xdp_md;
-    p.tap_id = resolve_tap_id_for_ifindex((*xdp).ingress_ifindex);
-}
-
-#[inline(always)]
-unsafe fn load_runtime_ctx_tc(ctx: &TcContext, p: &mut PipelineCtx) {
-    let skb = ctx.as_ptr() as *const __sk_buff;
-    p.tap_id = resolve_tap_id_for_ifindex((*skb).ifindex);
-}
-
-#[inline(always)]
-unsafe fn parse_tc_packet(ctx: &TcContext, out: *mut parser::PacketInfo) -> bool {
-    let mut data = ctx.data();
-    let mut data_end = ctx.data_end();
-    let mut parsed = parser::parse_eth_ipv4(data, data_end, 0, out)
-        || parser::parse_eth_ipv6(data, data_end, 0, out);
-    if !parsed {
-        return false;
-    }
-
-    let info = &*out;
-    // TC direct packet access can stop at the linear head on non-linear skbs.
-    // That leaves ports available but zeros TCP seq/flags/payload, which breaks
-    // TCP-RT while leaving port-based features apparently healthy. Re-pull only
-    // for this suspicious truncated TCP shape and re-parse.
-    if info.proto == IPPROTO_TCP && info.tcp_flags == 0 && info.tcp_seq == 0 {
-        if ctx.pull_data(0).is_ok() {
-            data = ctx.data();
-            data_end = ctx.data_end();
-            parsed = parser::parse_eth_ipv4(data, data_end, 0, out)
-                || parser::parse_eth_ipv6(data, data_end, 0, out);
-        }
-    }
-
-    parsed
-}
-
-#[inline(always)]
 unsafe fn set_matched(p: &mut PipelineCtx, m: &conntrack::MatchedPolicy) {
     p.matched_src_id = m.src_id;
     p.matched_dst_id = m.dst_id;
@@ -619,47 +547,6 @@ fn get_matched(p: &PipelineCtx) -> conntrack::MatchedPolicy {
     }
 }
 
-/// Inline helper: emit a trace event from PipelineCtx.
-#[inline(always)]
-unsafe fn do_trace<C: EbpfContext>(
-    ctx: &C,
-    info: &parser::PacketInfo,
-    p: &PipelineCtx,
-    hook: u8,
-    result: u8,
-) {
-    trace::trace_event(
-        ctx,
-        p.tap_id,
-        info,
-        &trace::TraceArgs {
-            hook,
-            result,
-            direction: p.direction,
-            ct_state: p.ct_state,
-            drop_reason: p.drop_reason,
-            _pad: [0; 3],
-            src_id: p.src_id,
-            dst_id: p.dst_id,
-            pkt_len: p.pkt_len,
-            now: p.now,
-        },
-    );
-}
-
-#[inline(always)]
-fn trace_result_from_drop_reason(drop_reason: u8) -> u8 {
-    match drop_reason {
-        1 => TRACE_RESULT_DROP_ACL,
-        2 => TRACE_RESULT_DROP_ACL_PORT,
-        3 => TRACE_RESULT_DROP_ACL_DEFAULT,
-        DROP_PORT_IDENTITY_MISS | DROP_ANTI_SPOOF => TRACE_RESULT_DROP_IDENTITY,
-        DROP_SG_INGRESS | DROP_SG_EGRESS => TRACE_RESULT_DROP_SECURITY,
-        DROP_ROUTE_MISS | DROP_ROUTE_BLACKHOLE => TRACE_RESULT_DROP_ROUTE,
-        _ => TRACE_RESULT_DROP_ACL,
-    }
-}
-
 #[inline(always)]
 unsafe fn load_packet_ids(info: &parser::PacketInfo, p: &mut PipelineCtx) {
     if info.is_ipv6 {
@@ -667,22 +554,6 @@ unsafe fn load_packet_ids(info: &parser::PacketInfo, p: &mut PipelineCtx) {
     } else {
         load_packet_ids_v4(info, p);
     }
-}
-
-/// Inline helper: record a drop from PipelineCtx.
-#[inline(always)]
-unsafe fn do_drop(p: &PipelineCtx) {
-    drops::record_drop(&drops::DropArgs {
-        tap_id: p.tap_id,
-        reason: p.drop_reason,
-        direction: p.direction,
-        proto: p.proto,
-        src_id: p.src_id,
-        dst_id: p.dst_id,
-        pkt_len: p.pkt_len,
-        now: p.now,
-        _pad: 0,
-    });
 }
 
 unsafe fn lookup_ipv4(map: &LpmTrie<[u8; 8], u32>, tap_id: u32, ip: u32) -> Option<u32> {
@@ -787,13 +658,6 @@ unsafe fn should_create_ct(p: &PipelineCtx) -> bool {
 }
 
 #[inline(always)]
-unsafe fn should_apply_ingress_qos(p: &PipelineCtx) -> bool {
-    // Ingress QoS is a standalone feature. TC ingress can enforce policing
-    // on both CT hits and CT-miss fallback paths after doing its own ID lookup.
-    (p.flags & FLAG_QOS_ON) != 0
-}
-
-#[inline(always)]
 unsafe fn record_tc_ingress_contract_fallback(p: &PipelineCtx, family: u8) {
     let reason = if runtime::conntrack_enabled(p.tap_id) {
         CT_CONTRACT_REASON_CT_MISS
@@ -809,18 +673,6 @@ unsafe fn record_tc_ingress_contract_fallback(p: &PipelineCtx, family: u8) {
         reason,
         _pad: 0,
     });
-}
-
-#[inline(always)]
-unsafe fn phase_qos_ingress_tc(ctx: &TcContext, info: &parser::PacketInfo, p: &mut PipelineCtx) {
-    if !qos::apply_qos_ingress(p.tap_id, p.src_id, p.dst_id, p.pkt_len, p.now) {
-        p.drop_reason = DROP_QOS_INGRESS;
-        p.action = TC_ACT_SHOT as u32;
-        do_drop(p);
-        if (p.flags & FLAG_TRACING) != 0 {
-            do_trace(ctx, info, p, TRACE_TC_DROP, TRACE_RESULT_DROP_QOS);
-        }
-    }
 }
 
 #[inline(always)]
@@ -1301,22 +1153,6 @@ unsafe fn phase_flow_tcprt_v6(info: &parser::PacketInfo, p: &mut PipelineCtx, ct
     }
 }
 
-/// Phase: QoS egress for TC. Sets p.action = TC_ACT_SHOT if dropped.
-#[inline(always)]
-unsafe fn phase_qos_egress_tc(ctx: &TcContext, info: &parser::PacketInfo, p: &mut PipelineCtx) {
-    let (edt, prio) = qos::apply_qos_egress(p.tap_id, p.src_id, p.dst_id, p.pkt_len, p.now);
-    if edt == u64::MAX {
-        p.drop_reason = DROP_QOS_EGRESS;
-        p.action = TC_ACT_SHOT as u32;
-        do_drop(p);
-        if (p.flags & FLAG_TRACING) != 0 {
-            do_trace(ctx, info, p, TRACE_TC_DROP, TRACE_RESULT_DROP_QOS);
-        }
-        return;
-    }
-    apply_edt_prio(ctx, edt, prio);
-}
-
 /// Phase: Post-accept for XDP ingress IPv4.
 #[inline(never)]
 unsafe fn phase_post_accept_xdp_v4(
@@ -1399,20 +1235,6 @@ unsafe fn phase_post_accept_tc_v6(
         do_trace(ctx, info, p, TRACE_TC_EGRESS, TRACE_RESULT_PASS);
     }
     p.action = TC_ACT_OK as u32;
-}
-
-/// Apply EDT timestamp and priority to skb.
-#[inline(always)]
-unsafe fn apply_edt_prio(ctx: &TcContext, edt: u64, prio: u8) {
-    if edt != 0 || prio != 0 {
-        let skb = ctx.as_ptr() as *mut __sk_buff;
-        if edt != 0 {
-            (*skb).tstamp = edt;
-        }
-        if prio != 0 {
-            (*skb).priority = prio as u32;
-        }
-    }
 }
 
 // --- SSL uprobe entry points ---
