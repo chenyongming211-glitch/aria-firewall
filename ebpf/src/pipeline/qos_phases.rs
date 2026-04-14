@@ -1,11 +1,11 @@
 use aya_ebpf::bindings::__sk_buff;
 use aya_ebpf::programs::TcContext;
+use aya_ebpf::EbpfContext;
 
 use crate::common::{
     PipelineCtx, DROP_QOS_EGRESS, DROP_QOS_INGRESS, TRACE_RESULT_DROP_QOS, TRACE_TC_DROP,
-    TC_ACT_SHOT,
 };
-use crate::{parser, qos};
+use crate::{parser, qos, TC_ACT_SHOT};
 
 use super::trace_drop::{do_drop, do_trace};
 

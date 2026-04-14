@@ -1,5 +1,6 @@
 use aya_ebpf::bindings::{__sk_buff, xdp_md};
 use aya_ebpf::programs::{TcContext, XdpContext};
+use aya_ebpf::EbpfContext;
 
 use crate::common::{
     PipelineCtx, FLAG_ACL_ON, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_QOS_ON, FLAG_TCPRT_ON,
