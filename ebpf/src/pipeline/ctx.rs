@@ -6,7 +6,7 @@ use crate::common::{
     PipelineCtx, FLAG_ACL_ON, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_QOS_ON, FLAG_TCPRT_ON,
     FLAG_TRACING, IPPROTO_TCP, TAP_ID_UNASSIGNED,
 };
-use crate::{maps, mirror, parser, policy, qos, runtime, tcprt, trace};
+use crate::{maps, parser, policy, trace};
 
 #[inline(always)]
 pub(crate) unsafe fn load_feature_flags_xdp(p: &mut PipelineCtx, info: &parser::PacketInfo) {
@@ -20,20 +20,25 @@ pub(crate) unsafe fn load_feature_flags_xdp(p: &mut PipelineCtx, info: &parser::
 
 #[inline(always)]
 pub(crate) unsafe fn load_feature_flags_tc(p: &mut PipelineCtx, info: &parser::PacketInfo) {
-    if qos::qos_enabled(p.tap_id) {
-        p.flags |= FLAG_QOS_ON;
+    if p.tap_id == TAP_ID_UNASSIGNED {
+        return;
     }
-    if tcprt::tcprt_enabled(p.tap_id) {
-        p.flags |= FLAG_TCPRT_ON;
-    }
-    if policy::acl_enabled(p.tap_id) {
-        p.flags |= FLAG_ACL_ON;
-    }
-    if mirror::mirror_enabled(p.tap_id) {
-        p.flags |= FLAG_MIRROR_ON;
-    }
-    if runtime::lb_enabled(p.tap_id) {
-        p.flags |= FLAG_LB_ON;
+    if let Some(cfg) = maps::TAP_CONFIG_MAP.get(&p.tap_id) {
+        if cfg.qos_enabled != 0 {
+            p.flags |= FLAG_QOS_ON;
+        }
+        if cfg.tcprt_enabled != 0 {
+            p.flags |= FLAG_TCPRT_ON;
+        }
+        if cfg.acl_enabled != 0 {
+            p.flags |= FLAG_ACL_ON;
+        }
+        if cfg.mirror_enabled != 0 {
+            p.flags |= FLAG_MIRROR_ON;
+        }
+        if cfg.lb_enabled != 0 {
+            p.flags |= FLAG_LB_ON;
+        }
     }
     if trace::should_trace(p.tap_id, info) {
         p.flags |= FLAG_TRACING;
