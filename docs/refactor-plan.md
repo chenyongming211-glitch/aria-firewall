@@ -1,6 +1,6 @@
 # Aria Firewall 全面重构计划 — 大文件拆分（最终版）
 
-> 最后更新: 2026-04-12
+> 最后更新: 2026-04-14
 
 ## Context
 
@@ -21,11 +21,7 @@
 
 ---
 
-## Phase 0: `api/src/platform.rs` (1,861 行) — 按资源类型拆分
-
-**风险**: 极低（纯类型定义，无行为代码）
-**前置**: 无
-**提交**: 1 commit（直接搬运）
+## Phase 0: `api/src/platform.rs` (1,861 行) — 按资源类型拆分 ✅ 已完成
 
 将 `platform.rs` 转为 `platform/` 目录，每个资源类型一个文件：
 
@@ -52,7 +48,7 @@ api/src/platform/
 
 ---
 
-## Phase 1: `agent/src/platform_agent.rs` (5,793 行) — 按职责拆分
+## Phase 1: `agent/src/platform_agent.rs` (5,793 行) — 按职责拆分 ✅ 已完成
 
 **风险**: 低（仅 main.rs 引用，完全隔离）
 **前置**: 无，可与 Phase 0 并行
@@ -83,7 +79,7 @@ agent/src/platform_agent/
 
 ---
 
-## Phase 2: `controller/src/store.rs` (3,473 行)
+## Phase 2: `controller/src/store.rs` (3,473 行) ✅ 已完成
 
 **风险**: 低-中（ControllerStore trait 保持不变）
 **前置**: 无，可与 Phase 1 并行
@@ -107,7 +103,7 @@ controller/src/store/
 
 ---
 
-## Phase 3: `controller/src/api_handlers.rs` (2,324 行)
+## Phase 3: `controller/src/api_handlers.rs` (2,324 行) ✅ 已完成
 
 **风险**: 低（纯 handler，参照 agent 的 api_handlers 模式）
 **前置**: Phase 2 完成（handler 依赖 store）
@@ -138,7 +134,7 @@ controller/src/api_handlers/
 
 ---
 
-## Phase 4: `api/src/lib.rs` (1,592 行) — 按功能域拆分
+## Phase 4: `api/src/lib.rs` (1,592 行) — 按功能域拆分 ✅ 已完成
 
 **风险**: 低（纯类型定义）
 **前置**: Phase 0 完成
@@ -171,7 +167,7 @@ api/src/
 
 ---
 
-## Phase 5: `agent/src/control_plane.rs` (2,406 行) + `agent/src/instance.rs` (1,178 行)
+## Phase 5: `agent/src/control_plane.rs` (2,406 行) + `agent/src/instance.rs` (1,178 行) ✅ 已完成（instance.rs 保持原样）
 
 **风险**: 中（11 个文件依赖 ControlPlane）
 **前置**: Phase 1 完成
@@ -214,7 +210,7 @@ agent/src/instance/
 
 ---
 
-## Phase 6: `ebpf/src/lib.rs` (1,513 行)
+## Phase 6: `ebpf/src/lib.rs` (1,513 行) ✅ 已完成
 
 **风险**: 中-高（eBPF 编译目标不同，只能 CI 验证）
 **前置**: 无
@@ -250,46 +246,36 @@ ebpf/src/
 
 ---
 
-## Phase 7: Core crate 小文件拆分
+## Phase 7: Core crate 小文件拆分 ✅ 已完成
 
 **风险**: 低（仅 agent 依赖 core）
 **前置**: 无，可与 Phase 4/5 并行
 **提交**: 1 commit（直接搬运）
 
-### 7a. `core/src/common.rs` (875 行)
-```
-core/src/common/
-├── mod.rs       re-exports
-├── types.rs     所有结构体定义
-└── constants.rs 所有 pub const 值
-```
+### 7a. `core/src/common.rs` (875 行) — 评估后无需拆分
+类型与常量交织，875 行纯定义文件不值得拆分。
 
-### 7b. `core/src/state.rs` (879 行)
+### 7b. `core/src/state.rs` (879 行) ✅
 ```
 core/src/state/
-├── mod.rs       re-exports
-├── types.rs     FirewallState 结构体 + Default
-└── ops.rs       impl FirewallState 方法
+├── mod.rs       re-exports + 私有辅助函数 + 测试
+├── types.rs     FirewallState 结构体 + Default + StateManager
+└── ops.rs       impl FirewallState + impl StateManager
 ```
 
-### 7c. `core/src/wal.rs` (1,017 行) — 可选
+### 7c. `core/src/wal.rs` (1,017 行) ✅
 ```
 core/src/wal/
-├── mod.rs       re-exports
-├── entry.rs     WalEntry 枚举 + 序列化
-└── actor.rs     WalActor + WalWriter + WalClient
+├── mod.rs       WalEntry 枚举 + 常量 + re-exports + 测试
+├── entry.rs     apply_wal_entry + load_with_wal
+└── actor.rs     WalWriter + WalClient + WalActor + WalMessage
 ```
 
 ---
 
-## Phase 8: `ebpf/src/common.rs` (944 行)
+## Phase 8: `ebpf/src/common.rs` (944 行) — 评估后无需拆分
 
-**风险**: 中（eBPF 目标，但类型拆分较安全）
-**前置**: Phase 6 完成且 CI 通过
-**提交**: 1 commit
-**并行**: 独立执行
-
-**注意**: Phase 6 的 pipeline 拆分可能涉及 common.rs 中某些类型的布局调整（如 cross-file 引用、inline hint 变化等）。必须等 Phase 6 CI 完全通过后，重新审查 common.rs 的实际状态，再确认本拆分方案是否仍然适用。如果 Phase 6 修改了 common.rs 的结构，本方案需要随之调整。
+**评估结论**: 纯类型定义 + 常量，944 行内部逻辑连贯，拆分收益低、eBPF 编译风险不值得承担。保持原样。
 
 ```
 ebpf/src/common/
@@ -309,24 +295,19 @@ ebpf/src/common/
 ## 执行总览
 
 ```
-Phase 0 (api/platform.rs)   ────┐
-Phase 7a/7b (core 小文件)    ────┤  并行，纯类型/结构体，各 1 commit
-                                 │
-Phase 1 (agent/platform_agent) ──┘  2 commits
-         │
-Phase 2 (controller/store)       ── 2 commits
-         │
-Phase 3 (controller/handlers)    ── 2 commits（依赖 Phase 2）
-         │
-Phase 4 (api/lib.rs → dataplane/) ─ 1 commit（依赖 Phase 0）
-         │
-Phase 5 (control_plane + instance) ─ 5 commits（依赖 Phase 1）
-         │
-Phase 6 (ebpf/lib.rs)            ── 3 commits（独立执行，不并行）
-         │
-Phase 8 (ebpf/common.rs)         ── 1 commit（依赖 Phase 6）
+Phase 0 (api/platform.rs)        ✅ 1 commit
+Phase 1 (agent/platform_agent)   ✅ 2 commits
+Phase 2 (controller/store)       ✅ 2 commits
+Phase 3 (controller/api_handlers)✅ 2 commits
+Phase 4 (api/lib.rs → dataplane/)✅ 1 commit
+Phase 5 (control_plane)          ✅ 4 commits（instance.rs 保持原样）
+Phase 6 (ebpf/lib.rs)            ✅ 5 commits
+Phase 7a (core/common.rs)        — 跳过（类型常量交织，不值得拆）
+Phase 7b (core/state.rs)         ✅ 1 commit
+Phase 7c (core/wal.rs)           ✅ 1 commit
+Phase 8 (ebpf/common.rs)         — 跳过（纯类型，eBPF 风险不值得）
 
-预计总提交数: ~18 commits
+总提交数: 19 commits，全部 CI 通过
 ```
 
 ## 验证方式
@@ -354,8 +335,11 @@ Phase 8 (ebpf/common.rs)         ── 1 commit（依赖 Phase 6）
 | 7 | 低 | 仅 agent 依赖 core |
 | 8 | 中 | eBPF 目标，但纯类型拆分风险可控 |
 
-## 明确不在本次范围内的文件
+## 明确不拆分的文件
 
 | 文件 | 行数 | 原因 |
 |------|------|------|
-| `ebpf/src/ssl.rs` | 1,204 | refactor-guardrails §5.3 标记高风险，收益风险比不划算 |
+| `core/src/common.rs` | 875 | 纯类型定义，类型与常量交织，不值得拆 |
+| `ebpf/src/common.rs` | 944 | 纯类型定义，eBPF 编译风险不值得 |
+| `ebpf/src/ssl.rs` | 1,204 | refactor-guardrails §5.3 标记高风险，verifier 敏感 |
+| `agent/src/instance.rs` | 1,178 | 与 ControlPlane 强耦合，职责边界不够清晰 |
