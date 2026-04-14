@@ -3,7 +3,6 @@
 
 use aya_ebpf::macros::{classifier, uprobe, uretprobe, xdp};
 use aya_ebpf::programs::{ProbeContext, RetProbeContext, TcContext, XdpContext};
-use aya_ebpf::EbpfContext;
 
 mod common;
 mod conntrack;

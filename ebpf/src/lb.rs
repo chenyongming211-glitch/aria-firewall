@@ -19,8 +19,8 @@ use crate::maps::{
     LB_STATS_CACHE, SVC_AFFINITY_MAP, SVC_BACKEND_MAP, SVC_FRONTEND_MAP, SVC_LB_STATS,
     SVC_LB_STATS_BUF, SVC_MAGLEV_MAP, SVC_REVNAT_MAP,
 };
+use crate::common::PipelineCtx;
 use crate::parser::PacketInfo;
-use crate::PipelineCtx;
 
 // ---------------------------------------------------------------------------
 // Lookup helpers (#[inline(always)])
