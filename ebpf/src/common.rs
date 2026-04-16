@@ -503,6 +503,8 @@ pub const FLAG_TRACING: u16 = 1 << 2;
 pub const FLAG_ACL_ON: u16 = 1 << 3;
 pub const FLAG_MIRROR_ON: u16 = 1 << 4;
 pub const FLAG_LB_ON: u16 = 1 << 12;
+pub const FLAG_MONITORING_ON: u16 = 1 << 13;
+pub const FLAG_CT_ON: u16 = 1 << 14;
 pub const FLAG_CT_HIT: u16 = 1 << 5;
 pub const FLAG_IS_FORWARD: u16 = 1 << 6;
 #[allow(dead_code)]

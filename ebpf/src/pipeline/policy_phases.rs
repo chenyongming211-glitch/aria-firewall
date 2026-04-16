@@ -3,9 +3,9 @@ use aya_ebpf::programs::{TcContext, XdpContext};
 use aya_ebpf::EbpfContext;
 
 use crate::common::{
-    CtKey4, CtKey6, PipelineCtx, DIR_EGRESS, DIR_INGRESS, FLAG_MIRROR_ON, FLAG_TCPRT_ON,
-    FLAG_TRACING, IPPROTO_TCP, TRACE_RESULT_PASS, TRACE_TC_DROP, TRACE_TC_EGRESS, TRACE_XDP_DROP,
-    XDP_DROP, XDP_PASS,
+    CtKey4, CtKey6, PipelineCtx, DIR_EGRESS, DIR_INGRESS, FLAG_CT_ON, FLAG_MIRROR_ON,
+    FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP, TRACE_RESULT_PASS, TRACE_TC_DROP, TRACE_TC_EGRESS,
+    TRACE_XDP_DROP, XDP_DROP, XDP_PASS,
 };
 use crate::{conntrack, mirror, parser, policy, stats, tcprt};
 
@@ -121,7 +121,7 @@ pub(crate) unsafe fn phase_post_accept_xdp_v4(
 ) {
     if should_create_ct(p) {
         let matched = get_matched(p);
-        conntrack::ct_create_v4(ct_key, p.now, p.pkt_len, &matched);
+        conntrack::ct_create_v4(ct_key, p.now, p.pkt_len, &matched, (p.flags & FLAG_CT_ON) != 0);
         p.ct_state = 1;
     }
     p.action = XDP_PASS;
@@ -135,7 +135,7 @@ pub(crate) unsafe fn phase_post_accept_xdp_v6(
 ) {
     if should_create_ct(p) {
         let matched = get_matched(p);
-        conntrack::ct_create_v6(ct_key, p.now, p.pkt_len, &matched);
+        conntrack::ct_create_v6(ct_key, p.now, p.pkt_len, &matched, (p.flags & FLAG_CT_ON) != 0);
         p.ct_state = 1;
     }
     p.action = XDP_PASS;
@@ -164,7 +164,7 @@ pub(crate) unsafe fn phase_post_accept_tc_v4(
     }
     if should_create_ct(p) {
         let matched = get_matched(p);
-        conntrack::ct_create_v4(ct_key, p.now, p.pkt_len, &matched);
+        conntrack::ct_create_v4(ct_key, p.now, p.pkt_len, &matched, (p.flags & FLAG_CT_ON) != 0);
         p.ct_state = 1;
     }
     if (p.flags & FLAG_TRACING) != 0 {
@@ -196,7 +196,7 @@ pub(crate) unsafe fn phase_post_accept_tc_v6(
     }
     if should_create_ct(p) {
         let matched = get_matched(p);
-        conntrack::ct_create_v6(ct_key, p.now, p.pkt_len, &matched);
+        conntrack::ct_create_v6(ct_key, p.now, p.pkt_len, &matched, (p.flags & FLAG_CT_ON) != 0);
         p.ct_state = 1;
     }
     if (p.flags & FLAG_TRACING) != 0 {

@@ -133,8 +133,8 @@ fn extract_matched(entry: &CtValue, tap_id: u32) -> MatchedPolicy {
 
 /// Lookup CT for IPv4 packet.
 #[inline(always)]
-pub unsafe fn ct_lookup_v4(key: &CtKey4, now: u64, pkt_len: u32) -> CtLookupResult {
-    if !crate::runtime::conntrack_enabled(key.tap_id) {
+pub unsafe fn ct_lookup_v4(key: &CtKey4, now: u64, pkt_len: u32, ct_enabled: bool) -> CtLookupResult {
+    if !ct_enabled {
         return CtLookupResult::NotFound;
     }
     // Forward lookup
@@ -179,8 +179,8 @@ pub unsafe fn ct_lookup_v4(key: &CtKey4, now: u64, pkt_len: u32) -> CtLookupResu
 
 /// Lookup CT for IPv6 packet.
 #[inline(always)]
-pub unsafe fn ct_lookup_v6(key: &CtKey6, now: u64, pkt_len: u32) -> CtLookupResult {
-    if !crate::runtime::conntrack_enabled(key.tap_id) {
+pub unsafe fn ct_lookup_v6(key: &CtKey6, now: u64, pkt_len: u32, ct_enabled: bool) -> CtLookupResult {
+    if !ct_enabled {
         return CtLookupResult::NotFound;
     }
     // Forward lookup
@@ -224,8 +224,8 @@ pub unsafe fn ct_lookup_v6(key: &CtKey6, now: u64, pkt_len: u32) -> CtLookupResu
 
 /// Create a new CT entry for IPv4 with matched policy info.
 #[inline(always)]
-pub unsafe fn ct_create_v4(key: &CtKey4, now: u64, pkt_len: u32, matched: &MatchedPolicy) {
-    if !crate::runtime::conntrack_enabled(key.tap_id) {
+pub unsafe fn ct_create_v4(key: &CtKey4, now: u64, pkt_len: u32, matched: &MatchedPolicy, ct_enabled: bool) {
+    if !ct_enabled {
         return;
     }
     let val = CtValue {
@@ -253,8 +253,8 @@ pub unsafe fn ct_create_v4(key: &CtKey4, now: u64, pkt_len: u32, matched: &Match
 
 /// Create a new CT entry for IPv6 with matched policy info.
 #[inline(always)]
-pub unsafe fn ct_create_v6(key: &CtKey6, now: u64, pkt_len: u32, matched: &MatchedPolicy) {
-    if !crate::runtime::conntrack_enabled(key.tap_id) {
+pub unsafe fn ct_create_v6(key: &CtKey6, now: u64, pkt_len: u32, matched: &MatchedPolicy, ct_enabled: bool) {
+    if !ct_enabled {
         return;
     }
     let val = CtValue {

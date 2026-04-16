@@ -3,15 +3,54 @@ use aya_ebpf::programs::{TcContext, XdpContext};
 use aya_ebpf::EbpfContext;
 
 use crate::common::{
-    PipelineCtx, FLAG_ACL_ON, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_QOS_ON, FLAG_TCPRT_ON,
-    FLAG_TRACING, IPPROTO_TCP, TAP_ID_UNASSIGNED,
+    PipelineCtx, FLAG_ACL_ON, FLAG_CT_ON, FLAG_LB_ON, FLAG_MIRROR_ON, FLAG_MONITORING_ON,
+    FLAG_QOS_ON, FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP, TAP_ID_UNASSIGNED,
 };
-use crate::{maps, parser, policy, trace};
+use crate::{maps, parser, trace};
 
 #[inline(always)]
 pub(crate) unsafe fn load_feature_flags_xdp(p: &mut PipelineCtx, info: &parser::PacketInfo) {
-    if policy::acl_enabled(p.tap_id) {
-        p.flags |= FLAG_ACL_ON;
+    if p.tap_id == TAP_ID_UNASSIGNED {
+        // Fallback to global config for CT and monitoring
+        if let Some(gcfg) = maps::FIREWALL_CONFIG.get(&0u32) {
+            if gcfg.conntrack_enabled != 0 {
+                p.flags |= FLAG_CT_ON;
+            }
+            if gcfg.monitoring_enabled != 0 {
+                p.flags |= FLAG_MONITORING_ON;
+            }
+            if gcfg.acl_enabled != 0 {
+                p.flags |= FLAG_ACL_ON;
+            }
+        } else {
+            // Hardcoded defaults: CT and monitoring on, ACL on
+            p.flags |= FLAG_CT_ON | FLAG_MONITORING_ON | FLAG_ACL_ON;
+        }
+    } else if let Some(cfg) = maps::TAP_CONFIG_MAP.get(&p.tap_id) {
+        if cfg.conntrack_enabled != 0 {
+            p.flags |= FLAG_CT_ON;
+        }
+        if cfg.monitoring_enabled != 0 {
+            p.flags |= FLAG_MONITORING_ON;
+        }
+        if cfg.acl_enabled != 0 {
+            p.flags |= FLAG_ACL_ON;
+        }
+    } else {
+        // No per-tap config, fallback to global
+        if let Some(gcfg) = maps::FIREWALL_CONFIG.get(&0u32) {
+            if gcfg.conntrack_enabled != 0 {
+                p.flags |= FLAG_CT_ON;
+            }
+            if gcfg.monitoring_enabled != 0 {
+                p.flags |= FLAG_MONITORING_ON;
+            }
+            if gcfg.acl_enabled != 0 {
+                p.flags |= FLAG_ACL_ON;
+            }
+        } else {
+            p.flags |= FLAG_CT_ON | FLAG_MONITORING_ON | FLAG_ACL_ON;
+        }
     }
     if trace::should_trace(p.tap_id, info) {
         p.flags |= FLAG_TRACING;
@@ -21,6 +60,18 @@ pub(crate) unsafe fn load_feature_flags_xdp(p: &mut PipelineCtx, info: &parser::
 #[inline(always)]
 pub(crate) unsafe fn load_feature_flags_tc(p: &mut PipelineCtx, info: &parser::PacketInfo) {
     if p.tap_id == TAP_ID_UNASSIGNED {
+        // Fallback to global config for CT and monitoring
+        if let Some(gcfg) = maps::FIREWALL_CONFIG.get(&0u32) {
+            if gcfg.conntrack_enabled != 0 {
+                p.flags |= FLAG_CT_ON;
+            }
+            if gcfg.monitoring_enabled != 0 {
+                p.flags |= FLAG_MONITORING_ON;
+            }
+        } else {
+            // Hardcoded defaults: CT and monitoring on
+            p.flags |= FLAG_CT_ON | FLAG_MONITORING_ON;
+        }
         return;
     }
     if let Some(cfg) = maps::TAP_CONFIG_MAP.get(&p.tap_id) {
@@ -38,6 +89,24 @@ pub(crate) unsafe fn load_feature_flags_tc(p: &mut PipelineCtx, info: &parser::P
         }
         if cfg.lb_enabled != 0 {
             p.flags |= FLAG_LB_ON;
+        }
+        if cfg.conntrack_enabled != 0 {
+            p.flags |= FLAG_CT_ON;
+        }
+        if cfg.monitoring_enabled != 0 {
+            p.flags |= FLAG_MONITORING_ON;
+        }
+    } else {
+        // No per-tap config, fallback to global
+        if let Some(gcfg) = maps::FIREWALL_CONFIG.get(&0u32) {
+            if gcfg.conntrack_enabled != 0 {
+                p.flags |= FLAG_CT_ON;
+            }
+            if gcfg.monitoring_enabled != 0 {
+                p.flags |= FLAG_MONITORING_ON;
+            }
+        } else {
+            p.flags |= FLAG_CT_ON | FLAG_MONITORING_ON;
         }
     }
     if trace::should_trace(p.tap_id, info) {

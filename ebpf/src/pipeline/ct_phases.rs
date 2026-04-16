@@ -8,14 +8,15 @@ use crate::common::{
     CtKey4, CtKey6, PipelineCtx, CT_CONTRACT_FAMILY_IPV4, CT_CONTRACT_FAMILY_IPV6,
     CT_CONTRACT_HOOK_TC_INGRESS, CT_CONTRACT_REASON_CT_DISABLED, CT_CONTRACT_REASON_CT_MISS,
     DIR_EGRESS, DIR_INGRESS, DROP_QOS_EGRESS, DROP_ROUTE_MISS, DROP_SG_EGRESS, FLAG_ACL_ON,
-    FLAG_CT_HIT, FLAG_IS_FORWARD, FLAG_LB_CT_AFFINITY, FLAG_LB_CT_ENABLED, FLAG_LB_HIT,
-    FLAG_MIRROR_ON, FLAG_PORT_RESOLVED, FLAG_QOS_ON, FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP,
-    TRACE_RESULT_DROP_QOS, TRACE_RESULT_DROP_ROUTE, TRACE_RESULT_DROP_SECURITY,
-    TRACE_RESULT_PASS, TRACE_TC_DROP, TRACE_TC_EGRESS, TRACE_TC_INGRESS, XDP_PASS,
+    FLAG_CT_HIT, FLAG_CT_ON, FLAG_IS_FORWARD, FLAG_LB_CT_AFFINITY, FLAG_LB_CT_ENABLED,
+    FLAG_LB_HIT, FLAG_MIRROR_ON, FLAG_MONITORING_ON, FLAG_PORT_RESOLVED, FLAG_QOS_ON,
+    FLAG_TCPRT_ON, FLAG_TRACING, IPPROTO_TCP, TRACE_RESULT_DROP_QOS, TRACE_RESULT_DROP_ROUTE,
+    TRACE_RESULT_DROP_SECURITY, TRACE_RESULT_PASS, TRACE_TC_DROP, TRACE_TC_EGRESS,
+    TRACE_TC_INGRESS, XDP_PASS,
 };
 use crate::conntrack::{self, CtLookupResult};
 use crate::maps::{DST_IPV4_TRIE, DST_IPV6_TRIE, SRC_IPV4_TRIE, SRC_IPV6_TRIE};
-use crate::{ct_contract, lb, mirror, parser, qos, route, runtime, sg, stats, tcprt};
+use crate::{ct_contract, lb, mirror, parser, qos, route, sg, stats, tcprt};
 
 use super::qos_phases::{apply_edt_prio, phase_qos_ingress_tc, should_apply_ingress_qos};
 use super::trace_drop::{do_drop, do_trace};
@@ -91,7 +92,8 @@ pub(crate) unsafe fn lookup_ipv6(
 
 #[inline(never)]
 pub(crate) unsafe fn phase_ct_v4(_info: &parser::PacketInfo, p: &mut PipelineCtx, ct_key: &CtKey4) {
-    match conntrack::ct_lookup_v4(ct_key, p.now, p.pkt_len) {
+    let ct_on = (p.flags & FLAG_CT_ON) != 0;
+    match conntrack::ct_lookup_v4(ct_key, p.now, p.pkt_len, ct_on) {
         CtLookupResult::Established(matched, is_forward)
         | CtLookupResult::SeenReply(matched, is_forward) => {
             p.ct_state = 2;
@@ -109,7 +111,8 @@ pub(crate) unsafe fn phase_ct_v4(_info: &parser::PacketInfo, p: &mut PipelineCtx
 
 #[inline(never)]
 pub(crate) unsafe fn phase_ct_v6(_info: &parser::PacketInfo, p: &mut PipelineCtx, ct_key: &CtKey6) {
-    match conntrack::ct_lookup_v6(ct_key, p.now, p.pkt_len) {
+    let ct_on = (p.flags & FLAG_CT_ON) != 0;
+    match conntrack::ct_lookup_v6(ct_key, p.now, p.pkt_len, ct_on) {
         CtLookupResult::Established(matched, is_forward)
         | CtLookupResult::SeenReply(matched, is_forward) => {
             p.ct_state = 2;
@@ -145,8 +148,7 @@ pub(crate) unsafe fn phase_ct_fastpath_xdp_v6(
 
 #[inline(always)]
 fn need_ingress_ids(p: &PipelineCtx) -> bool {
-    (p.flags & (FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_TRACING)) != 0
-        || stats::monitoring_enabled(p.tap_id)
+    (p.flags & (FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_TRACING | FLAG_MONITORING_ON)) != 0
 }
 
 #[inline(always)]
@@ -163,14 +165,12 @@ unsafe fn load_packet_ids_v6(info: &parser::PacketInfo, p: &mut PipelineCtx) {
 
 #[inline(always)]
 pub(crate) unsafe fn should_create_ct(p: &PipelineCtx) -> bool {
-    (p.flags & FLAG_ACL_ON) != 0
-        || stats::monitoring_enabled(p.tap_id)
-        || tcprt::tcprt_enabled(p.tap_id)
+    (p.flags & (FLAG_ACL_ON | FLAG_MONITORING_ON | FLAG_TCPRT_ON)) != 0
 }
 
 #[inline(always)]
 unsafe fn record_tc_ingress_contract_fallback(p: &PipelineCtx, family: u8) {
-    let reason = if runtime::conntrack_enabled(p.tap_id) {
+    let reason = if (p.flags & FLAG_CT_ON) != 0 {
         CT_CONTRACT_REASON_CT_MISS
     } else {
         CT_CONTRACT_REASON_CT_DISABLED
@@ -231,12 +231,11 @@ unsafe fn phase_post_accept_tc_ingress(
             return;
         }
 
-        if stats::monitoring_enabled(p.tap_id)
-            || (p.flags & (FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_TRACING)) != 0
+        if (p.flags & (FLAG_MONITORING_ON | FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_TRACING)) != 0
         {
             load_packet_ids(info, p);
         }
-        if stats::monitoring_enabled(p.tap_id) {
+        if (p.flags & FLAG_MONITORING_ON) != 0 {
             stats::update_group_stats(p.tap_id, p.src_id, DIR_EGRESS, p.pkt_len);
             stats::update_group_stats(p.tap_id, p.dst_id, DIR_INGRESS, p.pkt_len);
         }
@@ -259,7 +258,7 @@ unsafe fn phase_post_accept_tc_ingress(
         return;
     }
 
-    if stats::monitoring_enabled(p.tap_id) {
+    if (p.flags & FLAG_MONITORING_ON) != 0 {
         stats::update_group_stats(p.tap_id, p.src_id, DIR_EGRESS, p.pkt_len);
         stats::update_group_stats(p.tap_id, p.dst_id, DIR_INGRESS, p.pkt_len);
     }
@@ -322,7 +321,7 @@ pub(crate) unsafe fn phase_ct_fastpath_tc_ingress_v4(
         }
     }
 
-    if stats::monitoring_enabled(p.tap_id) {
+    if (p.flags & FLAG_MONITORING_ON) != 0 {
         if (p.flags & FLAG_ACL_ON) != 0 {
             let matched = get_matched(p);
             stats::update_rule_stats(&matched.to_policy_key(), p.pkt_len, false);
@@ -378,7 +377,7 @@ pub(crate) unsafe fn phase_ct_fastpath_tc_ingress_v6(
         }
     }
 
-    if stats::monitoring_enabled(p.tap_id) {
+    if (p.flags & FLAG_MONITORING_ON) != 0 {
         if (p.flags & FLAG_ACL_ON) != 0 {
             let matched = get_matched(p);
             stats::update_rule_stats(&matched.to_policy_key(), p.pkt_len, false);
@@ -475,9 +474,7 @@ pub(crate) unsafe fn phase_ct_fastpath_tc_v4(
         }
     }
 
-    let need_ids = (p.flags & FLAG_QOS_ON) != 0
-        || (p.flags & FLAG_MIRROR_ON) != 0
-        || stats::monitoring_enabled(p.tap_id);
+    let need_ids = (p.flags & (FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_MONITORING_ON)) != 0;
     if need_ids {
         p.dst_id = lookup_ipv4(&DST_IPV4_TRIE, p.tap_id, info.dst_ip).unwrap_or(0);
         p.src_id = lookup_ipv4(&SRC_IPV4_TRIE, p.tap_id, info.src_ip).unwrap_or(0);
@@ -539,9 +536,7 @@ pub(crate) unsafe fn phase_ct_fastpath_tc_v6(
         }
     }
 
-    let need_ids = (p.flags & FLAG_QOS_ON) != 0
-        || (p.flags & FLAG_MIRROR_ON) != 0
-        || stats::monitoring_enabled(p.tap_id);
+    let need_ids = (p.flags & (FLAG_QOS_ON | FLAG_MIRROR_ON | FLAG_MONITORING_ON)) != 0;
     if need_ids {
         p.dst_id = lookup_ipv6(&DST_IPV6_TRIE, p.tap_id, info.dst_ip_v6).unwrap_or(0);
         p.src_id = lookup_ipv6(&SRC_IPV6_TRIE, p.tap_id, info.src_ip_v6).unwrap_or(0);
