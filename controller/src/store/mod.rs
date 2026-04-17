@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
-    HealthCheckResource, IpGroupResource, NetworkPolicyResource, NetworkResource, NodeCapability,
-    NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource, PortResource, QosPolicyResource,
-    ResourceMetadata, RouteTableResource, SecurityGroupResource, ServiceResource,
-    SouthboundNodeStatusResponse, SouthboundSyncStatus, TenantResource,
+    HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
+    NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource,
+    PortResource, QosPolicyResource, ResourceMetadata, RouteTableResource, SecurityGroupResource,
+    ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,7 @@ impl_stored_resource!(RouteTableResource);
 impl_stored_resource!(IpGroupResource);
 impl_stored_resource!(NetworkPolicyResource);
 impl_stored_resource!(QosPolicyResource);
+impl_stored_resource!(MirrorPolicyResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
@@ -238,6 +239,20 @@ pub trait ControllerStore: Send + Sync {
         resource: QosPolicyResource,
     ) -> Result<QosPolicyResource, StoreError>;
     async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError>;
+
+    // --- MirrorPolicy (Phase 3.7) ---
+    async fn list_mirror_policies(&self) -> Vec<MirrorPolicyResource>;
+    async fn get_mirror_policy(&self, id: &str) -> Option<MirrorPolicyResource>;
+    async fn create_mirror_policy(
+        &self,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError>;
+    async fn update_mirror_policy(
+        &self,
+        id: &str,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError>;
+    async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError>;
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource>;
     async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource>;

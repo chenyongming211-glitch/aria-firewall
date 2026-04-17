@@ -1,7 +1,7 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
-    IpGroupResource, NetworkPolicyResource, NetworkResource, NodeCapability, NodeHealthReport,
-    NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
+    IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
+    NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
     SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ pub struct InMemoryControllerStore {
     pub ip_groups: ResourceStore<IpGroupResource>,
     pub network_policies: ResourceStore<NetworkPolicyResource>,
     pub qos_policies: ResourceStore<QosPolicyResource>,
+    pub mirror_policies: ResourceStore<MirrorPolicyResource>,
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
@@ -45,6 +46,7 @@ impl InMemoryControllerStore {
             ip_groups: ResourceStore::new("ip_group", "ipg"),
             network_policies: ResourceStore::new("network_policy", "npol"),
             qos_policies: ResourceStore::new("qos_policy", "qos"),
+            mirror_policies: ResourceStore::new("mirror_policy", "mpol"),
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
@@ -72,6 +74,10 @@ impl InMemoryControllerStore {
             self.network_policies.count().await,
         );
         counts.insert("qos_policies".to_string(), self.qos_policies.count().await);
+        counts.insert(
+            "mirror_policies".to_string(),
+            self.mirror_policies.count().await,
+        );
         counts.insert(
             "health_checks".to_string(),
             self.health_checks.count().await,
@@ -559,6 +565,56 @@ impl ControllerStore for InMemoryControllerStore {
     async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
         self.run_mutation(|inner| async move { inner.delete_resource(&inner.qos_policies, id).await })
             .await
+    }
+
+    // --- MirrorPolicy (Phase 3.7) ---
+    async fn list_mirror_policies(&self) -> Vec<MirrorPolicyResource> {
+        self.list_resource(&self.mirror_policies).await
+    }
+
+    async fn get_mirror_policy(&self, id: &str) -> Option<MirrorPolicyResource> {
+        self.get_resource(&self.mirror_policies, id).await
+    }
+
+    async fn create_mirror_policy(
+        &self,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.validate_mirror_policy_resource_inner(&resource).await?;
+            inner.create_resource(&inner.mirror_policies, resource).await
+        })
+        .await
+    }
+
+    async fn update_mirror_policy(
+        &self,
+        id: &str,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner
+                .mirror_policies
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "mirror_policy",
+                    id: id.to_string(),
+                })?;
+            inner.validate_mirror_policy_resource_inner(&resource).await?;
+            inner
+                .update_resource(&inner.mirror_policies, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_mutation(|inner| async move {
+            inner.ensure_mirror_policy_delete_allowed_inner(id).await?;
+            inner.delete_resource(&inner.mirror_policies, id).await
+        })
+        .await
     }
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource> {

@@ -1,6 +1,6 @@
 use aria_api::{
-    BackendSetResource, HealthCheckResource, IpGroupResource, NetworkPolicyResource,
-    NetworkResource, PortResource, QosPolicyResource, RouteTableResource,
+    BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
+    NetworkPolicyResource, NetworkResource, PortResource, QosPolicyResource, RouteTableResource,
     SecurityGroupResource, ServiceResource, TenantResource, NodeResource,
 };
 use std::collections::BTreeSet;
@@ -556,6 +556,77 @@ impl InMemoryControllerStore {
             }
         }
 
+        Ok(())
+    }
+
+    pub(crate) async fn validate_mirror_policy_resource_inner(
+        &self,
+        resource: &MirrorPolicyResource,
+    ) -> Result<(), StoreError> {
+        if resource.spec.rules.is_empty() {
+            return Err(StoreError::BadRequest(
+                "mirror_policy must define at least one rule".to_string(),
+            ));
+        }
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "mirror_policy", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "mirror_policy", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::InvalidReference {
+                resource: "mirror_policy",
+                field: "network_id",
+                value: resource.spec.network_id.clone(),
+                referenced_resource: "network",
+            });
+        }
+        // Collect IpGroup IDs in the same network for cross-reference.
+        let ip_group_ids_in_network: BTreeSet<&str> = self
+            .ip_groups
+            .list()
+            .await
+            .iter()
+            .filter(|ig| ig.spec.network_id == resource.spec.network_id)
+            .map(|ig| ig.metadata.id.as_str())
+            .collect();
+        for (i, rule) in resource.spec.rules.iter().enumerate() {
+            if rule.src_ip_group_id != "any"
+                && !ip_group_ids_in_network.contains(rule.src_ip_group_id.as_str())
+            {
+                return Err(StoreError::InvalidReference {
+                    resource: "mirror_policy",
+                    field: format!("rules[{}].src_ip_group_id", i),
+                    value: rule.src_ip_group_id.clone(),
+                    referenced_resource: "ip_group",
+                });
+            }
+            if rule.dst_ip_group_id != "any"
+                && !ip_group_ids_in_network.contains(rule.dst_ip_group_id.as_str())
+            {
+                return Err(StoreError::InvalidReference {
+                    resource: "mirror_policy",
+                    field: format!("rules[{}].dst_ip_group_id", i),
+                    value: rule.dst_ip_group_id.clone(),
+                    referenced_resource: "ip_group",
+                });
+            }
+        }
+        // Enforce name uniqueness within the same network.
+        for existing in self.mirror_policies.list().await {
+            if existing.spec.network_id == resource.spec.network_id
+                && existing.spec.name == resource.spec.name
+                && existing.metadata.id != resource.metadata.id
+            {
+                return Err(StoreError::AlreadyExists {
+                    resource: "mirror_policy",
+                    id: format!(
+                        "name '{}' in network '{}'",
+                        resource.spec.name, resource.spec.network_id
+                    ),
+                });
+            }
+        }
         Ok(())
     }
 }

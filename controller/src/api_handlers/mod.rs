@@ -20,6 +20,7 @@ mod network_policy;
 mod node;
 mod port;
 mod qos_policy;
+mod mirror_policy;
 mod route_table;
 mod security_group;
 mod service;
@@ -48,6 +49,10 @@ pub use self::{
     qos_policy::{
         create_qos_policy, delete_qos_policy, get_qos_policy, list_qos_policies,
         update_qos_policy,
+    },
+    mirror_policy::{
+        create_mirror_policy, delete_mirror_policy, get_mirror_policy, list_mirror_policies,
+        update_mirror_policy,
     },
     route_table::{
         create_route_table, delete_route_table, get_route_table, list_route_tables,

@@ -137,6 +137,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(mirror_policy) = self
+            .mirror_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|mirror_policy| mirror_policy.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "mirror_policy",
+                dependent_id: mirror_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -280,6 +295,21 @@ impl InMemoryControllerStore {
                 id: network_id.to_string(),
                 dependent_resource: "qos_policy",
                 dependent_id: qos_policy.metadata.id,
+            });
+        }
+
+        if let Some(mirror_policy) = self
+            .mirror_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|mirror_policy| mirror_policy.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "mirror_policy",
+                dependent_id: mirror_policy.metadata.id,
             });
         }
 
@@ -440,6 +470,27 @@ impl InMemoryControllerStore {
             });
         }
 
+        // Also check MirrorPolicy references
+        if let Some(mirror_policy) = self
+            .mirror_policies
+            .list()
+            .await
+            .into_iter()
+            .find(|mp| {
+                mp.spec.rules.iter().any(|rule| {
+                    rule.src_ip_group_id == ip_group_id
+                        || rule.dst_ip_group_id == ip_group_id
+                })
+            })
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "ip_group",
+                id: ip_group_id.to_string(),
+                dependent_resource: "mirror_policy",
+                dependent_id: mirror_policy.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -507,6 +558,14 @@ impl InMemoryControllerStore {
             });
         }
 
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_mirror_policy_delete_allowed_inner(
+        &self,
+        _mirror_policy_id: &str,
+    ) -> Result<(), StoreError> {
+        // No resources currently depend on mirror_policy.
         Ok(())
     }
 }

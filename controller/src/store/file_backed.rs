@@ -1,7 +1,7 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
-    IpGroupResource, NetworkPolicyResource, NetworkResource, NodeCapability, NodeHealthReport,
-    NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
+    IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
+    NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
     SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
@@ -468,6 +468,37 @@ impl ControllerStore for FileBackedControllerStore {
 
     async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
         self.run_persisted(|inner| inner.delete_qos_policy(id)).await
+    }
+
+    // --- MirrorPolicy (Phase 3.7) ---
+    async fn list_mirror_policies(&self) -> Vec<MirrorPolicyResource> {
+        self.inner.list_mirror_policies().await
+    }
+
+    async fn get_mirror_policy(&self, id: &str) -> Option<MirrorPolicyResource> {
+        self.inner.get_mirror_policy(id).await
+    }
+
+    async fn create_mirror_policy(
+        &self,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.create_mirror_policy(resource))
+            .await
+    }
+
+    async fn update_mirror_policy(
+        &self,
+        id: &str,
+        resource: MirrorPolicyResource,
+    ) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.update_mirror_policy(id, resource))
+            .await
+    }
+
+    async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_mirror_policy(id))
+            .await
     }
 
     async fn record_registration(

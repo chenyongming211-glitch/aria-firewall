@@ -18,6 +18,7 @@ pub mod service;
 pub mod ip_group;
 pub mod network_policy;
 pub mod qos_policy;
+pub mod mirror_policy;
 
 pub use metadata::*;
 pub use query_types::*;
@@ -33,6 +34,7 @@ pub use service::*;
 pub use ip_group::*;
 pub use network_policy::*;
 pub use qos_policy::*;
+pub use mirror_policy::*;
 
 // ── Platform-level Error & Health ──
 

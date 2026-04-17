@@ -1,8 +1,8 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
-    HealthCheckResource, IpGroupResource, NetworkPolicyResource, NetworkResource,
-    NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, PortResource,
-    QosPolicyResource, RouteTableResource, SecurityGroupResource, ServiceResource,
+    HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
+    NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest,
+    PortResource, QosPolicyResource, RouteTableResource, SecurityGroupResource, ServiceResource,
     SouthboundNodeStatusResponse, SouthboundSyncStatus, TenantResource,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,6 +29,7 @@ impl InMemoryControllerStore {
         ip_groups: &[IpGroupResource],
         network_policies: &[NetworkPolicyResource],
         qos_policies: &[QosPolicyResource],
+        mirror_policies: &[MirrorPolicyResource],
         route_tables: &[RouteTableResource],
         _ip_groups_dup: &[IpGroupResource],
         _network_policies_dup: &[NetworkPolicyResource],
@@ -45,6 +46,7 @@ impl InMemoryControllerStore {
             ("ip_groups".to_string(), ip_groups.len()),
             ("network_policies".to_string(), network_policies.len()),
             ("qos_policies".to_string(), qos_policies.len()),
+            ("mirror_policies".to_string(), mirror_policies.len()),
             ("route_tables".to_string(), route_tables.len()),
             ("health_checks".to_string(), health_checks.len()),
             ("backend_sets".to_string(), backend_sets.len()),
@@ -278,6 +280,7 @@ impl InMemoryControllerStore {
             ip_groups: self.ip_groups.snapshot().await,
             network_policies: self.network_policies.snapshot().await,
             qos_policies: self.qos_policies.snapshot().await,
+            mirror_policies: self.mirror_policies.snapshot().await,
             health_checks: self.health_checks.snapshot().await,
             backend_sets: self.backend_sets.snapshot().await,
             services: self.services.snapshot().await,
@@ -298,6 +301,7 @@ impl InMemoryControllerStore {
             .restore(snapshot.network_policies)
             .await;
         self.qos_policies.restore(snapshot.qos_policies).await;
+        self.mirror_policies.restore(snapshot.mirror_policies).await;
         self.health_checks.restore(snapshot.health_checks).await;
         self.backend_sets.restore(snapshot.backend_sets).await;
         self.services.restore(snapshot.services).await;
@@ -582,6 +586,14 @@ impl InMemoryControllerStore {
             .filter(|qp| network_ids.contains(&qp.spec.network_id))
             .collect::<Vec<_>>();
 
+        let mirror_policies = self
+            .mirror_policies
+            .list()
+            .await
+            .into_iter()
+            .filter(|mp| network_ids.contains(&mp.spec.network_id))
+            .collect::<Vec<_>>();
+
         let backend_sets = self
             .backend_sets
             .list()
@@ -634,6 +646,7 @@ impl InMemoryControllerStore {
             &ip_groups,
             &network_policies,
             &qos_policies,
+            &mirror_policies,
             &route_tables,
             &ip_groups,
             &network_policies,
@@ -662,6 +675,7 @@ impl InMemoryControllerStore {
                 network_policies,
                 route_tables,
                 qos_policies: qos_policies.clone(),
+                mirror_policies,
                 ip_groups,
                 network_policies,
                 health_checks,
