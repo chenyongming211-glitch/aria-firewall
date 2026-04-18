@@ -6,6 +6,7 @@ const QOS_MODE_SHAPING: u8 = 1;
 
 /// Check if QoS is globally enabled. When no QoS rules are configured,
 /// the control plane sets this to 0, allowing fast-path to skip LPM lookups entirely.
+#[allow(dead_code)]
 #[inline(always)]
 pub fn qos_enabled(tap_id: u32) -> bool {
     crate::runtime::qos_enabled(tap_id)

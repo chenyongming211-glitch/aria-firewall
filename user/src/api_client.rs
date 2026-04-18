@@ -420,6 +420,7 @@ impl ApiClient {
 
     // ── Drop Reason Profiler ──
 
+    #[allow(dead_code)]
     pub async fn list_drops(&self, instance: &str) -> Result<DropStatsResponse, String> {
         let resp = self.client.get(self.url(&format!("/api/v1/{}/stats/drops", instance)))
             .send().await
@@ -427,6 +428,7 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub async fn flush_drops(&self, instance: &str) -> Result<DropFlushResponse, String> {
         let resp = self.client.delete(self.url(&format!("/api/v1/{}/stats/drops", instance)))
             .send().await

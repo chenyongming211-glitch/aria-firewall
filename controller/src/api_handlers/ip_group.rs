@@ -11,7 +11,7 @@ use axum::{
 use super::{
     helpers::{
         deleted_message, ip_group_status, labels_match, metadata_from_create,
-        metadata_from_update, optional_eq, optional_option_eq, paginate, parse_label_selector,
+        metadata_from_update, optional_eq, paginate, parse_label_selector,
     },
     AppState, ControllerError,
 };

@@ -19,6 +19,7 @@ pub mod validation;
 // ---- Re-exports ----
 pub use file_backed::FileBackedControllerStore;
 pub use in_memory::InMemoryControllerStore;
+#[allow(unused_imports)]
 pub use resource_store::ResourceStore;
 
 pub type SharedStore = Arc<dyn ControllerStore>;
@@ -127,6 +128,7 @@ pub struct SouthboundNodeRuntime {
 }
 
 #[async_trait]
+#[allow(dead_code)]
 pub trait ControllerStore: Send + Sync {
     async fn resource_counts(&self) -> BTreeMap<String, usize>;
     fn current_generation(&self) -> String;

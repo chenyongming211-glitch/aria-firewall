@@ -23,7 +23,7 @@ mod state_store;
 
 use compiler::{build_node_capability, compile_desired_state};
 use helpers::{attached_port_count, hostname, unix_timestamp_string};
-use ir_types::{CompiledNodeState, CompileOutcome, CompilerContext, DesiredStateCacheEntry};
+use ir_types::{CompilerContext, DesiredStateCacheEntry};
 use runtime_materialize::{materialize_phase3_maps, materialize_service_maps};
 use southbound_client::SouthboundClient;
 use state_store::LocalPlatformStateStore;
