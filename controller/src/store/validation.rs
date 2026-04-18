@@ -2,9 +2,9 @@ use aria_api::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
     NetworkPolicyResource, NetworkResource, NodeConfigResource, PortResource, QosPolicyResource,
     RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
-    TenantResource, NodeResource,
+    NodeResource, TenantResource,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
 use super::{InMemoryControllerStore, StoreError};
@@ -23,6 +23,75 @@ fn is_valid_cidr(cidr: &str) -> bool {
         IpAddr::V4(_) => prefix <= 32,
         IpAddr::V6(_) => prefix <= 128,
     }
+}
+
+fn normalize_network_policy_ports(
+    ports: Option<&str>,
+    default_action: u8,
+) -> Result<Option<String>, String> {
+    let Some(ports) = ports else {
+        return Ok(None);
+    };
+    let ports = ports.trim();
+    if ports.is_empty() || ports.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+
+    let mut entries = Vec::new();
+    for part in ports.split(',') {
+        let parts: Vec<&str> = part.trim().split(':').collect();
+        if parts.is_empty() || parts.len() > 2 || parts[0].trim().is_empty() {
+            return Err("invalid port filter entry".to_string());
+        }
+        let rule_action = match parts.get(1) {
+            Some(raw_action) => {
+                let action = raw_action
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid port action '{}'", raw_action.trim()))?;
+                if action > 1 {
+                    return Err(format!("invalid port action {}: must be 0 or 1", action));
+                }
+                action
+            }
+            None => default_action,
+        };
+        let port_expr = parts[0].trim();
+        if let Some((start, end)) = port_expr.split_once('-') {
+            let start = start
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", start.trim()))?;
+            let end = end
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", end.trim()))?;
+            if start > end {
+                return Err(format!("invalid port range {}-{}: start must be <= end", start, end));
+            }
+            entries.push((start, end, rule_action));
+        } else {
+            let port = port_expr
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", port_expr))?;
+            entries.push((port, port, rule_action));
+        }
+    }
+
+    entries.sort();
+    Ok(Some(
+        entries
+            .iter()
+            .map(|(start, end, action)| {
+                if start == end {
+                    format!("{}:{}", start, action)
+                } else {
+                    format!("{}-{}:{}", start, end, action)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    ))
 }
 
 impl InMemoryControllerStore {
@@ -278,6 +347,36 @@ impl InMemoryControllerStore {
             .filter(|ig| ig.spec.network_id == resource.spec.network_id)
             .map(|ig| ig.metadata.id.as_str())
             .collect();
+        let mut policy_keys = BTreeMap::new();
+        for existing in self.network_policies.list().await {
+            if existing.spec.network_id != resource.spec.network_id
+                || existing.metadata.id == resource.metadata.id
+            {
+                continue;
+            }
+            for existing_rule in &existing.spec.rules {
+                let Ok(existing_ports) = normalize_network_policy_ports(
+                    existing_rule.ports.as_deref(),
+                    existing_rule.action,
+                ) else {
+                    continue;
+                };
+                policy_keys.insert(
+                    (
+                        existing_rule.src_ip_group_id.clone(),
+                        existing_rule.dst_ip_group_id.clone(),
+                        existing_rule.proto,
+                        existing_rule.direction,
+                    ),
+                    (
+                        existing.metadata.id.clone(),
+                        existing_rule.action,
+                        existing_ports,
+                    ),
+                );
+            }
+        }
+
         for (i, rule) in resource.spec.rules.iter().enumerate() {
             if !ip_group_ids_in_network.contains(rule.src_ip_group_id.as_str()) {
                 return Err(StoreError::InvalidReference {
@@ -313,6 +412,38 @@ impl InMemoryControllerStore {
                     i, rule.action
                 )));
             }
+            let normalized_ports =
+                normalize_network_policy_ports(rule.ports.as_deref(), rule.action).map_err(
+                    |error| StoreError::BadRequest(format!("rules[{}].ports: {}", i, error)),
+                )?;
+            if normalized_ports.is_some() && rule.proto != 6 && rule.proto != 17 {
+                return Err(StoreError::BadRequest(format!(
+                    "rules[{}].ports require proto 6(TCP) or 17(UDP), got {}",
+                    i, rule.proto
+                )));
+            }
+            let policy_key = (
+                rule.src_ip_group_id.clone(),
+                rule.dst_ip_group_id.clone(),
+                rule.proto,
+                rule.direction,
+            );
+            if let Some((owner, action, ports)) = policy_keys.get(&policy_key) {
+                if *action != rule.action || ports != &normalized_ports {
+                    return Err(StoreError::BadRequest(format!(
+                        "rules[{}] conflicts with network_policy '{}' for the same src/dst/proto/direction key",
+                        i, owner
+                    )));
+                }
+                return Err(StoreError::BadRequest(format!(
+                    "rules[{}] duplicates network_policy '{}' for the same src/dst/proto/direction key",
+                    i, owner
+                )));
+            }
+            policy_keys.insert(
+                policy_key,
+                (resource.metadata.id.clone(), rule.action, normalized_ports),
+            );
         }
         // Enforce name uniqueness within the same network.
         for existing in self.network_policies.list().await {

@@ -47,6 +47,99 @@ pub(crate) fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapabil
     }
 }
 
+fn normalize_network_policy_ports(
+    ports: Option<&str>,
+    default_action: u8,
+) -> Result<Option<String>, String> {
+    let Some(ports) = ports else {
+        return Ok(None);
+    };
+    let ports = ports.trim();
+    if ports.is_empty() || ports.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+
+    let mut entries = Vec::new();
+    for part in ports.split(',') {
+        let parts: Vec<&str> = part.trim().split(':').collect();
+        if parts.is_empty() || parts.len() > 2 || parts[0].trim().is_empty() {
+            return Err("invalid port filter entry".to_string());
+        }
+        let rule_action = match parts.get(1) {
+            Some(raw_action) => {
+                let action = raw_action
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid port action '{}'", raw_action.trim()))?;
+                if action > 1 {
+                    return Err(format!("invalid port action {}: must be 0 or 1", action));
+                }
+                action
+            }
+            None => default_action,
+        };
+        let port_expr = parts[0].trim();
+        if let Some((start, end)) = port_expr.split_once('-') {
+            let start = start
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", start.trim()))?;
+            let end = end
+                .trim()
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", end.trim()))?;
+            if start > end {
+                return Err(format!("invalid port range {}-{}: start must be <= end", start, end));
+            }
+            entries.push((start, end, rule_action));
+        } else {
+            let port = port_expr
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port '{}'", port_expr))?;
+            entries.push((port, port, rule_action));
+        }
+    }
+
+    entries.sort();
+    Ok(Some(
+        entries
+            .iter()
+            .map(|(start, end, action)| {
+                if start == end {
+                    format!("{}:{}", start, action)
+                } else {
+                    format!("{}-{}:{}", start, end, action)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    ))
+}
+
+fn allocate_network_policy_bitmap_idx(
+    seed: &str,
+    max_port_policies: u32,
+    used_bitmap_indices: &mut BTreeMap<u32, String>,
+) -> Result<u32, String> {
+    if max_port_policies == 0 {
+        return Err("max_port_policies is 0".to_string());
+    }
+    if used_bitmap_indices.len() >= max_port_policies as usize {
+        return Err(format!("port policy bitmap limit ({}) reached", max_port_policies));
+    }
+
+    let start = stable_local_id(seed) % max_port_policies;
+    for offset in 0..max_port_policies {
+        let candidate = (start + offset) % max_port_policies;
+        if !used_bitmap_indices.contains_key(&candidate) {
+            used_bitmap_indices.insert(candidate, seed.to_string());
+            return Ok(candidate);
+        }
+    }
+
+    Err(format!("port policy bitmap limit ({}) reached", max_port_policies))
+}
+
 pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutcome {
     let tenant_ids = context
         .desired
@@ -629,46 +722,29 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         );
     }
 
-    let mut degraded_reasons = vec!["shadow_apply_only".to_string()];
-    if !failed_objects.is_empty() {
-        degraded_reasons.push("object_validation_failed".to_string());
-    }
-    if overlay_encap_unsupported {
-        degraded_reasons.push("overlay_encap_unsupported".to_string());
-    }
-    degraded_reasons.sort();
-    degraded_reasons.dedup();
-
-    let port_failure_count = failed_objects
-        .iter()
-        .filter(|failure| failure.resource_kind == "port")
-        .count();
-    let route_failure_count = failed_objects
-        .iter()
-        .filter(|failure| failure.resource_kind == "route_table")
-        .count();
-    let security_failure_count = failed_objects
-        .iter()
-        .filter(|failure| failure.resource_kind == "security_group")
-        .count();
-    let service_failure_count = failed_objects
-        .iter()
-        .filter(|failure| {
-            matches!(
-                failure.resource_kind.as_str(),
-                "health_check" | "backend_set" | "service"
-            )
-        })
-        .count();
-
     // --- IpGroup compilation ---
     let mut ip_groups = Vec::new();
+    let mut ip_group_numeric_ids = BTreeMap::new();
+    let mut failed_ip_group_ids = BTreeSet::new();
     let network_id_set: BTreeSet<&str> = network_by_id.keys().map(|s| s.as_str()).collect();
     for ip_group in &context.desired.ip_groups {
         if !network_id_set.contains(ip_group.spec.network_id.as_str()) {
             continue;
         }
         let numeric_id = stable_local_id(&ip_group.metadata.id);
+        if let Some(existing_id) = ip_group_numeric_ids.get(&numeric_id) {
+            failed_ip_group_ids.insert(ip_group.metadata.id.clone());
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "ip_group".to_string(),
+                id: ip_group.metadata.id.clone(),
+                reason: format!(
+                    "numeric id collision with ip_group '{}' at {}",
+                    existing_id, numeric_id
+                ),
+            });
+            continue;
+        }
+        ip_group_numeric_ids.insert(numeric_id, ip_group.metadata.id.clone());
         let mut cidrs = Vec::new();
         for cidr_str in &ip_group.spec.cidrs {
             match aria_core::ebpf_ops::parse_cidr(cidr_str) {
@@ -709,24 +785,126 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
     }
 
     // --- NetworkPolicy compilation ---
+    let max_port_policies = context
+        .capability
+        .limits
+        .get("max_port_policies")
+        .map(|value| (*value).min(u64::from(u32::MAX)) as u32)
+        .filter(|value| *value > 0)
+        .unwrap_or(16_384);
+    let mut used_bitmap_indices = BTreeMap::new();
+    let mut policy_keys = BTreeMap::new();
     let mut network_policies = Vec::new();
     for np in &context.desired.network_policies {
         if !network_id_set.contains(np.spec.network_id.as_str()) {
             continue;
         }
-        let rules: Vec<NetworkPolicyRuleIr> = np
-            .spec
-            .rules
-            .iter()
-            .map(|rule| NetworkPolicyRuleIr {
-                src_numeric_id: stable_local_id(&rule.src_ip_group_id),
-                dst_numeric_id: stable_local_id(&rule.dst_ip_group_id),
+        let mut rules = Vec::new();
+        for (rule_idx, rule) in np.spec.rules.iter().enumerate() {
+            if failed_ip_group_ids.contains(&rule.src_ip_group_id)
+                || failed_ip_group_ids.contains(&rule.dst_ip_group_id)
+            {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "network_policy".to_string(),
+                    id: np.metadata.id.clone(),
+                    reason: format!(
+                        "rules[{}] references an ip_group with a numeric id collision",
+                        rule_idx
+                    ),
+                });
+                continue;
+            }
+            let ports_normalized = match normalize_network_policy_ports(rule.ports.as_deref(), rule.action) {
+                Ok(ports) => ports,
+                Err(error) => {
+                    failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "network_policy".to_string(),
+                        id: np.metadata.id.clone(),
+                        reason: format!("rules[{}].ports: {}", rule_idx, error),
+                    });
+                    continue;
+                }
+            };
+            if ports_normalized.is_some() && rule.proto != 6 && rule.proto != 17 {
+                failed_objects.push(ApplyObjectFailure {
+                    resource_kind: "network_policy".to_string(),
+                    id: np.metadata.id.clone(),
+                    reason: format!(
+                        "rules[{}].ports require proto 6(TCP) or 17(UDP), got {}",
+                        rule_idx, rule.proto
+                    ),
+                });
+                continue;
+            }
+
+            let src_numeric_id = stable_local_id(&rule.src_ip_group_id);
+            let dst_numeric_id = stable_local_id(&rule.dst_ip_group_id);
+            let policy_key = (
+                np.spec.network_id.clone(),
+                src_numeric_id,
+                dst_numeric_id,
+                rule.proto,
+                rule.direction,
+            );
+            let policy_signature = (rule.action, ports_normalized.clone());
+            if let Some((owner, signature)) = policy_keys.get(&policy_key) {
+                if signature != &policy_signature {
+                    failed_objects.push(ApplyObjectFailure {
+                        resource_kind: "network_policy".to_string(),
+                        id: np.metadata.id.clone(),
+                        reason: format!(
+                            "rules[{}] conflicts with network_policy '{}' for the same src/dst/proto/direction key",
+                            rule_idx, owner
+                        ),
+                    });
+                } else {
+                    warnings.push(format!(
+                        "network_policy '{}': rules[{}] duplicates network_policy '{}' for the same src/dst/proto/direction key; skipping duplicate",
+                        np.metadata.id, rule_idx, owner
+                    ));
+                }
+                continue;
+            }
+
+            let bitmap_idx = if ports_normalized.is_some() {
+                match allocate_network_policy_bitmap_idx(
+                    &format!("network-policy:{}:rule:{}", np.metadata.id, rule_idx),
+                    max_port_policies,
+                    &mut used_bitmap_indices,
+                ) {
+                    Ok(idx) => Some(idx),
+                    Err(error) => {
+                        failed_objects.push(ApplyObjectFailure {
+                            resource_kind: "network_policy".to_string(),
+                            id: np.metadata.id.clone(),
+                            reason: format!("rules[{}].ports: {}", rule_idx, error),
+                        });
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            policy_keys.insert(policy_key, (np.metadata.id.clone(), policy_signature));
+            rules.push(NetworkPolicyRuleIr {
+                src_numeric_id,
+                dst_numeric_id,
                 proto: rule.proto,
                 direction: rule.direction,
                 action: rule.action,
                 ports: rule.ports.clone(),
-            })
-            .collect();
+                ports_normalized,
+                bitmap_idx,
+            });
+        }
+        if rules.is_empty() {
+            failed_objects.push(ApplyObjectFailure {
+                resource_kind: "network_policy".to_string(),
+                id: np.metadata.id.clone(),
+                reason: "no valid rules after compilation".to_string(),
+            });
+            continue;
+        }
         network_policies.push(NetworkPolicyIr {
             policy_id: np.metadata.id.clone(),
             network_id: np.spec.network_id.clone(),
@@ -821,6 +999,43 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
             ct_udp_ns: nc.spec.ct_udp_ns,
             ct_icmp_ns: nc.spec.ct_icmp_ns,
         });
+
+    let mut degraded_reasons = vec!["shadow_apply_only".to_string()];
+    if !failed_objects.is_empty() {
+        degraded_reasons.push("object_validation_failed".to_string());
+    }
+    if overlay_encap_unsupported {
+        degraded_reasons.push("overlay_encap_unsupported".to_string());
+    }
+    degraded_reasons.sort();
+    degraded_reasons.dedup();
+
+    let port_failure_count = failed_objects
+        .iter()
+        .filter(|failure| failure.resource_kind == "port")
+        .count();
+    let route_failure_count = failed_objects
+        .iter()
+        .filter(|failure| failure.resource_kind == "route_table")
+        .count();
+    let security_failure_count = failed_objects
+        .iter()
+        .filter(|failure| {
+            matches!(
+                failure.resource_kind.as_str(),
+                "security_group" | "ip_group" | "network_policy"
+            )
+        })
+        .count();
+    let service_failure_count = failed_objects
+        .iter()
+        .filter(|failure| {
+            matches!(
+                failure.resource_kind.as_str(),
+                "health_check" | "backend_set" | "service"
+            )
+        })
+        .count();
 
     let mut compiled_objects = BTreeMap::new();
     compiled_objects.insert("tenants".to_string(), context.desired.tenants.len());

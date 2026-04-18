@@ -264,6 +264,21 @@ pub(crate) fn materialize_phase3_maps(
                         runtime,
                         "",
                     );
+                    if let (Some(bitmap_idx), Some(ports)) = (
+                        prev_rule.bitmap_idx,
+                        prev_rule
+                            .ports_normalized
+                            .as_deref()
+                            .or(prev_rule.ports.as_deref()),
+                    ) {
+                        let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                        let _ = aria_core::ebpf_ops::delete_port_set(
+                            bitmap_idx,
+                            ports,
+                            runtime,
+                            "",
+                        );
+                    }
                 }
             }
         }
@@ -282,9 +297,9 @@ pub(crate) fn materialize_phase3_maps(
                     rule.dst_numeric_id,
                     rule.proto,
                     rule.action,
-                    rule.ports.as_deref(),
-                    None,  // bitmap_idx: not managed per-rule for Controller path
-                    false, // is_new_port_set: no bitmap to write without idx
+                    rule.ports_normalized.as_deref().or(rule.ports.as_deref()),
+                    rule.bitmap_idx,
+                    rule.bitmap_idx.is_some(),
                     rule.direction,
                     runtime,
                     "",

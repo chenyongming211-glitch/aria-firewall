@@ -105,6 +105,10 @@ pub(crate) struct NetworkPolicyRuleIr {
     pub(crate) direction: u8,
     pub(crate) action: u8,
     pub(crate) ports: Option<String>,
+    #[serde(default)]
+    pub(crate) ports_normalized: Option<String>,
+    #[serde(default)]
+    pub(crate) bitmap_idx: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
