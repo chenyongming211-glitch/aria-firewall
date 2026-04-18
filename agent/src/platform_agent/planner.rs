@@ -841,6 +841,52 @@ pub(crate) fn build_runtime_plan(
         });
     }
 
+    // --- MirrorPolicy map plan ---
+    let next_mirror_rule_count: usize = next_state
+        .mirror_policies
+        .iter()
+        .map(|mp| {
+            let tap_count = next_state
+                .port_identities
+                .iter()
+                .filter(|p| p.network_id == mp.network_id)
+                .count()
+                .max(1);
+            mp.rules.len() * tap_count
+        })
+        .sum();
+    let previous_mirror_rule_count: usize = previous_state
+        .map(|state| {
+            state
+                .mirror_policies
+                .iter()
+                .map(|mp| {
+                    let tap_count = state
+                        .port_identities
+                        .iter()
+                        .filter(|p| p.network_id == mp.network_id)
+                        .count()
+                        .max(1);
+                    mp.rules.len() * tap_count
+                })
+                .sum()
+        })
+        .unwrap_or(0);
+    if next_mirror_rule_count > 0 {
+        entries.push(MapPlanEntry {
+            map_family: "mirror_policy_map".to_string(),
+            operation: "refresh_shadow".to_string(),
+            object_count: next_mirror_rule_count,
+        });
+    }
+    if previous_mirror_rule_count > next_mirror_rule_count {
+        entries.push(MapPlanEntry {
+            map_family: "mirror_policy_map".to_string(),
+            operation: "cleanup_shadow".to_string(),
+            object_count: previous_mirror_rule_count - next_mirror_rule_count,
+        });
+    }
+
     let map_plan = MapPlan {
         generation: next_state.generation.clone(),
         compiled_at: next_state.compiled_at.clone(),

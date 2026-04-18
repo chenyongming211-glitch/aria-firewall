@@ -360,12 +360,13 @@ impl PlatformAgent {
                             route_v4 = result.route_v4_written,
                             route_v6 = result.route_v6_written,
                             qos_rules = result.qos_entries_written,
+                            mirror_rules = result.mirror_entries_written,
                             "materialized phase-3 iaas maps into eBPF datapath"
                         );
                         for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                             if matches!(
                                 domain.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes" | "qos"
+                                "identity" | "ports" | "security" | "routes" | "qos" | "mirror"
                             ) {
                                 domain.execution_status = "applied".to_string();
                                 domain.shadow_apply_only = false;

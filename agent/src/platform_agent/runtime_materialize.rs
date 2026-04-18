@@ -11,6 +11,7 @@ pub(crate) struct Phase3MaterializeResult {
     pub(crate) ip_group_entries_written: usize,
     pub(crate) policy_entries_written: usize,
     pub(crate) qos_entries_written: usize,
+    pub(crate) mirror_entries_written: usize,
 }
 
 pub(crate) fn clear_phase3_state_for_port(
@@ -398,6 +399,82 @@ pub(crate) fn materialize_phase3_maps(
         );
     }
 
+    // --- MirrorPolicy MIRROR_POLICY / MIRROR_GLOBAL materialization ---
+    // Clear previous Controller-written mirror entries.
+    if let Some(prev) = previous_state {
+        for prev_mp in &prev.mirror_policies {
+            for prev_rule in &prev_mp.rules {
+                for tap_id in &current_tap_ids {
+                    let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                    if prev_rule.is_global {
+                        let _ = aria_core::mirror_ops::delete_global_mirror(
+                            prev_rule.direction,
+                            runtime,
+                            false,
+                        );
+                    } else {
+                        let _ = aria_core::mirror_ops::delete_mirror_rule(
+                            prev_rule.src_numeric_id,
+                            prev_rule.dst_numeric_id,
+                            prev_rule.proto,
+                            prev_rule.direction,
+                            runtime,
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let mut mirror_entries_written = 0usize;
+    let mut has_any_mirror_rule = false;
+    for mp in &compiled_state.mirror_policies {
+        let tap_ids = match network_tap_ids.get(mp.network_id.as_str()) {
+            Some(ids) => ids,
+            None => continue,
+        };
+        for rule in &mp.rules {
+            has_any_mirror_rule = true;
+            for tap_id in tap_ids {
+                let runtime = TapMapRuntime::new(pin_path, *tap_id);
+                if rule.is_global {
+                    aria_core::mirror_ops::add_global_mirror(
+                        rule.direction,
+                        rule.target_ifindex,
+                        runtime,
+                        true,
+                    )?;
+                } else {
+                    aria_core::mirror_ops::add_mirror_rule(
+                        rule.src_numeric_id,
+                        rule.dst_numeric_id,
+                        rule.proto,
+                        rule.direction,
+                        rule.target_ifindex,
+                        runtime,
+                        true,
+                    )?;
+                }
+                mirror_entries_written += 1;
+            }
+        }
+    }
+    // Update mirror_enabled flag on each tap.
+    for tap_id in &current_tap_ids {
+        let runtime = TapMapRuntime::new(pin_path, *tap_id);
+        let _ = aria_core::ebpf_ops::update_runtime_config(
+            runtime,
+            None,
+            None,
+            None,
+            None,
+            Some(has_any_mirror_rule),
+            None,
+            None,
+            None,
+        );
+    }
+
     Ok(Phase3MaterializeResult {
         port_identities_written: compiled_state.port_identities.len(),
         anti_spoof_entries_written,
@@ -407,6 +484,7 @@ pub(crate) fn materialize_phase3_maps(
         ip_group_entries_written,
         policy_entries_written,
         qos_entries_written,
+        mirror_entries_written,
     })
 }
 

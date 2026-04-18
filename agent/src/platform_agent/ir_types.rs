@@ -126,6 +126,24 @@ pub(crate) struct QosPolicyRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MirrorPolicyIr {
+    pub(crate) policy_id: String,
+    pub(crate) network_id: String,
+    pub(crate) rules: Vec<MirrorPolicyRuleIr>,
+    pub(crate) shadow_apply_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MirrorPolicyRuleIr {
+    pub(crate) src_numeric_id: u32,
+    pub(crate) dst_numeric_id: u32,
+    pub(crate) proto: u8,
+    pub(crate) direction: u8,
+    pub(crate) target_ifindex: u32,
+    pub(crate) is_global: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SgRuleIr {
     pub(crate) port_id: String,
     pub(crate) tap_id: u32,
@@ -294,6 +312,8 @@ pub(crate) struct CompiledNodeState {
     pub(crate) network_policies: Vec<NetworkPolicyIr>,
     #[serde(default)]
     pub(crate) qos_policies: Vec<QosPolicyIr>,
+    #[serde(default)]
+    pub(crate) mirror_policies: Vec<MirrorPolicyIr>,
     pub(crate) health_checks: Vec<CompiledHealthCheckView>,
     pub(crate) backend_sets: Vec<CompiledBackendSetView>,
     pub(crate) services: Vec<CompiledServiceView>,

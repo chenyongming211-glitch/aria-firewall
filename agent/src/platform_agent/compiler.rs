@@ -784,6 +784,43 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
 
     compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
 
+    // --- MirrorPolicy compilation ---
+    let mut mirror_policies = Vec::new();
+    for mp in &context.desired.mirror_policies {
+        if !network_id_set.contains(mp.spec.network_id.as_str()) {
+            continue;
+        }
+        let rules: Vec<MirrorPolicyRuleIr> = mp
+            .spec
+            .rules
+            .iter()
+            .map(|rule| MirrorPolicyRuleIr {
+                src_numeric_id: if rule.src_ip_group_id == "any" {
+                    0
+                } else {
+                    stable_local_id(&rule.src_ip_group_id)
+                },
+                dst_numeric_id: if rule.dst_ip_group_id == "any" {
+                    0
+                } else {
+                    stable_local_id(&rule.dst_ip_group_id)
+                },
+                proto: rule.proto,
+                direction: rule.direction,
+                target_ifindex: rule.target_ifindex,
+                is_global: rule.is_global,
+            })
+            .collect();
+        mirror_policies.push(MirrorPolicyIr {
+            policy_id: mp.metadata.id.clone(),
+            network_id: mp.spec.network_id.clone(),
+            rules,
+            shadow_apply_only: true,
+        });
+    }
+
+    compiled_objects.insert("mirror_policies".to_string(), mirror_policies.len());
+
     let domain_summaries = vec![
         CompileDomainSummary {
             domain: "identity".to_string(),
@@ -868,6 +905,18 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
             },
             shadow_apply_only: true,
         },
+        CompileDomainSummary {
+            domain: "mirror".to_string(),
+            input_objects: context.desired.mirror_policies.len(),
+            compiled_objects: mirror_policies.len(),
+            failed_objects: 0,
+            status: if mirror_policies.is_empty() {
+                "shadow_reserved".to_string()
+            } else {
+                "shadow_ready".to_string()
+            },
+            shadow_apply_only: true,
+        },
     ];
 
     let compiled_at = unix_timestamp_string();
@@ -889,6 +938,7 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         ip_groups,
         network_policies,
         qos_policies,
+        mirror_policies,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,

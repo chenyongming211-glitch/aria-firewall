@@ -293,6 +293,7 @@ pub(crate) fn inventory_domain_from_map_family(map_family: &str) -> String {
         | "service_maglev_map" => "services".to_string(),
         "nat_program" => "nat".to_string(),
         "qos_config_map" | "qos_token_bucket_map" | "qos_stats_map" => "qos".to_string(),
+        "mirror_policy_map" | "mirror_global_map" => "mirror".to_string(),
         _ => "runtime".to_string(),
     }
 }
