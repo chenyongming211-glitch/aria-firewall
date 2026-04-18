@@ -1,8 +1,8 @@
 use aria_api::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
-    NetworkPolicyResource, NetworkResource, NodeResource, PortResource, QosPolicyResource,
-    RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
-    TenantResource, DesiredStatePublishRecord,
+    NetworkPolicyResource, NetworkResource, NodeConfigResource, NodeResource, PortResource,
+    QosPolicyResource, RouteTableResource, SecurityGroupResource, ServiceChainResource,
+    ServiceResource, TenantResource, DesiredStatePublishRecord,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -52,6 +52,8 @@ pub(crate) struct PersistedControllerState {
     pub(crate) health_checks: PersistedResourceStore<HealthCheckResource>,
     pub(crate) backend_sets: PersistedResourceStore<BackendSetResource>,
     pub(crate) services: PersistedResourceStore<ServiceResource>,
+    #[serde(default)]
+    pub(crate) node_configs: PersistedResourceStore<NodeConfigResource>,
     pub(crate) generation: u64,
     #[serde(default)]
     pub(crate) southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
@@ -74,6 +76,7 @@ impl Default for PersistedControllerState {
             health_checks: PersistedResourceStore::default(),
             backend_sets: PersistedResourceStore::default(),
             services: PersistedResourceStore::default(),
+            node_configs: PersistedResourceStore::default(),
             generation: 0,
             southbound_publishes: BTreeMap::new(),
         }

@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
     IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
-    NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse,
-    TenantResource,
+    NodeConfigResource, NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource,
+    RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
+    SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -559,6 +559,37 @@ impl ControllerStore for FileBackedControllerStore {
 
     async fn delete_service_chain(&self, id: &str) -> Result<ServiceChainResource, StoreError> {
         self.run_persisted(self.inner.delete_service_chain(id))
+            .await
+    }
+
+    // --- NodeConfig (Phase 3.9) ---
+    async fn list_node_configs(&self) -> Vec<NodeConfigResource> {
+        self.inner.list_node_configs().await
+    }
+
+    async fn get_node_config(&self, id: &str) -> Option<NodeConfigResource> {
+        self.inner.get_node_config(id).await
+    }
+
+    async fn create_node_config(
+        &self,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError> {
+        self.run_persisted(self.inner.create_node_config(resource))
+            .await
+    }
+
+    async fn update_node_config(
+        &self,
+        id: &str,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError> {
+        self.run_persisted(self.inner.update_node_config(id, resource))
+            .await
+    }
+
+    async fn delete_node_config(&self, id: &str) -> Result<NodeConfigResource, StoreError> {
+        self.run_persisted(self.inner.delete_node_config(id))
             .await
     }
 

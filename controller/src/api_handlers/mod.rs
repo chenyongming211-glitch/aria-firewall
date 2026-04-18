@@ -22,6 +22,7 @@ pub(crate) mod port;
 pub(crate) mod qos_policy;
 pub(crate) mod mirror_policy;
 pub(crate) mod service_chain;
+pub(crate) mod node_config;
 pub(crate) mod route_table;
 pub(crate) mod security_group;
 pub(crate) mod service;
@@ -58,6 +59,10 @@ pub use self::{
     service_chain::{
         create_service_chain, delete_service_chain, get_service_chain, list_service_chains,
         update_service_chain,
+    },
+    node_config::{
+        create_node_config, delete_node_config, get_node_config, list_node_configs,
+        update_node_config,
     },
     route_table::{
         create_route_table, delete_route_table, get_route_table, list_route_tables,

@@ -1,10 +1,10 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
     HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
-    NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest,
-    PortResource, QosPolicyResource, RouteTableResource, SecurityGroupResource,
-    ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus,
-    TenantResource,
+    NetworkResource, NodeCapability, NodeConfigResource, NodeHealthReport, NodeInfo,
+    NodeRegisterRequest, PortResource, QosPolicyResource, RouteTableResource,
+    SecurityGroupResource, ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse,
+    SouthboundSyncStatus, TenantResource,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
@@ -36,6 +36,7 @@ impl InMemoryControllerStore {
         health_checks: &[HealthCheckResource],
         backend_sets: &[BackendSetResource],
         services: &[ServiceResource],
+        node_configs: &[NodeConfigResource],
         deletes: usize,
     ) -> BTreeMap<String, usize> {
         BTreeMap::from([
@@ -52,6 +53,7 @@ impl InMemoryControllerStore {
             ("health_checks".to_string(), health_checks.len()),
             ("backend_sets".to_string(), backend_sets.len()),
             ("services".to_string(), services.len()),
+            ("node_configs".to_string(), node_configs.len()),
             ("deletes".to_string(), deletes),
         ])
     }
@@ -286,6 +288,7 @@ impl InMemoryControllerStore {
             health_checks: self.health_checks.snapshot().await,
             backend_sets: self.backend_sets.snapshot().await,
             services: self.services.snapshot().await,
+            node_configs: self.node_configs.snapshot().await,
             generation: self.generation.load(Ordering::Relaxed),
             southbound_publishes: self.southbound_publishes.read().await.clone(),
         }
@@ -308,6 +311,7 @@ impl InMemoryControllerStore {
         self.health_checks.restore(snapshot.health_checks).await;
         self.backend_sets.restore(snapshot.backend_sets).await;
         self.services.restore(snapshot.services).await;
+        self.node_configs.restore(snapshot.node_configs).await;
         self.generation
             .store(snapshot.generation, Ordering::Relaxed);
         *self.southbound_publishes.write().await = snapshot.southbound_publishes;
@@ -641,6 +645,14 @@ impl InMemoryControllerStore {
             })
             .collect::<Vec<_>>();
 
+        let node_configs = self
+            .node_configs
+            .list()
+            .await
+            .into_iter()
+            .filter(|nc| nc.spec.node_id == node_id)
+            .collect::<Vec<_>>();
+
         let tenants = self
             .tenants
             .list()
@@ -663,6 +675,7 @@ impl InMemoryControllerStore {
             &health_checks,
             &backend_sets,
             &services,
+            &node_configs,
             0,
         );
         let generation = self.current_generation_inner();
@@ -690,6 +703,7 @@ impl InMemoryControllerStore {
                 health_checks,
                 backend_sets,
                 services,
+                node_configs,
                 deletes: Vec::new(),
             },
             changed,

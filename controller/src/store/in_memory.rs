@@ -1,9 +1,9 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
     IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
-    NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse,
-    TenantResource,
+    NodeConfigResource, NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource,
+    RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
+    SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -28,6 +28,7 @@ pub struct InMemoryControllerStore {
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
+    pub node_configs: ResourceStore<NodeConfigResource>,
     pub(crate) generation: AtomicU64,
     // High-frequency southbound runtime stays in memory so heartbeat/status
     // updates do not rewrite the controller snapshot on every report.
@@ -53,6 +54,7 @@ impl InMemoryControllerStore {
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
+            node_configs: ResourceStore::new("node_config", "ncfg"),
             generation: AtomicU64::new(0),
             southbound_nodes: RwLock::new(BTreeMap::new()),
             southbound_publishes: RwLock::new(BTreeMap::new()),
@@ -91,6 +93,7 @@ impl InMemoryControllerStore {
         );
         counts.insert("backend_sets".to_string(), self.backend_sets.count().await);
         counts.insert("services".to_string(), self.services.count().await);
+        counts.insert("node_configs".to_string(), self.node_configs.count().await);
         counts
     }
 
@@ -825,6 +828,54 @@ impl ControllerStore for InMemoryControllerStore {
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
         self.run_mutation(async { self.delete_resource(&self.services, id).await })
             .await
+    }
+
+    // --- NodeConfig (Phase 3.9) ---
+    async fn list_node_configs(&self) -> Vec<NodeConfigResource> {
+        self.list_resource(&self.node_configs).await
+    }
+
+    async fn get_node_config(&self, id: &str) -> Option<NodeConfigResource> {
+        self.get_resource(&self.node_configs, id).await
+    }
+
+    async fn create_node_config(
+        &self,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError> {
+        self.run_mutation(async {
+            self.validate_node_config_resource_inner(&resource, None).await?;
+            self.create_resource(&self.node_configs, resource).await
+        })
+        .await
+    }
+
+    async fn update_node_config(
+        &self,
+        id: &str,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError> {
+        self.run_mutation(async {
+            self
+                .node_configs
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "node_config",
+                    id: id.to_string(),
+                })?;
+            self.validate_node_config_resource_inner(&resource, Some(id)).await?;
+            self.update_resource(&self.node_configs, id, resource).await
+        })
+        .await
+    }
+
+    async fn delete_node_config(&self, id: &str) -> Result<NodeConfigResource, StoreError> {
+        self.run_mutation(async {
+            self.ensure_node_config_delete_allowed_inner(id).await?;
+            self.delete_resource(&self.node_configs, id).await
+        })
+        .await
     }
 
     async fn list_nodes(&self) -> Vec<NodeResource> {

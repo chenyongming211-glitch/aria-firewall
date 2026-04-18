@@ -20,6 +20,7 @@ pub mod network_policy;
 pub mod qos_policy;
 pub mod mirror_policy;
 pub mod service_chain;
+pub mod node_config;
 
 pub use metadata::*;
 pub use query_types::*;
@@ -37,6 +38,7 @@ pub use network_policy::*;
 pub use qos_policy::*;
 pub use mirror_policy::*;
 pub use service_chain::*;
+pub use node_config::*;
 
 // ── Platform-level Error & Health ──
 

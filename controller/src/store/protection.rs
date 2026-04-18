@@ -186,6 +186,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(node_config) = self
+            .node_configs
+            .list()
+            .await
+            .into_iter()
+            .find(|nc| nc.spec.node_id == node_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "node",
+                id: node_id.to_string(),
+                dependent_resource: "node_config",
+                dependent_id: node_config.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -604,6 +619,14 @@ impl InMemoryControllerStore {
         _service_chain_id: &str,
     ) -> Result<(), StoreError> {
         // No resources currently depend on service_chain.
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_node_config_delete_allowed_inner(
+        &self,
+        _node_config_id: &str,
+    ) -> Result<(), StoreError> {
+        // No resources currently depend on node_config.
         Ok(())
     }
 }

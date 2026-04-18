@@ -74,6 +74,11 @@ use utoipa::OpenApi;
         crate::api_handlers::service::get_service,
         crate::api_handlers::service::update_service,
         crate::api_handlers::service::delete_service,
+        crate::api_handlers::node_config::list_node_configs,
+        crate::api_handlers::node_config::create_node_config,
+        crate::api_handlers::node_config::get_node_config,
+        crate::api_handlers::node_config::update_node_config,
+        crate::api_handlers::node_config::delete_node_config,
         crate::southbound_handlers::register_node,
         crate::southbound_handlers::desired_state,
         crate::southbound_handlers::apply_status,
@@ -194,6 +199,13 @@ use utoipa::OpenApi;
             aria_api::CreateServiceRequest,
             aria_api::UpdateServiceRequest,
             aria_api::ServiceListResponse,
+            aria_api::NodeConfigSpec,
+            aria_api::NodeConfigStatus,
+            aria_api::NodeConfigResource,
+            aria_api::NodeConfigListQuery,
+            aria_api::CreateNodeConfigRequest,
+            aria_api::UpdateNodeConfigRequest,
+            aria_api::NodeConfigListResponse,
             aria_api::MessageResponse,
             aria_api::NodeAddress,
             aria_api::NodeInfo,
@@ -228,6 +240,7 @@ use utoipa::OpenApi;
         (name = "health-checks", description = "Health check policy resources"),
         (name = "backend-sets", description = "Backend member set resources"),
         (name = "services", description = "L4 service and VIP resources"),
+        (name = "node-configs", description = "Per-node feature toggle and conntrack timeout resources"),
         (name = "southbound", description = "Controller-agent desired-state and status exchange")
     )
 )]
@@ -254,6 +267,7 @@ mod tests {
         assert!(doc.pointer("/paths/~1api~1v1~1health-checks").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1backend-sets").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1services").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1node-configs").is_some());
         assert!(doc
             .pointer("/paths/~1api~1v1~1southbound~1nodes~1{id}~1register")
             .is_some());
@@ -307,6 +321,9 @@ mod tests {
             .is_some());
         assert!(doc.pointer("/components/schemas/ServiceResource").is_some());
         assert!(doc
+            .pointer("/components/schemas/NodeConfigResource")
+            .is_some());
+        assert!(doc
             .pointer("/components/schemas/DesiredStateEnvelope")
             .is_some());
         assert!(doc
@@ -323,6 +340,9 @@ mod tests {
             .is_some());
         assert!(doc
             .pointer("/components/schemas/DesiredStateEnvelope/properties/services")
+            .is_some());
+        assert!(doc
+            .pointer("/components/schemas/DesiredStateEnvelope/properties/node_configs")
             .is_some());
         assert!(doc
             .pointer("/components/schemas/DesiredStatePublishRecord")

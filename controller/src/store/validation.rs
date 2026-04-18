@@ -1,7 +1,8 @@
 use aria_api::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
-    NetworkPolicyResource, NetworkResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceChainResource, ServiceResource, TenantResource, NodeResource,
+    NetworkPolicyResource, NetworkResource, NodeConfigResource, PortResource, QosPolicyResource,
+    RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
+    TenantResource, NodeResource,
 };
 use std::collections::BTreeSet;
 use std::net::IpAddr;
@@ -695,6 +696,66 @@ impl InMemoryControllerStore {
                 });
             }
         }
+        Ok(())
+    }
+
+    pub(crate) async fn validate_node_config_resource_inner(
+        &self,
+        resource: &NodeConfigResource,
+        self_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        // Validate node_id references an existing node.
+        self.ensure_node_exists_inner(&resource.spec.node_id, "node_config", "node_id")
+            .await?;
+
+        // Enforce uniqueness: only one NodeConfig per node_id.
+        for existing in self.node_configs.list().await {
+            if existing.spec.node_id == resource.spec.node_id {
+                let is_self = self_id
+                    .map(|id| existing.metadata.id == id)
+                    .unwrap_or(false);
+                if !is_self {
+                    return Err(StoreError::AlreadyExists {
+                        resource: "node_config",
+                        id: format!(
+                            "node_id '{}'",
+                            resource.spec.node_id
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Validate CT timeout values are > 0 if provided.
+        if let Some(val) = resource.spec.ct_tcp_established_ns {
+            if val == 0 {
+                return Err(StoreError::BadRequest(
+                    "ct_tcp_established_ns must be > 0".to_string(),
+                ));
+            }
+        }
+        if let Some(val) = resource.spec.ct_tcp_new_ns {
+            if val == 0 {
+                return Err(StoreError::BadRequest(
+                    "ct_tcp_new_ns must be > 0".to_string(),
+                ));
+            }
+        }
+        if let Some(val) = resource.spec.ct_udp_ns {
+            if val == 0 {
+                return Err(StoreError::BadRequest(
+                    "ct_udp_ns must be > 0".to_string(),
+                ));
+            }
+        }
+        if let Some(val) = resource.spec.ct_icmp_ns {
+            if val == 0 {
+                return Err(StoreError::BadRequest(
+                    "ct_icmp_ns must be > 0".to_string(),
+                ));
+            }
+        }
+
         Ok(())
     }
 }

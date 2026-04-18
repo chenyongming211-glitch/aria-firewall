@@ -1,9 +1,10 @@
 use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope,
     HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
-    NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource,
-    PortResource, QosPolicyResource, ResourceMetadata, RouteTableResource, SecurityGroupResource,
-    ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
+    NetworkResource, NodeCapability, NodeConfigResource, NodeHealthReport, NodeInfo,
+    NodeRegisterRequest, NodeResource, PortResource, QosPolicyResource, ResourceMetadata,
+    RouteTableResource, SecurityGroupResource, ServiceChainResource, ServiceResource,
+    SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,7 @@ impl_stored_resource!(ServiceChainResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
+impl_stored_resource!(NodeConfigResource);
 
 #[derive(Debug, Clone)]
 pub enum StoreError {
@@ -309,6 +311,20 @@ pub trait ControllerStore: Send + Sync {
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError>;
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError>;
+
+    // --- NodeConfig (Phase 3.9) ---
+    async fn list_node_configs(&self) -> Vec<NodeConfigResource>;
+    async fn get_node_config(&self, id: &str) -> Option<NodeConfigResource>;
+    async fn create_node_config(
+        &self,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError>;
+    async fn update_node_config(
+        &self,
+        id: &str,
+        resource: NodeConfigResource,
+    ) -> Result<NodeConfigResource, StoreError>;
+    async fn delete_node_config(&self, id: &str) -> Result<NodeConfigResource, StoreError>;
 
     async fn record_registration(
         &self,

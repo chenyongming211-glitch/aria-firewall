@@ -153,6 +153,16 @@ pub fn build_router(store: SharedStore) -> Router {
                 .delete(api_handlers::delete_service),
         )
         .route(
+            "/api/v1/node-configs",
+            get(api_handlers::list_node_configs).post(api_handlers::create_node_config),
+        )
+        .route(
+            "/api/v1/node-configs/{id}",
+            get(api_handlers::get_node_config)
+                .put(api_handlers::update_node_config)
+                .delete(api_handlers::delete_node_config),
+        )
+        .route(
             "/api/v1/southbound/nodes/{id}/register",
             post(southbound_handlers::register_node),
         )
