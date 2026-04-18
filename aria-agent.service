@@ -15,7 +15,7 @@ LimitMEMLOCK=infinity
 
 # Security hardening
 ProtectSystem=strict
-ReadWritePaths=/sys/fs/bpf /var/lib/aria-agent
+ReadWritePaths=/sys/fs/bpf /var/lib/aria-agent /var/log/aria-agent
 ProtectHome=yes
 
 [Install]

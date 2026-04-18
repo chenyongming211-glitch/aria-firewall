@@ -12,13 +12,22 @@ STATE_DIR="/var/lib/aria-agent"
 LOG_DIR="/var/log/aria-agent"
 LOG_FILE="$LOG_DIR/aria-agent.log"
 LOGROTATE_FILE="/etc/logrotate.d/aria-agent"
+CONTROLLER_CONFIG_DIR="/etc/aria-controller"
+CONTROLLER_ENV_FILE="$CONTROLLER_CONFIG_DIR/controller.env"
+CONTROLLER_STATE_DIR="/var/lib/aria-controller"
+CONTROLLER_STATE_FILE="$CONTROLLER_STATE_DIR/controller-state.json"
+CONTROLLER_LOG_DIR="/var/log/aria-controller"
+CONTROLLER_LOG_FILE="$CONTROLLER_LOG_DIR/aria-controller.log"
+CONTROLLER_LOGROTATE_FILE="/etc/logrotate.d/aria-controller"
 PIN_ROOT="/sys/fs/bpf"
 PIN_DIR="$PIN_ROOT/aria"
 SYSTEMD_UNIT="/etc/systemd/system/aria-agent.service"
+CONTROLLER_SYSTEMD_UNIT="/etc/systemd/system/aria-controller.service"
 
 ZIP_PATH=""
 FORCE_CONFIG=0
 NO_START=0
+START_CONTROLLER=0
 
 cleanup() {
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
@@ -48,17 +57,20 @@ Aria Firewall 一键安装/更新脚本
   sudo ./install.sh
   sudo ./install.sh --zip /path/to/firewall-binaries-x86_64.zip
   sudo ./install.sh --force-config
+  sudo ./install.sh --start-controller
   sudo ./install.sh --no-start
 
 说明:
   - 默认会在脚本同目录自动查找 firewall-binaries*.zip
   - 默认保留已有 /etc/aria-agent/config.toml
-  - 默认会安装/更新 aria-agent、ariactl、libebpf_firewall.so、
-    libebpf_firewall_perf.so，并重启 aria-agent 服务
+  - 默认会安装/更新 aria-agent、aria-controller、ariactl、
+    libebpf_firewall.so、libebpf_firewall_perf.so，并重启 aria-agent 服务
+  - 默认只安装 aria-controller.service，不启用/启动；需要时传入 --start-controller
 
 选项:
   --zip PATH         指定 release zip 路径
   --force-config     覆盖生成默认 /etc/aria-agent/config.toml
+  --start-controller  启用并启动/重启 aria-controller.service
   --no-start         只安装，不启动/重启服务
   -h, --help         显示帮助
 EOF
@@ -78,6 +90,10 @@ parse_args() {
                 ;;
             --force-config)
                 FORCE_CONFIG=1
+                shift
+                ;;
+            --start-controller)
+                START_CONTROLLER=1
                 shift
                 ;;
             --no-start)
@@ -194,7 +210,7 @@ unpack_release() {
     unzip -q "$ZIP_PATH" -d "$TMP_DIR"
 
     local file
-    for file in aria-agent ariactl libebpf_firewall.so libebpf_firewall_perf.so; do
+    for file in aria-agent aria-controller ariactl libebpf_firewall.so libebpf_firewall_perf.so; do
         [[ -f "$TMP_DIR/$file" ]] || die "release 包缺少文件: $file"
     done
 }
@@ -206,12 +222,16 @@ backup_existing() {
 
     local -a paths=(
         "$INSTALL_BIN_DIR/aria-agent"
+        "$INSTALL_BIN_DIR/aria-controller"
         "$INSTALL_BIN_DIR/ariactl"
         "$INSTALL_LIB_DIR/libebpf_firewall.so"
         "$INSTALL_LIB_DIR/libebpf_firewall_perf.so"
         "$SYSTEMD_UNIT"
+        "$CONTROLLER_SYSTEMD_UNIT"
         "$CONFIG_FILE"
+        "$CONTROLLER_ENV_FILE"
         "$LOGROTATE_FILE"
+        "$CONTROLLER_LOGROTATE_FILE"
     )
 
     local path
@@ -248,7 +268,30 @@ User=root
 Group=root
 LimitMEMLOCK=infinity
 ProtectSystem=strict
-ReadWritePaths=/sys/fs/bpf /var/lib/aria-agent /var/log
+ReadWritePaths=/sys/fs/bpf /var/lib/aria-agent /var/log/aria-agent
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_controller_systemd_unit() {
+    cat >"$CONTROLLER_SYSTEMD_UNIT" <<'EOF'
+[Unit]
+Description=Aria Firewall Controller
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/aria-controller/controller.env
+ExecStart=/usr/local/bin/aria-controller
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aria-controller /var/log/aria-controller
 ProtectHome=yes
 
 [Install]
@@ -259,6 +302,21 @@ EOF
 write_logrotate_config() {
     cat >"$LOGROTATE_FILE" <<EOF
 $LOG_FILE {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0640 root root
+}
+EOF
+}
+
+write_controller_logrotate_config() {
+    cat >"$CONTROLLER_LOGROTATE_FILE" <<EOF
+$CONTROLLER_LOG_FILE {
     daily
     rotate 14
     missingok
@@ -287,12 +345,34 @@ log_file_path = "/var/log/aria-agent/aria-agent.log"
 EOF
 }
 
+write_default_controller_env() {
+    cat >"$CONTROLLER_ENV_FILE" <<EOF
+ARIA_CONTROLLER_BIND=127.0.0.1:8180
+ARIA_CONTROLLER_STATE_PATH=$CONTROLLER_STATE_FILE
+ARIA_CONTROLLER_LOG_FORMAT=text
+ARIA_CONTROLLER_LOG_FILTER=info
+ARIA_CONTROLLER_LOG_FILE_PATH=$CONTROLLER_LOG_FILE
+EOF
+}
+
 install_files() {
-    mkdir -p "$INSTALL_BIN_DIR" "$INSTALL_LIB_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
+    mkdir -p \
+        "$INSTALL_BIN_DIR" \
+        "$INSTALL_LIB_DIR" \
+        "$CONFIG_DIR" \
+        "$STATE_DIR" \
+        "$LOG_DIR" \
+        "$CONTROLLER_CONFIG_DIR" \
+        "$CONTROLLER_STATE_DIR" \
+        "$CONTROLLER_LOG_DIR"
     chmod 0755 "$LOG_DIR"
+    chmod 0755 "$CONTROLLER_LOG_DIR"
 
     log "安装 aria-agent 到 $INSTALL_BIN_DIR"
     install -m 0755 "$TMP_DIR/aria-agent" "$INSTALL_BIN_DIR/aria-agent"
+
+    log "安装 aria-controller 到 $INSTALL_BIN_DIR"
+    install -m 0755 "$TMP_DIR/aria-controller" "$INSTALL_BIN_DIR/aria-controller"
 
     log "安装 ariactl 到 $INSTALL_BIN_DIR"
     install -m 0755 "$TMP_DIR/ariactl" "$INSTALL_BIN_DIR/ariactl"
@@ -306,8 +386,14 @@ install_files() {
     log "写入/更新 systemd 单元: $SYSTEMD_UNIT"
     write_systemd_unit
 
+    log "写入/更新 controller systemd 单元: $CONTROLLER_SYSTEMD_UNIT"
+    write_controller_systemd_unit
+
     log "写入/更新 logrotate 配置: $LOGROTATE_FILE"
     write_logrotate_config
+
+    log "写入/更新 controller logrotate 配置: $CONTROLLER_LOGROTATE_FILE"
+    write_controller_logrotate_config
 
     if [[ ! -f "$CONFIG_FILE" || "$FORCE_CONFIG" -eq 1 ]]; then
         log "写入默认配置: $CONFIG_FILE"
@@ -315,12 +401,20 @@ install_files() {
     else
         log "保留现有配置: $CONFIG_FILE"
     fi
+
+    if [[ ! -f "$CONTROLLER_ENV_FILE" || "$FORCE_CONFIG" -eq 1 ]]; then
+        log "写入默认 controller 环境配置: $CONTROLLER_ENV_FILE"
+        write_default_controller_env
+    else
+        log "保留现有 controller 环境配置: $CONTROLLER_ENV_FILE"
+    fi
 }
 
 show_installed_hashes() {
     log "安装后的文件校验:"
     sha256sum \
         "$INSTALL_BIN_DIR/aria-agent" \
+        "$INSTALL_BIN_DIR/aria-controller" \
         "$INSTALL_BIN_DIR/ariactl" \
         "$INSTALL_LIB_DIR/libebpf_firewall.so" \
         "$INSTALL_LIB_DIR/libebpf_firewall_perf.so" | sed 's/^/  /'
@@ -328,7 +422,7 @@ show_installed_hashes() {
 
 restart_service() {
     if ! command -v systemctl >/dev/null 2>&1; then
-        warn "系统没有 systemctl，已完成文件安装，请手动启动: /usr/local/bin/aria-agent --config $CONFIG_FILE"
+        warn "系统没有 systemctl，已完成文件安装，请手动启动 aria-agent；如需 controller，请手动启动 /usr/local/bin/aria-controller"
         return 0
     fi
 
@@ -338,8 +432,13 @@ restart_service() {
     log "启用 aria-agent.service"
     systemctl enable aria-agent.service >/dev/null
 
+    if [[ "$START_CONTROLLER" -eq 1 ]]; then
+        log "启用 aria-controller.service"
+        systemctl enable aria-controller.service >/dev/null
+    fi
+
     if [[ "$NO_START" -eq 1 ]]; then
-        warn "按 --no-start 跳过 aria-agent 启动/重启"
+        warn "按 --no-start 跳过服务启动/重启"
         return 0
     fi
 
@@ -348,6 +447,15 @@ restart_service() {
         warn "aria-agent 启动失败，最近日志如下:"
         journalctl -u aria-agent.service -n 50 --no-pager || true
         exit 1
+    fi
+
+    if [[ "$START_CONTROLLER" -eq 1 ]]; then
+        log "重启 aria-controller.service"
+        if ! systemctl restart aria-controller.service; then
+            warn "aria-controller 启动失败，最近日志如下:"
+            journalctl -u aria-controller.service -n 50 --no-pager || true
+            exit 1
+        fi
     fi
 
     local attempt
@@ -382,7 +490,9 @@ main() {
     printf '  2. 检查健康状态: ariactl health\n'
     printf '  3. 查看 journald 日志: journalctl -u aria-agent -n 50 --no-pager\n'
     printf '  4. 查看文件日志: tail -n 50 %s\n' "$LOG_FILE"
-    printf '  5. 如需首次部署，确认 /etc/aria-agent/config.toml 中的 iface_pattern\n'
+    printf '  5. 查看 controller 文件日志: tail -n 50 %s\n' "$CONTROLLER_LOG_FILE"
+    printf '  6. 如需启动 controller: systemctl enable --now aria-controller.service\n'
+    printf '  7. 如需首次部署，确认 /etc/aria-agent/config.toml 中的 iface_pattern\n'
     printf '\n'
 }
 

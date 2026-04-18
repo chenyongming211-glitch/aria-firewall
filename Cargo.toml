@@ -1,5 +1,5 @@
 [workspace]
-members = ["user", "ebpf", "core", "agent", "api", "controller"]
+members = ["user", "ebpf", "core", "agent", "api", "controller", "logging"]
 resolver = "2"
 
 [workspace.package]
@@ -25,6 +25,7 @@ libc = "0.2"
 fslock = "0.2"
 aria-core = { path = "core" }
 aria-api = { path = "api" }
+aria-logging = { path = "logging" }
 rtnetlink = "0.14"
 netlink-packet-route = "0.19"
 netlink-packet-core = "0.7"

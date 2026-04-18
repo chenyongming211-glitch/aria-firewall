@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 aria-core.workspace = true
 aria-api.workspace = true
+aria-logging.workspace = true
 aya = { workspace = true, features = ["async_tokio"] }
 aya-obj.workspace = true
 clap.workspace = true

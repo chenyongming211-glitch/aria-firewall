@@ -1,0 +1,18 @@
+[Unit]
+Description=Aria Firewall Controller
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/aria-controller/controller.env
+ExecStart=/usr/local/bin/aria-controller
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aria-controller /var/log/aria-controller
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

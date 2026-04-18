@@ -128,10 +128,10 @@ sudo ./install.sh
 - 检测 root、内核版本、BTF、bpffs
 - 解压 zip 并校验 release 产物
 - 备份当前安装
-- 安装/更新 `aria-agent`、`ariactl`、`libebpf_firewall.so`、`libebpf_firewall_perf.so`
-- 写入/更新 `aria-agent.service`
+- 安装/更新 `aria-agent`、`aria-controller`、`ariactl`、`libebpf_firewall.so`、`libebpf_firewall_perf.so`
+- 写入/更新 `aria-agent.service`、`aria-controller.service` 和 logrotate 配置
 - 首次创建默认 `/etc/aria-agent/config.toml`
-- 重启 `aria-agent` 并做健康检查
+- 重启 `aria-agent` 并做健康检查；controller 默认只安装，传入 `--start-controller` 才会启动
 
 常用参数：
 
@@ -141,6 +141,9 @@ sudo ./install.sh --zip /path/to/firewall-binaries-x86_64.zip
 
 # 覆盖默认配置
 sudo ./install.sh --force-config
+
+# 同时启用并启动 controller
+sudo ./install.sh --start-controller
 
 # 只安装，不启动服务
 sudo ./install.sh --no-start
@@ -157,10 +160,11 @@ unzip firewall-binaries-x86_64.zip -d /tmp/aria
 
 # 安装
 sudo cp /tmp/aria/aria-agent /usr/local/bin/
+sudo cp /tmp/aria/aria-controller /usr/local/bin/
 sudo cp /tmp/aria/ariactl /usr/local/bin/
 sudo cp /tmp/aria/libebpf_firewall.so /usr/local/lib/
 sudo cp /tmp/aria/libebpf_firewall_perf.so /usr/local/lib/
-sudo chmod +x /usr/local/bin/aria-agent /usr/local/bin/ariactl
+sudo chmod +x /usr/local/bin/aria-agent /usr/local/bin/aria-controller /usr/local/bin/ariactl
 
 # 创建配置（首次）
 sudo mkdir -p /etc/aria-agent
@@ -198,6 +202,14 @@ tail -f /var/log/aria-agent/aria-agent.log
 ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
 ARIA_CONTROLLER_LOG_FILTER=info
 ARIA_CONTROLLER_LOG_FORMAT=text
+```
+
+systemd 部署时建议使用：
+
+```bash
+sudo systemctl enable --now aria-controller.service
+journalctl -u aria-controller -f
+tail -f /var/log/aria-controller/aria-controller.log
 ```
 
 API 文档入口：

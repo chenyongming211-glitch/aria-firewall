@@ -58,10 +58,11 @@ wget https://github.com/chenyongming211-glitch/aria-firewall/releases/latest/dow
 unzip firewall-binaries-x86_64.zip -d /tmp/aria
 
 sudo cp /tmp/aria/aria-agent /usr/local/bin/
+sudo cp /tmp/aria/aria-controller /usr/local/bin/
 sudo cp /tmp/aria/ariactl /usr/local/bin/
 sudo cp /tmp/aria/libebpf_firewall.so /usr/local/lib/
 sudo cp /tmp/aria/libebpf_firewall_perf.so /usr/local/lib/
-sudo chmod +x /usr/local/bin/aria-agent /usr/local/bin/ariactl
+sudo chmod +x /usr/local/bin/aria-agent /usr/local/bin/aria-controller /usr/local/bin/ariactl
 ```
 
 首次配置：
@@ -130,6 +131,20 @@ controller 可通过环境变量调整日志：
 - `ARIA_CONTROLLER_LOG_FORMAT`
   - `text`
   - `json`
+
+systemd 部署时，controller 默认环境文件建议放在：
+
+- `/etc/aria-controller/controller.env`
+
+常用内容：
+
+```bash
+ARIA_CONTROLLER_BIND=127.0.0.1:8180
+ARIA_CONTROLLER_STATE_PATH=/var/lib/aria-controller/controller-state.json
+ARIA_CONTROLLER_LOG_FORMAT=text
+ARIA_CONTROLLER_LOG_FILTER=info
+ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
+```
 
 ### 2.3 启动与版本确认
 
