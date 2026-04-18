@@ -118,6 +118,7 @@ fn temp_snapshot_path(path: &Path) -> PathBuf {
     tmp
 }
 
+#[allow(unused_macros)]
 macro_rules! impl_file_backed_resource_methods {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $ty:ty) => {
         async fn $list(&self) -> Vec<$ty> {

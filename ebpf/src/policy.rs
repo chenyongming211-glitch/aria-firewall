@@ -23,6 +23,7 @@ pub struct PolicyArgs {
 
 /// Check if ACL (policy evaluation) is enabled.
 /// When disabled, all traffic is passed without policy evaluation.
+#[allow(dead_code)]
 #[inline(always)]
 pub fn acl_enabled(tap_id: u32) -> bool {
     crate::runtime::acl_enabled(tap_id)

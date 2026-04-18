@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use aria_api::{
-    ApplyDomainStatus, ApplyObjectFailure, ApplyStatusReport, ApplyStatusResponse,
-    NodeCapability, PlatformApiError,
+    ApplyDomainStatus, ApplyObjectFailure, ApplyStatusReport,
+    NodeCapability,
 };
-use tracing::{debug, info, warn};
+use tracing::debug;
 
-use super::helpers::{self, capability_profile, hostname, unix_timestamp_string};
+use super::helpers::{capability_profile, unix_timestamp_string};
 use super::ir_builders::*;
 use super::ir_types::*;
 use super::planner::{

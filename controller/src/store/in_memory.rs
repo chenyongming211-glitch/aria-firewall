@@ -6,7 +6,7 @@ use aria_api::{
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use tokio::sync::{Mutex, RwLock};
 
 use super::resource_store::ResourceStore;
@@ -146,6 +146,7 @@ impl InMemoryControllerStore {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! impl_resource_methods {
     ($list:ident, $get:ident, $create:ident, $update:ident, $delete:ident, $ty:ty, $field:ident) => {
         async fn $list(&self) -> Vec<$ty> {

@@ -144,6 +144,7 @@ impl InMemoryControllerStore {
             })
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn ensure_ip_group_exists_inner(
         &self,
         ip_group_id: &str,

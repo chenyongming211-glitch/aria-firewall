@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use aria_api::{
-    ApplyStatusReport, DesiredStateEnvelope, HeartbeatResponse, NodeAddress, NodeCapability,
+    HeartbeatResponse, NodeAddress, NodeCapability,
     NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeRegisterResponse,
 };
 use tokio::task::JoinHandle;

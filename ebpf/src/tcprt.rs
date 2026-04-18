@@ -7,6 +7,7 @@ use crate::common::{
 use crate::maps::{TCPRT_TABLE_V4, TCPRT_TABLE_V6, TCPRT_VALUE_BUF};
 use crate::parser::PacketInfo;
 
+#[allow(dead_code)]
 #[inline(always)]
 pub fn tcprt_enabled(tap_id: u32) -> bool {
     crate::runtime::tcprt_enabled(tap_id)

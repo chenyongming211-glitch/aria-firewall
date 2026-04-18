@@ -5,6 +5,7 @@ use crate::maps::{
 use aya_ebpf::helpers::gen::bpf_clone_redirect;
 
 /// Check if mirror is globally enabled via FIREWALL_CONFIG.
+#[allow(dead_code)]
 #[inline(always)]
 pub fn mirror_enabled(tap_id: u32) -> bool {
     crate::runtime::mirror_enabled(tap_id)

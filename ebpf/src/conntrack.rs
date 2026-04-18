@@ -281,6 +281,7 @@ pub unsafe fn ct_create_v6(key: &CtKey6, now: u64, pkt_len: u32, matched: &Match
 }
 
 /// Update an existing CT entry with LB information for fast-path.
+#[allow(dead_code)]
 #[inline(always)]
 pub unsafe fn ct_update_lb_v4(
     key: &CtKey4,
@@ -304,6 +305,7 @@ pub unsafe fn ct_update_lb_v4(
 }
 
 /// Update an existing CT entry with LB information for fast-path (IPv6).
+#[allow(dead_code)]
 #[inline(always)]
 pub unsafe fn ct_update_lb_v6(
     key: &CtKey6,

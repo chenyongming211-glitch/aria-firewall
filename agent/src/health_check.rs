@@ -23,6 +23,7 @@ pub enum HealthState {
 #[derive(Debug, Clone)]
 pub struct ProbeConfig {
     pub protocol: String,
+    #[allow(dead_code)]
     pub interval: Duration,
     pub timeout: Duration,
     pub healthy_threshold: u32,
@@ -162,6 +163,7 @@ impl HealthCheckExecutor {
     }
 
     /// Remove trackers for backends that are no longer in the active set.
+    #[allow(dead_code)]
     pub fn prune(&mut self, active_backends: &[BackendTarget]) {
         self.trackers
             .retain(|key, _| active_backends.contains(key));

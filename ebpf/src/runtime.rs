@@ -8,6 +8,7 @@ fn read_global_config() -> Option<FirewallConfig> {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn conntrack_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -20,6 +21,7 @@ pub fn conntrack_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn monitoring_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -32,6 +34,7 @@ pub fn monitoring_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn acl_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -44,6 +47,7 @@ pub fn acl_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn qos_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -56,6 +60,7 @@ pub fn qos_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn mirror_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -68,6 +73,7 @@ pub fn mirror_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn lb_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {
@@ -80,6 +86,7 @@ pub fn lb_enabled(tap_id: u32) -> bool {
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 pub fn tcprt_enabled(tap_id: u32) -> bool {
     if tap_id != TAP_ID_UNASSIGNED {
         if let Some(cfg) = unsafe { TAP_CONFIG_MAP.get(&tap_id) } {

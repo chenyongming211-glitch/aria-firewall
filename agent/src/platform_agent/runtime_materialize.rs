@@ -8,7 +8,9 @@ pub(crate) struct Phase3MaterializeResult {
     pub(crate) sg_rules_written: usize,
     pub(crate) route_v4_written: usize,
     pub(crate) route_v6_written: usize,
+    #[allow(dead_code)]
     pub(crate) ip_group_entries_written: usize,
+    #[allow(dead_code)]
     pub(crate) policy_entries_written: usize,
     pub(crate) qos_entries_written: usize,
     pub(crate) mirror_entries_written: usize,
