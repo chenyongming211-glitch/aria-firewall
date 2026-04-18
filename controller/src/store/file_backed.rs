@@ -89,14 +89,13 @@ impl FileBackedControllerStore {
         Ok(())
     }
 
-    async fn run_persisted<T, F, Fut>(&self, op: F) -> Result<T, StoreError>
+    async fn run_persisted<T, Fut>(&self, fut: Fut) -> Result<T, StoreError>
     where
-        F: FnOnce(&InMemoryControllerStore) -> Fut,
         Fut: std::future::Future<Output = Result<T, StoreError>>,
     {
         let _guard = self.mutation_lock.lock().await;
         let before = self.inner.snapshot_state().await;
-        let value = op(&self.inner).await?;
+        let value = fut.await?;
         let after = self.inner.snapshot_state().await;
 
         if let Err(err) = self.persist_snapshot_locked(&after).await {
@@ -130,16 +129,15 @@ macro_rules! impl_file_backed_resource_methods {
         }
 
         async fn $create(&self, resource: $ty) -> Result<$ty, StoreError> {
-            self.run_persisted(|inner| inner.$create(resource)).await
+            self.run_persisted(self.inner.$create(resource)).await
         }
 
         async fn $update(&self, id: &str, resource: $ty) -> Result<$ty, StoreError> {
-            self.run_persisted(|inner| inner.$update(id, resource))
-                .await
+            self.run_persisted(self.inner.$update(id, resource)).await
         }
 
         async fn $delete(&self, id: &str) -> Result<$ty, StoreError> {
-            self.run_persisted(|inner| inner.$delete(id)).await
+            self.run_persisted(self.inner.$delete(id)).await
         }
     };
 }
@@ -163,7 +161,7 @@ impl ControllerStore for FileBackedControllerStore {
     }
 
     async fn create_tenant(&self, resource: TenantResource) -> Result<TenantResource, StoreError> {
-        self.run_persisted(|inner| inner.create_tenant(resource))
+        self.run_persisted(self.inner.create_tenant(resource))
             .await
     }
 
@@ -172,12 +170,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: TenantResource,
     ) -> Result<TenantResource, StoreError> {
-        self.run_persisted(|inner| inner.update_tenant(id, resource))
+        self.run_persisted(self.inner.update_tenant(id, resource))
             .await
     }
 
     async fn delete_tenant(&self, id: &str) -> Result<TenantResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_tenant(id)).await
+        self.run_persisted(self.inner.delete_tenant(id)).await
     }
 
     async fn list_nodes(&self) -> Vec<NodeResource> {
@@ -189,7 +187,7 @@ impl ControllerStore for FileBackedControllerStore {
     }
 
     async fn create_node(&self, resource: NodeResource) -> Result<NodeResource, StoreError> {
-        self.run_persisted(|inner| inner.create_node(resource))
+        self.run_persisted(self.inner.create_node(resource))
             .await
     }
 
@@ -198,12 +196,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: NodeResource,
     ) -> Result<NodeResource, StoreError> {
-        self.run_persisted(|inner| inner.update_node(id, resource))
+        self.run_persisted(self.inner.update_node(id, resource))
             .await
     }
 
     async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_node(id)).await
+        self.run_persisted(self.inner.delete_node(id)).await
     }
 
     async fn list_networks(&self) -> Vec<NetworkResource> {
@@ -218,7 +216,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: NetworkResource,
     ) -> Result<NetworkResource, StoreError> {
-        self.run_persisted(|inner| inner.create_network(resource))
+        self.run_persisted(self.inner.create_network(resource))
             .await
     }
 
@@ -227,12 +225,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: NetworkResource,
     ) -> Result<NetworkResource, StoreError> {
-        self.run_persisted(|inner| inner.update_network(id, resource))
+        self.run_persisted(self.inner.update_network(id, resource))
             .await
     }
 
     async fn delete_network(&self, id: &str) -> Result<NetworkResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_network(id)).await
+        self.run_persisted(self.inner.delete_network(id)).await
     }
 
     async fn list_ports(&self) -> Vec<PortResource> {
@@ -244,7 +242,7 @@ impl ControllerStore for FileBackedControllerStore {
     }
 
     async fn create_port(&self, resource: PortResource) -> Result<PortResource, StoreError> {
-        self.run_persisted(|inner| inner.create_port(resource))
+        self.run_persisted(self.inner.create_port(resource))
             .await
     }
 
@@ -253,12 +251,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: PortResource,
     ) -> Result<PortResource, StoreError> {
-        self.run_persisted(|inner| inner.update_port(id, resource))
+        self.run_persisted(self.inner.update_port(id, resource))
             .await
     }
 
     async fn delete_port(&self, id: &str) -> Result<PortResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_port(id)).await
+        self.run_persisted(self.inner.delete_port(id)).await
     }
 
     async fn list_security_groups(&self) -> Vec<SecurityGroupResource> {
@@ -273,7 +271,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: SecurityGroupResource,
     ) -> Result<SecurityGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.create_security_group(resource))
+        self.run_persisted(self.inner.create_security_group(resource))
             .await
     }
 
@@ -282,12 +280,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: SecurityGroupResource,
     ) -> Result<SecurityGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.update_security_group(id, resource))
+        self.run_persisted(self.inner.update_security_group(id, resource))
             .await
     }
 
     async fn delete_security_group(&self, id: &str) -> Result<SecurityGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_security_group(id))
+        self.run_persisted(self.inner.delete_security_group(id))
             .await
     }
 
@@ -303,7 +301,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError> {
-        self.run_persisted(|inner| inner.create_route_table(resource))
+        self.run_persisted(self.inner.create_route_table(resource))
             .await
     }
 
@@ -312,12 +310,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError> {
-        self.run_persisted(|inner| inner.update_route_table(id, resource))
+        self.run_persisted(self.inner.update_route_table(id, resource))
             .await
     }
 
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_route_table(id))
+        self.run_persisted(self.inner.delete_route_table(id))
             .await
     }
 
@@ -333,7 +331,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: IpGroupResource,
     ) -> Result<IpGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.create_ip_group(resource))
+        self.run_persisted(self.inner.create_ip_group(resource))
             .await
     }
 
@@ -342,12 +340,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: IpGroupResource,
     ) -> Result<IpGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.update_ip_group(id, resource))
+        self.run_persisted(self.inner.update_ip_group(id, resource))
             .await
     }
 
     async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_ip_group(id)).await
+        self.run_persisted(self.inner.delete_ip_group(id)).await
     }
 
     async fn list_network_policies(&self) -> Vec<NetworkPolicyResource> {
@@ -362,7 +360,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: NetworkPolicyResource,
     ) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.create_network_policy(resource))
+        self.run_persisted(self.inner.create_network_policy(resource))
             .await
     }
 
@@ -371,12 +369,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: NetworkPolicyResource,
     ) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.update_network_policy(id, resource))
+        self.run_persisted(self.inner.update_network_policy(id, resource))
             .await
     }
 
     async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_network_policy(id))
+        self.run_persisted(self.inner.delete_network_policy(id))
             .await
     }
 
@@ -392,7 +390,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: HealthCheckResource,
     ) -> Result<HealthCheckResource, StoreError> {
-        self.run_persisted(|inner| inner.create_health_check(resource))
+        self.run_persisted(self.inner.create_health_check(resource))
             .await
     }
 
@@ -401,12 +399,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: HealthCheckResource,
     ) -> Result<HealthCheckResource, StoreError> {
-        self.run_persisted(|inner| inner.update_health_check(id, resource))
+        self.run_persisted(self.inner.update_health_check(id, resource))
             .await
     }
 
     async fn delete_health_check(&self, id: &str) -> Result<HealthCheckResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_health_check(id))
+        self.run_persisted(self.inner.delete_health_check(id))
             .await
     }
 
@@ -422,7 +420,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: BackendSetResource,
     ) -> Result<BackendSetResource, StoreError> {
-        self.run_persisted(|inner| inner.create_backend_set(resource))
+        self.run_persisted(self.inner.create_backend_set(resource))
             .await
     }
 
@@ -431,12 +429,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: BackendSetResource,
     ) -> Result<BackendSetResource, StoreError> {
-        self.run_persisted(|inner| inner.update_backend_set(id, resource))
+        self.run_persisted(self.inner.update_backend_set(id, resource))
             .await
     }
 
     async fn delete_backend_set(&self, id: &str) -> Result<BackendSetResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_backend_set(id))
+        self.run_persisted(self.inner.delete_backend_set(id))
             .await
     }
 
@@ -453,7 +451,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError> {
-        self.run_persisted(|inner| inner.create_service(resource))
+        self.run_persisted(self.inner.create_service(resource))
             .await
     }
 
@@ -462,12 +460,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError> {
-        self.run_persisted(|inner| inner.update_service(id, resource))
+        self.run_persisted(self.inner.update_service(id, resource))
             .await
     }
 
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_service(id)).await
+        self.run_persisted(self.inner.delete_service(id)).await
     }
 
     // --- QosPolicy (Phase 3.6) ---
@@ -483,7 +481,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: QosPolicyResource,
     ) -> Result<QosPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.create_qos_policy(resource))
+        self.run_persisted(self.inner.create_qos_policy(resource))
             .await
     }
 
@@ -492,12 +490,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: QosPolicyResource,
     ) -> Result<QosPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.update_qos_policy(id, resource))
+        self.run_persisted(self.inner.update_qos_policy(id, resource))
             .await
     }
 
     async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_qos_policy(id)).await
+        self.run_persisted(self.inner.delete_qos_policy(id)).await
     }
 
     // --- MirrorPolicy (Phase 3.7) ---
@@ -513,7 +511,7 @@ impl ControllerStore for FileBackedControllerStore {
         &self,
         resource: MirrorPolicyResource,
     ) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.create_mirror_policy(resource))
+        self.run_persisted(self.inner.create_mirror_policy(resource))
             .await
     }
 
@@ -522,12 +520,12 @@ impl ControllerStore for FileBackedControllerStore {
         id: &str,
         resource: MirrorPolicyResource,
     ) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.update_mirror_policy(id, resource))
+        self.run_persisted(self.inner.update_mirror_policy(id, resource))
             .await
     }
 
     async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_persisted(|inner| inner.delete_mirror_policy(id))
+        self.run_persisted(self.inner.delete_mirror_policy(id))
             .await
     }
 
