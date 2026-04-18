@@ -4,9 +4,26 @@ use aria_api::{
     SecurityGroupResource, ServiceResource, TenantResource, NodeResource,
 };
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 
 use super::resource_store::ResourceStore;
 use super::{InMemoryControllerStore, StoreError};
+
+fn is_valid_cidr(cidr: &str) -> bool {
+    let Some((ip_str, prefix_str)) = cidr.split_once('/') else {
+        return false;
+    };
+    let Ok(ip) = ip_str.parse::<IpAddr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix_str.parse::<u8>() else {
+        return false;
+    };
+    match ip {
+        IpAddr::V4(_) => prefix <= 32,
+        IpAddr::V6(_) => prefix <= 128,
+    }
+}
 
 impl InMemoryControllerStore {
     pub(crate) async fn ensure_tenant_exists_inner(
@@ -205,7 +222,7 @@ impl InMemoryControllerStore {
         }
         // Validate CIDR strings parse correctly.
         for cidr in &resource.spec.cidrs {
-            if cidr.parse::<std::net::IpNet>().is_err() {
+            if !is_valid_cidr(cidr) {
                 return Err(StoreError::BadRequest(format!(
                     "invalid CIDR '{}'",
                     cidr

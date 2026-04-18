@@ -66,6 +66,9 @@ jobs:
       - name: Build agent (static)
         run: cargo +stable build --release -p aria-agent --target x86_64-unknown-linux-musl
 
+      - name: Build controller (static)
+        run: cargo +stable build --release -p aria-controller --target x86_64-unknown-linux-musl
+
       - name: Verify static binaries
         run: |
           file target/x86_64-unknown-linux-musl/release/ariactl

@@ -84,7 +84,6 @@ impl InMemoryControllerStore {
         );
         counts.insert("backend_sets".to_string(), self.backend_sets.count().await);
         counts.insert("services".to_string(), self.services.count().await);
-        counts.insert("network_policies".to_string(), self.network_policies.count().await);
         counts
     }
 
