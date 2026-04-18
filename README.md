@@ -212,11 +212,11 @@ journalctl -u aria-controller -f
 tail -f /var/log/aria-controller/aria-controller.log
 ```
 
-API 文档入口：
+Controller API 文档入口：
 
 ```bash
-curl -s http://127.0.0.1:8080/openapi.json
-open http://127.0.0.1:8080/docs
+curl -s http://127.0.0.1:8180/openapi.json
+open http://127.0.0.1:8180/docs
 ```
 
 ### 从源码编译
@@ -235,33 +235,71 @@ cargo build --release
 
 ## Controller 部署模式
 
-Aria 支持三种部署模式，按需选择：
+安装脚本始终安装 `aria-controller` 二进制、`aria-controller.service`、
+`/etc/aria-controller/controller.env`、`/var/lib/aria-controller`、
+`/var/log/aria-controller` 和 controller logrotate 配置。默认只启动
+`aria-agent`，不会启用或启动 controller；这是为了避免每个计算节点都
+意外变成控制面节点。
+
+controller 的默认监听和状态路径来自 `/etc/aria-controller/controller.env`：
+
+```bash
+ARIA_CONTROLLER_BIND=127.0.0.1:8180
+ARIA_CONTROLLER_STATE_PATH=/var/lib/aria-controller/controller-state.json
+ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
+```
+
+需要对外提供 southbound/northbound API 时，把
+`ARIA_CONTROLLER_BIND` 改成管理网地址，例如 `10.0.0.10:8180`，
+然后重启 `aria-controller.service`。Agent 的本地 API 默认仍是
+`127.0.0.1:8080`，不要和 controller 的 `8180` 混用。
+
+Aria 支持三种部署模式：
 
 ### 模式 A：Agent-only（默认）
 
-最简单的部署方式。每个节点只运行 `aria-agent`，所有策略通过本地 CLI（`ariactl`）管理。适合单节点或少量节点的场景。
+每个节点只运行 `aria-agent`。本地 CLI/API 直接操作节点上的 datapath，
+适合单节点验证、离线节点或还没有集中控制面的环境。
 
 ```bash
 sudo ./install.sh
-# agent 自动启动，controller 不启动
 ```
+
+结果：
+
+- `aria-agent.service` 会被 enable 并 restart
+- `aria-controller.service` 会被安装，但不会 enable/start
+- 本地配置入口是 `/etc/aria-agent/config.toml`
+- 本地日志是 `journalctl -u aria-agent` 和 `/var/log/aria-agent/aria-agent.log`
 
 ### 模式 B：独立 Controller + 远端 Agent
 
-Controller 运行在管理节点上，Agent 通过 southbound 协议从 Controller 拉取配置。适合多节点统一管理。
+Controller 只运行在管理节点上。计算节点运行 Agent，并通过 southbound
+协议从 Controller 拉取 desired state。适合多节点统一管理。
 
 管理节点：
 
 ```bash
 sudo ./install.sh --start-controller
-# 或手动启动
-sudo systemctl enable --now aria-controller.service
 ```
 
-Agent 节点：在 `/etc/aria-agent/config.toml` 中配置：
+如需手动启停 controller：
+
+```bash
+sudo systemctl enable --now aria-controller.service
+sudo systemctl restart aria-controller.service
+```
+
+计算节点：
+
+```bash
+sudo ./install.sh
+```
+
+在 `/etc/aria-agent/config.toml` 中配置：
 
 ```toml
-southbound_controller_url = "http://<controller-ip>:8080"
+southbound_controller_url = "http://<controller-ip>:8180"
 southbound_node_id = "node-0001"
 ```
 
@@ -273,13 +311,27 @@ sudo systemctl restart aria-agent
 
 ### 模式 C：Agent + Controller 同机
 
-单机同时运行 Agent 和 Controller，适合开发测试或小规模部署。
+单机同时运行 Agent 和 Controller，适合开发测试、小规模部署或 demo。
 
 ```bash
 sudo ./install.sh --start-controller
 ```
 
-Agent 配置 `southbound_controller_url = "http://127.0.0.1:8080"` 即可连接本机 Controller。
+Agent 配置：
+
+```toml
+southbound_controller_url = "http://127.0.0.1:8180"
+southbound_node_id = "node-0001"
+```
+
+然后重启：
+
+```bash
+sudo systemctl restart aria-agent
+```
+
+`--no-start` 只安装文件、unit、配置和 logrotate，不启动或重启服务。
+它适合镜像构建、变更窗口前预铺文件，或者需要手动检查配置后再切流的场景。
 
 ### Controller API
 
@@ -287,16 +339,16 @@ Controller 提供 northbound REST API，管理所有平台对象：
 
 ```bash
 # 健康检查
-curl http://<controller>:8080/api/v1/health
+curl http://<controller>:8180/api/v1/health
 
 # OpenAPI 文档
-open http://<controller>:8080/docs
+open http://<controller>:8180/docs
 
 # 资源管理示例
-curl http://<controller>:8080/api/v1/tenants
-curl http://<controller>:8080/api/v1/nodes
-curl http://<controller>:8080/api/v1/networks
-curl http://<controller>:8080/api/v1/node-configs
+curl http://<controller>:8180/api/v1/tenants
+curl http://<controller>:8180/api/v1/nodes
+curl http://<controller>:8180/api/v1/networks
+curl http://<controller>:8180/api/v1/node-configs
 ```
 
 当前 Controller 管理的平台对象：Tenant、Node、Network、Port、SecurityGroup、RouteTable、IpGroup、NetworkPolicy、QosPolicy、MirrorPolicy、ServiceChain、NodeConfig、HealthCheck、BackendSet、Service。
