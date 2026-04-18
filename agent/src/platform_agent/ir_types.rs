@@ -144,6 +144,23 @@ pub(crate) struct MirrorPolicyRuleIr {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct NodeConfigIr {
+    pub(crate) node_config_id: String,
+    pub(crate) conntrack_enabled: Option<bool>,
+    pub(crate) monitoring_enabled: Option<bool>,
+    pub(crate) acl_enabled: Option<bool>,
+    pub(crate) qos_enabled: Option<bool>,
+    pub(crate) mirror_enabled: Option<bool>,
+    pub(crate) tcprt_enabled: Option<bool>,
+    pub(crate) lb_enabled: Option<bool>,
+    pub(crate) ssl_enabled: Option<bool>,
+    pub(crate) ct_tcp_established_ns: Option<u64>,
+    pub(crate) ct_tcp_new_ns: Option<u64>,
+    pub(crate) ct_udp_ns: Option<u64>,
+    pub(crate) ct_icmp_ns: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SgRuleIr {
     pub(crate) port_id: String,
     pub(crate) tap_id: u32,
@@ -314,6 +331,8 @@ pub(crate) struct CompiledNodeState {
     pub(crate) qos_policies: Vec<QosPolicyIr>,
     #[serde(default)]
     pub(crate) mirror_policies: Vec<MirrorPolicyIr>,
+    #[serde(default)]
+    pub(crate) node_config: Option<NodeConfigIr>,
     pub(crate) health_checks: Vec<CompiledHealthCheckView>,
     pub(crate) backend_sets: Vec<CompiledBackendSetView>,
     pub(crate) services: Vec<CompiledServiceView>,

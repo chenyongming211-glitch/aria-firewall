@@ -193,3 +193,15 @@ pub fn init_ct_config(bpf: &mut aya::Ebpf) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Write CT timeout configuration to pinned CT_CONFIG map.
+pub fn write_ct_config_pinned(pin_path: &str, config: CtConfig) -> Result<(), String> {
+    let map_path = format!("{}/CT_CONFIG", pin_path);
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open pinned CT_CONFIG: {:?}", e))?;
+    let mut map =
+        HashMap::<_, u32, CtConfig>::try_from(aya::maps::Map::HashMap(map_data))
+            .map_err(|e| format!("convert CT_CONFIG to HashMap: {:?}", e))?;
+    map.insert(&0u32, &config, 0)
+        .map_err(|e| format!("CT_CONFIG insert: {:?}", e))
+}

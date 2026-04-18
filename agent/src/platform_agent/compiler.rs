@@ -821,6 +821,27 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
 
     compiled_objects.insert("mirror_policies".to_string(), mirror_policies.len());
 
+    // --- NodeConfig compilation ---
+    let node_config = context
+        .desired
+        .node_configs
+        .first()
+        .map(|nc| NodeConfigIr {
+            node_config_id: nc.metadata.id.clone(),
+            conntrack_enabled: nc.spec.conntrack_enabled,
+            monitoring_enabled: nc.spec.monitoring_enabled,
+            acl_enabled: nc.spec.acl_enabled,
+            qos_enabled: nc.spec.qos_enabled,
+            mirror_enabled: nc.spec.mirror_enabled,
+            tcprt_enabled: nc.spec.tcprt_enabled,
+            lb_enabled: nc.spec.lb_enabled,
+            ssl_enabled: nc.spec.ssl_enabled,
+            ct_tcp_established_ns: nc.spec.ct_tcp_established_ns,
+            ct_tcp_new_ns: nc.spec.ct_tcp_new_ns,
+            ct_udp_ns: nc.spec.ct_udp_ns,
+            ct_icmp_ns: nc.spec.ct_icmp_ns,
+        });
+
     let domain_summaries = vec![
         CompileDomainSummary {
             domain: "identity".to_string(),
@@ -939,6 +960,7 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         network_policies,
         qos_policies,
         mirror_policies,
+        node_config,
         health_checks: compiled_health_checks,
         backend_sets: compiled_backend_sets,
         services: compiled_services,

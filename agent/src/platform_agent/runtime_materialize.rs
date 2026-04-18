@@ -102,6 +102,7 @@ pub(crate) fn materialize_phase3_maps(
         clear_phase3_state_for_port(pin_path, *removed_tap_id, previous_ifindex)?;
     }
 
+    let nc = compiled_state.node_config.as_ref();
     let mut anti_spoof_entries_written = 0usize;
     for port in &compiled_state.port_identities {
         let runtime = TapMapRuntime::new(pin_path, port.tap_id);
@@ -110,13 +111,14 @@ pub(crate) fn materialize_phase3_maps(
         write_tap_config(
             runtime,
             TapConfig {
-                conntrack_enabled: 1,
-                monitoring_enabled: 1,
-                acl_enabled: 1,
-                qos_enabled: 0,
-                mirror_enabled: 0,
-                tcprt_enabled: 1,
-                lb_enabled: existing_runtime.map(|cfg| cfg.lb_enabled).unwrap_or(0),
+                conntrack_enabled: nc.and_then(|c| c.conntrack_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(1),
+                monitoring_enabled: nc.and_then(|c| c.monitoring_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(1),
+                acl_enabled: nc.and_then(|c| c.acl_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(1),
+                qos_enabled: nc.and_then(|c| c.qos_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(0),
+                mirror_enabled: nc.and_then(|c| c.mirror_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(0),
+                tcprt_enabled: nc.and_then(|c| c.tcprt_enabled).map(|b| if b { 1 } else { 0 }).unwrap_or(1),
+                lb_enabled: nc.and_then(|c| c.lb_enabled).map(|b| if b { 1 } else { 0 })
+                    .unwrap_or_else(|| existing_runtime.map(|cfg| cfg.lb_enabled).unwrap_or(0)),
                 pad: [0; 1],
             },
         )?;
@@ -475,6 +477,40 @@ pub(crate) fn materialize_phase3_maps(
             None,
             None,
         );
+    }
+
+    // --- NodeConfig: write CT_CONFIG and FIREWALL_CONFIG if overrides present ---
+    if let Some(nc) = &compiled_state.node_config {
+        // Write CT timeout overrides if any are specified.
+        if nc.ct_tcp_established_ns.is_some()
+            || nc.ct_tcp_new_ns.is_some()
+            || nc.ct_udp_ns.is_some()
+            || nc.ct_icmp_ns.is_some()
+        {
+            let ct_config = aria_core::common::CtConfig {
+                tcp_established_ns: nc.ct_tcp_established_ns.unwrap_or(300_000_000_000),
+                tcp_new_ns: nc.ct_tcp_new_ns.unwrap_or(30_000_000_000),
+                udp_ns: nc.ct_udp_ns.unwrap_or(60_000_000_000),
+                icmp_ns: nc.ct_icmp_ns.unwrap_or(30_000_000_000),
+            };
+            let _ = aria_core::ct_ops::write_ct_config_pinned(pin_path, ct_config);
+        }
+
+        // Write FIREWALL_CONFIG (global config) with SSL override.
+        if nc.ssl_enabled.is_some() {
+            let runtime = TapMapRuntime::new(pin_path, 0);
+            let _ = aria_core::ebpf_ops::update_runtime_config(
+                runtime,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                nc.ssl_enabled,
+                None,
+            );
+        }
     }
 
     Ok(Phase3MaterializeResult {
