@@ -171,13 +171,17 @@ pub fn scrub_ct_tables_strict(runtime: TapMapRuntime<'_>) -> Result<u64, String>
     Ok(count)
 }
 
-pub fn init_ct_config(bpf: &mut aya::Ebpf) -> Result<(), String> {
-    let config = CtConfig {
+pub fn default_ct_config() -> CtConfig {
+    CtConfig {
         tcp_established_ns: 300_000_000_000, // 300s
         tcp_new_ns: 30_000_000_000,          // 30s
         udp_ns: 60_000_000_000,              // 60s
         icmp_ns: 30_000_000_000,             // 30s
-    };
+    }
+}
+
+pub fn init_ct_config(bpf: &mut aya::Ebpf) -> Result<(), String> {
+    let config = default_ct_config();
 
     match bpf
         .map_mut("CT_CONFIG")
@@ -192,6 +196,28 @@ pub fn init_ct_config(bpf: &mut aya::Ebpf) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Read CT timeout configuration from pinned CT_CONFIG map.
+pub fn read_ct_config_pinned(pin_path: &str) -> Result<Option<CtConfig>, String> {
+    let map_path = format!("{}/CT_CONFIG", pin_path);
+    let map_data =
+        MapData::from_pin(&map_path).map_err(|e| format!("open pinned CT_CONFIG: {:?}", e))?;
+    let map =
+        HashMap::<_, u32, CtConfig>::try_from(aya::maps::Map::HashMap(map_data))
+            .map_err(|e| format!("convert CT_CONFIG to HashMap: {:?}", e))?;
+
+    match map.get(&0u32, 0) {
+        Ok(config) => Ok(Some(config)),
+        Err(e) => {
+            let err = format!("{:?}", e);
+            if err.contains("KeyNotFound") || err.contains("No such file or directory") {
+                Ok(None)
+            } else {
+                Err(format!("CT_CONFIG read: {}", err))
+            }
+        }
+    }
 }
 
 /// Write CT timeout configuration to pinned CT_CONFIG map.

@@ -16,6 +16,10 @@ pub(crate) struct Phase3MaterializeResult {
     pub(crate) mirror_entries_written: usize,
 }
 
+fn feature_enabled_when_present(configured: Option<bool>, has_objects: bool) -> bool {
+    configured.unwrap_or(true) && has_objects
+}
+
 pub(crate) fn clear_phase3_state_for_port(
     pin_path: &str,
     tap_id: u32,
@@ -363,15 +367,16 @@ pub(crate) fn materialize_phase3_maps(
         }
     }
     let mut qos_entries_written = 0usize;
-    let mut has_any_qos_rule = false;
+    let qos_allowed = nc.and_then(|c| c.qos_enabled).unwrap_or(true);
+    let mut qos_rule_taps = BTreeSet::new();
     for qp in &compiled_state.qos_policies {
         let tap_ids = match network_tap_ids.get(qp.network_id.as_str()) {
             Some(ids) => ids,
             None => continue,
         };
         for rule in &qp.rules {
-            has_any_qos_rule = true;
             for tap_id in tap_ids {
+                qos_rule_taps.insert(*tap_id);
                 let runtime = TapMapRuntime::new(pin_path, *tap_id);
                 aria_core::qos_ops::add_qos_rule(
                     rule.ip_group_numeric_id,
@@ -381,7 +386,7 @@ pub(crate) fn materialize_phase3_maps(
                     rule.priority,
                     rule.mode,
                     runtime,
-                    true, // user_qos_enabled — Controller-managed QoS is always enabled
+                    qos_allowed,
                 )?;
                 qos_entries_written += 1;
             }
@@ -390,17 +395,20 @@ pub(crate) fn materialize_phase3_maps(
     // Update qos_enabled flag on each tap that now has (or no longer has) QoS rules.
     for tap_id in &current_tap_ids {
         let runtime = TapMapRuntime::new(pin_path, *tap_id);
-        let _ = aria_core::ebpf_ops::update_runtime_config(
+        aria_core::ebpf_ops::update_runtime_config(
             runtime,
             None,
             None,
             None,
-            Some(has_any_qos_rule),
+            Some(feature_enabled_when_present(
+                nc.and_then(|c| c.qos_enabled),
+                qos_rule_taps.contains(tap_id),
+            )),
             None,
             None,
             None,
             None,
-        );
+        )?;
     }
 
     // --- MirrorPolicy MIRROR_POLICY / MIRROR_GLOBAL materialization ---
@@ -431,22 +439,23 @@ pub(crate) fn materialize_phase3_maps(
         }
     }
     let mut mirror_entries_written = 0usize;
-    let mut has_any_mirror_rule = false;
+    let mirror_allowed = nc.and_then(|c| c.mirror_enabled).unwrap_or(true);
+    let mut mirror_rule_taps = BTreeSet::new();
     for mp in &compiled_state.mirror_policies {
         let tap_ids = match network_tap_ids.get(mp.network_id.as_str()) {
             Some(ids) => ids,
             None => continue,
         };
         for rule in &mp.rules {
-            has_any_mirror_rule = true;
             for tap_id in tap_ids {
+                mirror_rule_taps.insert(*tap_id);
                 let runtime = TapMapRuntime::new(pin_path, *tap_id);
                 if rule.is_global {
                     aria_core::mirror_ops::add_global_mirror(
                         rule.direction,
                         rule.target_ifindex,
                         runtime,
-                        true,
+                        mirror_allowed,
                     )?;
                 } else {
                     aria_core::mirror_ops::add_mirror_rule(
@@ -456,7 +465,7 @@ pub(crate) fn materialize_phase3_maps(
                         rule.direction,
                         rule.target_ifindex,
                         runtime,
-                        true,
+                        mirror_allowed,
                     )?;
                 }
                 mirror_entries_written += 1;
@@ -466,17 +475,20 @@ pub(crate) fn materialize_phase3_maps(
     // Update mirror_enabled flag on each tap.
     for tap_id in &current_tap_ids {
         let runtime = TapMapRuntime::new(pin_path, *tap_id);
-        let _ = aria_core::ebpf_ops::update_runtime_config(
+        aria_core::ebpf_ops::update_runtime_config(
             runtime,
             None,
             None,
             None,
             None,
-            Some(has_any_mirror_rule),
+            Some(feature_enabled_when_present(
+                nc.and_then(|c| c.mirror_enabled),
+                mirror_rule_taps.contains(tap_id),
+            )),
             None,
             None,
             None,
-        );
+        )?;
     }
 
     // --- NodeConfig: write CT_CONFIG and FIREWALL_CONFIG if overrides present ---
@@ -487,19 +499,23 @@ pub(crate) fn materialize_phase3_maps(
             || nc.ct_udp_ns.is_some()
             || nc.ct_icmp_ns.is_some()
         {
+            let current_ct = aria_core::ct_ops::read_ct_config_pinned(pin_path)?
+                .unwrap_or_else(aria_core::ct_ops::default_ct_config);
             let ct_config = aria_core::common::CtConfig {
-                tcp_established_ns: nc.ct_tcp_established_ns.unwrap_or(300_000_000_000),
-                tcp_new_ns: nc.ct_tcp_new_ns.unwrap_or(30_000_000_000),
-                udp_ns: nc.ct_udp_ns.unwrap_or(60_000_000_000),
-                icmp_ns: nc.ct_icmp_ns.unwrap_or(30_000_000_000),
+                tcp_established_ns: nc
+                    .ct_tcp_established_ns
+                    .unwrap_or(current_ct.tcp_established_ns),
+                tcp_new_ns: nc.ct_tcp_new_ns.unwrap_or(current_ct.tcp_new_ns),
+                udp_ns: nc.ct_udp_ns.unwrap_or(current_ct.udp_ns),
+                icmp_ns: nc.ct_icmp_ns.unwrap_or(current_ct.icmp_ns),
             };
-            let _ = aria_core::ct_ops::write_ct_config_pinned(pin_path, ct_config);
+            aria_core::ct_ops::write_ct_config_pinned(pin_path, ct_config)?;
         }
 
         // Write FIREWALL_CONFIG (global config) with SSL override.
         if nc.ssl_enabled.is_some() {
             let runtime = TapMapRuntime::new(pin_path, 0);
-            let _ = aria_core::ebpf_ops::update_runtime_config(
+            aria_core::ebpf_ops::update_runtime_config(
                 runtime,
                 None,
                 None,
@@ -509,7 +525,7 @@ pub(crate) fn materialize_phase3_maps(
                 None,
                 nc.ssl_enabled,
                 None,
-            );
+            )?;
         }
     }
 
@@ -731,4 +747,3 @@ pub(crate) fn materialize_service_maps(
 
     write_result
 }
-

@@ -629,22 +629,6 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         );
     }
 
-    let mut compiled_objects = BTreeMap::new();
-    compiled_objects.insert("tenants".to_string(), context.desired.tenants.len());
-    compiled_objects.insert("networks".to_string(), context.desired.networks.len());
-    compiled_objects.insert("ports".to_string(), port_bindings.len());
-    compiled_objects.insert(
-        "security_groups".to_string(),
-        context.desired.security_groups.len(),
-    );
-    compiled_objects.insert("route_tables".to_string(), compiled_route_tables.len());
-    compiled_objects.insert("health_checks".to_string(), compiled_health_checks.len());
-    compiled_objects.insert("backend_sets".to_string(), compiled_backend_sets.len());
-    compiled_objects.insert("services".to_string(), compiled_services.len());
-    if !context.desired.deletes.is_empty() {
-        compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
-    }
-
     let mut degraded_reasons = vec!["shadow_apply_only".to_string()];
     if !failed_objects.is_empty() {
         degraded_reasons.push("object_validation_failed".to_string());
@@ -782,8 +766,6 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         });
     }
 
-    compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
-
     // --- MirrorPolicy compilation ---
     let mut mirror_policies = Vec::new();
     for mp in &context.desired.mirror_policies {
@@ -819,8 +801,6 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
         });
     }
 
-    compiled_objects.insert("mirror_policies".to_string(), mirror_policies.len());
-
     // --- NodeConfig compilation ---
     let node_config = context
         .desired
@@ -841,6 +821,32 @@ pub(crate) fn compile_desired_state(context: CompilerContext<'_>) -> CompileOutc
             ct_udp_ns: nc.spec.ct_udp_ns,
             ct_icmp_ns: nc.spec.ct_icmp_ns,
         });
+
+    let mut compiled_objects = BTreeMap::new();
+    compiled_objects.insert("tenants".to_string(), context.desired.tenants.len());
+    compiled_objects.insert("networks".to_string(), context.desired.networks.len());
+    compiled_objects.insert("ports".to_string(), port_bindings.len());
+    compiled_objects.insert(
+        "security_groups".to_string(),
+        context.desired.security_groups.len(),
+    );
+    compiled_objects.insert("ip_groups".to_string(), ip_groups.len());
+    compiled_objects.insert("network_policies".to_string(), network_policies.len());
+    compiled_objects.insert("qos_policies".to_string(), qos_policies.len());
+    compiled_objects.insert("mirror_policies".to_string(), mirror_policies.len());
+    compiled_objects.insert(
+        "service_chains".to_string(),
+        context.desired.service_chains.len(),
+    );
+    compiled_objects.insert("route_tables".to_string(), compiled_route_tables.len());
+    compiled_objects.insert("health_checks".to_string(), compiled_health_checks.len());
+    compiled_objects.insert("backend_sets".to_string(), compiled_backend_sets.len());
+    compiled_objects.insert("services".to_string(), compiled_services.len());
+    compiled_objects.insert(
+        "node_configs".to_string(),
+        if node_config.is_some() { 1 } else { 0 },
+    );
+    compiled_objects.insert("deletes".to_string(), context.desired.deletes.len());
 
     let domain_summaries = vec![
         CompileDomainSummary {

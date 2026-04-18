@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use aria_api::{
-    HeartbeatResponse, NodeAddress, NodeCapability,
+    ApplyStatusReport, HeartbeatResponse, NodeAddress, NodeCapability,
     NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeRegisterResponse,
 };
 use tokio::task::JoinHandle;
@@ -57,6 +57,33 @@ pub fn start(config: PlatformAgentConfig) -> JoinHandle<()> {
         let agent = PlatformAgent::new(config);
         agent.run().await;
     })
+}
+
+fn recompute_apply_status(report: &ApplyStatusReport) -> String {
+    let has_domain_failure = report
+        .domain_statuses
+        .iter()
+        .any(|domain| domain.status == "failed");
+    if !report.failed_objects.is_empty() || has_domain_failure {
+        let compiled_total = report.compiled_objects.values().copied().sum::<usize>();
+        return if compiled_total > report.failed_objects.len() {
+            "partial".to_string()
+        } else {
+            "failed".to_string()
+        };
+    }
+
+    let has_pending_or_degraded_domain = report.domain_statuses.iter().any(|domain| {
+        matches!(
+            domain.status.as_str(),
+            "partial" | "shadow_execute_planned" | "shadow_execute_cleanup"
+        ) || domain.status.contains("degraded")
+    });
+    if has_pending_or_degraded_domain {
+        "partial".to_string()
+    } else {
+        "applied".to_string()
+    }
 }
 
 impl PlatformAgent {
@@ -375,7 +402,7 @@ impl PlatformAgent {
                         for ds in &mut outcome.apply_report.domain_statuses {
                             if matches!(
                                 ds.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes" | "qos"
+                                "identity" | "ports" | "security" | "routes" | "qos" | "mirror"
                             ) {
                                 ds.status = "applied".to_string();
                                 ds.shadow_apply_only = false;
@@ -388,7 +415,7 @@ impl PlatformAgent {
                         for domain in &mut outcome.runtime_execution_summary.domain_summaries {
                             if matches!(
                                 domain.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes" | "qos"
+                                "identity" | "ports" | "security" | "routes" | "qos" | "mirror"
                             ) {
                                 domain.execution_status = "failed".to_string();
                                 domain.shadow_apply_only = false;
@@ -400,7 +427,7 @@ impl PlatformAgent {
                         for ds in &mut outcome.apply_report.domain_statuses {
                             if matches!(
                                 ds.domain.as_str(),
-                                "identity" | "ports" | "security" | "routes" | "qos"
+                                "identity" | "ports" | "security" | "routes" | "qos" | "mirror"
                             ) {
                                 ds.status = "failed".to_string();
                                 ds.shadow_apply_only = false;
@@ -426,7 +453,14 @@ impl PlatformAgent {
                     !outcome.compiled_state.service_programs.is_empty() || previous_had_services;
 
                 if should_materialize_services {
-                    let lb_enabled = !outcome.compiled_state.service_programs.is_empty();
+                    let lb_allowed = outcome
+                        .compiled_state
+                        .node_config
+                        .as_ref()
+                        .and_then(|config| config.lb_enabled)
+                        .unwrap_or(true);
+                    let lb_enabled =
+                        lb_allowed && !outcome.compiled_state.service_programs.is_empty();
                     let mut failed_taps = Vec::new();
                     let mut successful_taps = 0usize;
                     let mut total_frontends = 0usize;
@@ -609,6 +643,8 @@ impl PlatformAgent {
                         }
                     }
                 }
+
+                outcome.apply_report.status = recompute_apply_status(&outcome.apply_report);
 
                 if let Err(error) = self
                     .client
