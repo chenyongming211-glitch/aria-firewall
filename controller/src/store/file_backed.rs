@@ -2,7 +2,8 @@ use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
     IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
     NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
+    SecurityGroupResource, ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse,
+    TenantResource,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -527,6 +528,37 @@ impl ControllerStore for FileBackedControllerStore {
 
     async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError> {
         self.run_persisted(self.inner.delete_mirror_policy(id))
+            .await
+    }
+
+    // --- ServiceChain (Phase 3.8) ---
+    async fn list_service_chains(&self) -> Vec<ServiceChainResource> {
+        self.inner.list_service_chains().await
+    }
+
+    async fn get_service_chain(&self, id: &str) -> Option<ServiceChainResource> {
+        self.inner.get_service_chain(id).await
+    }
+
+    async fn create_service_chain(
+        &self,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError> {
+        self.run_persisted(self.inner.create_service_chain(resource))
+            .await
+    }
+
+    async fn update_service_chain(
+        &self,
+        id: &str,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError> {
+        self.run_persisted(self.inner.update_service_chain(id, resource))
+            .await
+    }
+
+    async fn delete_service_chain(&self, id: &str) -> Result<ServiceChainResource, StoreError> {
+        self.run_persisted(self.inner.delete_service_chain(id))
             .await
     }
 

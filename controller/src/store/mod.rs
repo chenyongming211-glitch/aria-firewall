@@ -3,7 +3,7 @@ use aria_api::{
     HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
     NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource,
     PortResource, QosPolicyResource, ResourceMetadata, RouteTableResource, SecurityGroupResource,
-    ServiceResource, SouthboundNodeStatusResponse, TenantResource,
+    ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,7 @@ impl_stored_resource!(IpGroupResource);
 impl_stored_resource!(NetworkPolicyResource);
 impl_stored_resource!(QosPolicyResource);
 impl_stored_resource!(MirrorPolicyResource);
+impl_stored_resource!(ServiceChainResource);
 impl_stored_resource!(HealthCheckResource);
 impl_stored_resource!(BackendSetResource);
 impl_stored_resource!(ServiceResource);
@@ -255,6 +256,20 @@ pub trait ControllerStore: Send + Sync {
         resource: MirrorPolicyResource,
     ) -> Result<MirrorPolicyResource, StoreError>;
     async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError>;
+
+    // --- ServiceChain (Phase 3.8) ---
+    async fn list_service_chains(&self) -> Vec<ServiceChainResource>;
+    async fn get_service_chain(&self, id: &str) -> Option<ServiceChainResource>;
+    async fn create_service_chain(
+        &self,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError>;
+    async fn update_service_chain(
+        &self,
+        id: &str,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError>;
+    async fn delete_service_chain(&self, id: &str) -> Result<ServiceChainResource, StoreError>;
 
     async fn list_health_checks(&self) -> Vec<HealthCheckResource>;
     async fn get_health_check(&self, id: &str) -> Option<HealthCheckResource>;

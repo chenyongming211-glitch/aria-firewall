@@ -299,3 +299,26 @@ pub struct MirrorPolicyListQuery {
     #[param(example = "ready")]
     pub status: Option<String>,
 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
+pub struct ServiceChainListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = 50, minimum = 1, maximum = 200)]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "50")]
+    pub page_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "scope=prod")]
+    pub label_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "tenant-0001")]
+    pub tenant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "network-0001")]
+    pub network_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(example = "ready")]
+    pub status: Option<String>,
+}

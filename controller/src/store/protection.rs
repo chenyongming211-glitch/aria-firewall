@@ -152,6 +152,21 @@ impl InMemoryControllerStore {
             });
         }
 
+        if let Some(service_chain) = self
+            .service_chains
+            .list()
+            .await
+            .into_iter()
+            .find(|service_chain| service_chain.spec.tenant_id == tenant_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "tenant",
+                id: tenant_id.to_string(),
+                dependent_resource: "service_chain",
+                dependent_id: service_chain.metadata.id,
+            });
+        }
+
         Ok(())
     }
 
@@ -310,6 +325,21 @@ impl InMemoryControllerStore {
                 id: network_id.to_string(),
                 dependent_resource: "mirror_policy",
                 dependent_id: mirror_policy.metadata.id,
+            });
+        }
+
+        if let Some(service_chain) = self
+            .service_chains
+            .list()
+            .await
+            .into_iter()
+            .find(|service_chain| service_chain.spec.network_id == network_id)
+        {
+            return Err(StoreError::DependencyConflict {
+                resource: "network",
+                id: network_id.to_string(),
+                dependent_resource: "service_chain",
+                dependent_id: service_chain.metadata.id,
             });
         }
 
@@ -566,6 +596,14 @@ impl InMemoryControllerStore {
         _mirror_policy_id: &str,
     ) -> Result<(), StoreError> {
         // No resources currently depend on mirror_policy.
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_service_chain_delete_allowed_inner(
+        &self,
+        _service_chain_id: &str,
+    ) -> Result<(), StoreError> {
+        // No resources currently depend on service_chain.
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use aria_api::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
     NetworkPolicyResource, NetworkResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceResource, TenantResource, NodeResource,
+    SecurityGroupResource, ServiceChainResource, ServiceResource, TenantResource, NodeResource,
 };
 use std::collections::BTreeSet;
 use std::net::IpAddr;
@@ -632,6 +632,62 @@ impl InMemoryControllerStore {
             {
                 return Err(StoreError::AlreadyExists {
                     resource: "mirror_policy",
+                    id: format!(
+                        "name '{}' in network '{}'",
+                        resource.spec.name, resource.spec.network_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn validate_service_chain_resource_inner(
+        &self,
+        resource: &ServiceChainResource,
+    ) -> Result<(), StoreError> {
+        if resource.spec.hops.is_empty() {
+            return Err(StoreError::BadRequest(
+                "service_chain must define at least one hop".to_string(),
+            ));
+        }
+        self.ensure_tenant_exists_inner(&resource.spec.tenant_id, "service_chain", "tenant_id")
+            .await?;
+        let network = self
+            .ensure_network_exists_inner(&resource.spec.network_id, "service_chain", "network_id")
+            .await?;
+        if network.spec.tenant_id != resource.spec.tenant_id {
+            return Err(StoreError::InvalidReference {
+                resource: "service_chain",
+                field: "network_id".to_string(),
+                value: resource.spec.network_id.clone(),
+                referenced_resource: "network",
+            });
+        }
+        for (i, hop) in resource.spec.hops.iter().enumerate() {
+            if hop.hop_type != "bridge" && hop.hop_type != "proxy" {
+                return Err(StoreError::BadRequest(format!(
+                    "hops[{}].hop_type must be 'bridge' or 'proxy', got '{}'",
+                    i, hop.hop_type
+                )));
+            }
+            for (j, tap) in hop.taps.iter().enumerate() {
+                if tap.role != "in" && tap.role != "out" && tap.role != "bidirectional" {
+                    return Err(StoreError::BadRequest(format!(
+                        "hops[{}].taps[{}].role must be 'in', 'out', or 'bidirectional', got '{}'",
+                        i, j, tap.role
+                    )));
+                }
+            }
+        }
+        // Enforce name uniqueness within the same network.
+        for existing in self.service_chains.list().await {
+            if existing.spec.network_id == resource.spec.network_id
+                && existing.spec.name == resource.spec.name
+                && existing.metadata.id != resource.metadata.id
+            {
+                return Err(StoreError::AlreadyExists {
+                    resource: "service_chain",
                     id: format!(
                         "name '{}' in network '{}'",
                         resource.spec.name, resource.spec.network_id

@@ -2,7 +2,8 @@ use aria_api::{
     ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, HealthCheckResource,
     IpGroupResource, MirrorPolicyResource, NetworkPolicyResource, NetworkResource, NodeCapability,
     NodeHealthReport, NodeInfo, NodeResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceResource, SouthboundNodeStatusResponse, TenantResource,
+    SecurityGroupResource, ServiceChainResource, ServiceResource, SouthboundNodeStatusResponse,
+    TenantResource,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -23,6 +24,7 @@ pub struct InMemoryControllerStore {
     pub network_policies: ResourceStore<NetworkPolicyResource>,
     pub qos_policies: ResourceStore<QosPolicyResource>,
     pub mirror_policies: ResourceStore<MirrorPolicyResource>,
+    pub service_chains: ResourceStore<ServiceChainResource>,
     pub health_checks: ResourceStore<HealthCheckResource>,
     pub backend_sets: ResourceStore<BackendSetResource>,
     pub services: ResourceStore<ServiceResource>,
@@ -47,6 +49,7 @@ impl InMemoryControllerStore {
             network_policies: ResourceStore::new("network_policy", "npol"),
             qos_policies: ResourceStore::new("qos_policy", "qos"),
             mirror_policies: ResourceStore::new("mirror_policy", "mpol"),
+            service_chains: ResourceStore::new("service_chain", "schain"),
             health_checks: ResourceStore::new("health_check", "hc"),
             backend_sets: ResourceStore::new("backend_set", "bset"),
             services: ResourceStore::new("service", "svc"),
@@ -77,6 +80,10 @@ impl InMemoryControllerStore {
         counts.insert(
             "mirror_policies".to_string(),
             self.mirror_policies.count().await,
+        );
+        counts.insert(
+            "service_chains".to_string(),
+            self.service_chains.count().await,
         );
         counts.insert(
             "health_checks".to_string(),
@@ -608,6 +615,56 @@ impl ControllerStore for InMemoryControllerStore {
         self.run_mutation(async {
             self.ensure_mirror_policy_delete_allowed_inner(id).await?;
             self.delete_resource(&self.mirror_policies, id).await
+        })
+        .await
+    }
+
+    // --- ServiceChain (Phase 3.8) ---
+    async fn list_service_chains(&self) -> Vec<ServiceChainResource> {
+        self.list_resource(&self.service_chains).await
+    }
+
+    async fn get_service_chain(&self, id: &str) -> Option<ServiceChainResource> {
+        self.get_resource(&self.service_chains, id).await
+    }
+
+    async fn create_service_chain(
+        &self,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError> {
+        self.run_mutation(async {
+            self.validate_service_chain_resource_inner(&resource).await?;
+            self.create_resource(&self.service_chains, resource).await
+        })
+        .await
+    }
+
+    async fn update_service_chain(
+        &self,
+        id: &str,
+        resource: ServiceChainResource,
+    ) -> Result<ServiceChainResource, StoreError> {
+        self.run_mutation(async {
+            self
+                .service_chains
+                .get(id)
+                .await
+                .ok_or_else(|| StoreError::NotFound {
+                    resource: "service_chain",
+                    id: id.to_string(),
+                })?;
+            self.validate_service_chain_resource_inner(&resource).await?;
+            self
+                .update_resource(&self.service_chains, id, resource)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_service_chain(&self, id: &str) -> Result<ServiceChainResource, StoreError> {
+        self.run_mutation(async {
+            self.ensure_service_chain_delete_allowed_inner(id).await?;
+            self.delete_resource(&self.service_chains, id).await
         })
         .await
     }

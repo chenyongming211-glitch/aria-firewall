@@ -83,6 +83,16 @@ pub fn build_router(store: SharedStore) -> Router {
                 .delete(api_handlers::delete_mirror_policy),
         )
         .route(
+            "/api/v1/service-chains",
+            get(api_handlers::list_service_chains).post(api_handlers::create_service_chain),
+        )
+        .route(
+            "/api/v1/service-chains/{id}",
+            get(api_handlers::get_service_chain)
+                .put(api_handlers::update_service_chain)
+                .delete(api_handlers::delete_service_chain),
+        )
+        .route(
             "/api/v1/ip-groups",
             get(api_handlers::list_ip_groups).post(api_handlers::create_ip_group),
         )

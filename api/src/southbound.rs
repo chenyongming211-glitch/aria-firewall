@@ -7,7 +7,7 @@ use utoipa::ToSchema;
 use crate::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
     NetworkPolicyResource, NetworkResource, PortResource, QosPolicyResource, RouteTableResource,
-    SecurityGroupResource, ServiceResource, TenantResource,
+    SecurityGroupResource, ServiceChainResource, ServiceResource, TenantResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -239,6 +239,9 @@ pub struct DesiredStateEnvelope {
     /// Mirror policy objects relevant to the node.
     #[serde(default)]
     pub mirror_policies: Vec<MirrorPolicyResource>,
+    /// Service chain objects relevant to the node.
+    #[serde(default)]
+    pub service_chains: Vec<ServiceChainResource>,
     /// Health-check objects relevant to the node.
     #[serde(default)]
     pub health_checks: Vec<HealthCheckResource>,
