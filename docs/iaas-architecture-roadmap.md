@@ -525,11 +525,19 @@ Southbound API 面向：
   - Phase 3.7：Mirror → Controller `MirrorPolicy` 下发，复用现有 `MIRROR_POLICY`
   - Phase 3.8：Service Chain → Controller `ServiceChain` 下发（TCP-RT/Trace/Diagnose 链路级观测前置）
   - Phase 3.9：NodeConfig → Controller 统一管理功能开关和 SSL 开关
-- 当前实现状态（2026-04-11）：
+- 当前实现状态（2026-04-18）：
   - 已进入 Mode A 真实 map materialize 阶段，当前节点侧已新增 `PORT_IDENTITY_MAP / ANTI_SPOOF_MAP / ROUTE_TABLE_V4 / ROUTE_TABLE_V6 / SG_RULE_MAP`
   - `ebpf/src/port.rs`、`ebpf/src/route.rs`、`ebpf/src/sg.rs` 已开始接入现有 TC ingress 流水线，与 LB/CT 共享 `PipelineCtx`
   - Agent 已开始把 `Port / RouteTable / SecurityGroup` 编译成真实 map 条目，并为 `identity / ports / security / routes` 域回报真实 `applied / failed`
   - `Mode B` 的 `SNAT / DNAT / Floating IP / NAT Gateway` 仍为文档预留，冻结在 `RFC-005A`
+  - Phase 3.5a/3.5b（IpGroup + NetworkPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
+  - Phase 3.6（QosPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
+  - Phase 3.7（MirrorPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
+  - Phase 3.8（ServiceChain）controller 对象层已完成，agent 侧通过 DesiredStateEnvelope 接收（无独立 eBPF map）
+  - Phase 3.9（NodeConfig）controller 对象层已完成，agent 侧 materialize 到 `FIREWALL_CONFIG / TAP_CONFIG_MAP / CT_CONFIG` 待实现
+  - LB 数据面性能优化：`load_feature_flags_tc/xdp` 已合并 `monitoring_enabled / conntrack_enabled` 到单次 `TAP_CONFIG_MAP` lookup，消除 fast-path 5-7 次冗余 hash map 查表
+  - Controller 已加入 CI（之前从未编译过），修复了 236 个历史编译错误，`run_mutation` 重构为裸 Future 模式
+  - 全 crate 零 warning
 - 验收：单节点实例互联、隔离、安全控制全部跑通；所有策略类能力统一通过 Controller 下发；本地 CLI 写入降级为 debug-only
 - 详细迁移计划见 §18
 
@@ -705,7 +713,7 @@ Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径
    - 从 NetworkPolicy 提取规则 → 写入 `POLICY_TABLE` + `PORT_BITMAP_POOL`
 5. 新增 `materialize_policy_maps` 函数，与现有 `materialize_service_maps` 并列
 
-当前状态（2026-04-11）：
+当前状态（2026-04-18）：
 
 - 已完成 `IpGroup / NetworkPolicy` 的共享 schema、controller store、northbound CRUD、OpenAPI 和 southbound `desired-state` 对象投影
 - 已完成 tenant/network/IP Group 引用校验，以及 `IpGroup -> NetworkPolicy` 删除保护
@@ -749,13 +757,13 @@ Service Chain 是 TCP-RT、Trace、Diagnose 链路级观测能力的共同前置
 ### 18.5 迁移时间线
 
 ```
-Phase 3    ：SecurityGroup + Route + Port（新 map，新 eBPF 模块）
-Phase 3.5a ：Groups → Controller IpGroup 下发（复用 LPM Trie，ACL 前置依赖）
-Phase 3.5b ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）
-Phase 3.6  ：QoS → Controller QosPolicy 下发（复用 QOS_CONFIG）
-Phase 3.7  ：Mirror → Controller MirrorPolicy 下发（复用 MIRROR_POLICY）
-Phase 3.8  ：Service Chain → Controller ServiceChain 下发（TCP-RT/Trace/Diagnose 链路级观测前置）
-Phase 3.9  ：NodeConfig → Controller 统一管理功能开关和 SSL 开关
+Phase 3    ：SecurityGroup + Route + Port（新 map，新 eBPF 模块）                    ✅ 已完成
+Phase 3.5a ：Groups → Controller IpGroup 下发（复用 LPM Trie，ACL 前置依赖）          ✅ 已完成
+Phase 3.5b ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）                ✅ 已完成
+Phase 3.6  ：QoS → Controller QosPolicy 下发（复用 QOS_CONFIG）                      ✅ 已完成
+Phase 3.7  ：Mirror → Controller MirrorPolicy 下发（复用 MIRROR_POLICY）              ✅ 已完成（2026-04-18）
+Phase 3.8  ：Service Chain → Controller ServiceChain 下发                             ✅ 已完成（2026-04-18）
+Phase 3.9  ：NodeConfig → Controller 统一管理功能开关和 SSL 开关                       ✅ 已完成（2026-04-18）
 Phase 3.9 完成后：本地 CLI 写入路径降级为 debug-only，所有策略和配置通过 Controller 下发
 ```
 
