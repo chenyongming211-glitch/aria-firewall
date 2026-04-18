@@ -233,6 +233,74 @@ cargo install bpf-linker
 cargo build --release
 ```
 
+## Controller 部署模式
+
+Aria 支持三种部署模式，按需选择：
+
+### 模式 A：Agent-only（默认）
+
+最简单的部署方式。每个节点只运行 `aria-agent`，所有策略通过本地 CLI（`ariactl`）管理。适合单节点或少量节点的场景。
+
+```bash
+sudo ./install.sh
+# agent 自动启动，controller 不启动
+```
+
+### 模式 B：独立 Controller + 远端 Agent
+
+Controller 运行在管理节点上，Agent 通过 southbound 协议从 Controller 拉取配置。适合多节点统一管理。
+
+管理节点：
+
+```bash
+sudo ./install.sh --start-controller
+# 或手动启动
+sudo systemctl enable --now aria-controller.service
+```
+
+Agent 节点：在 `/etc/aria-agent/config.toml` 中配置：
+
+```toml
+southbound_controller_url = "http://<controller-ip>:8080"
+southbound_node_id = "node-0001"
+```
+
+然后重启 agent：
+
+```bash
+sudo systemctl restart aria-agent
+```
+
+### 模式 C：Agent + Controller 同机
+
+单机同时运行 Agent 和 Controller，适合开发测试或小规模部署。
+
+```bash
+sudo ./install.sh --start-controller
+```
+
+Agent 配置 `southbound_controller_url = "http://127.0.0.1:8080"` 即可连接本机 Controller。
+
+### Controller API
+
+Controller 提供 northbound REST API，管理所有平台对象：
+
+```bash
+# 健康检查
+curl http://<controller>:8080/api/v1/health
+
+# OpenAPI 文档
+open http://<controller>:8080/docs
+
+# 资源管理示例
+curl http://<controller>:8080/api/v1/tenants
+curl http://<controller>:8080/api/v1/nodes
+curl http://<controller>:8080/api/v1/networks
+curl http://<controller>:8080/api/v1/node-configs
+```
+
+当前 Controller 管理的平台对象：Tenant、Node、Network、Port、SecurityGroup、RouteTable、IpGroup、NetworkPolicy、QosPolicy、MirrorPolicy、ServiceChain、NodeConfig、HealthCheck、BackendSet、Service。
+
 ## 使用指南（按场景）
 
 - [快速开始](#快速开始)
