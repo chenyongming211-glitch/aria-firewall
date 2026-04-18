@@ -44,14 +44,14 @@ phase_ct_v4:
 
 ```
 load_runtime_ctx_tc          → 1 lookup
-load_feature_flags_tc        → 5 lookup (TAP_CONFIG_MAP × 5)
+load_feature_flags_tc        → 1 lookup (TAP_CONFIG_MAP × 1, 已合并)
 phase_ct_v4:
   CT_TABLE_V4 lookup         → 1-2 lookup (forward hit)
 phase_ct_fastpath_tc_ingress_v4:
   apply_dnat_v4_raw          → 2-4 bpf_skb_store_bytes + 2-3 csum_replace
   update_lb_stats            → 1 PerCpuArray access
 ─────────────────────────────────────────────────
-总计: 7-8 map operations + 4-7 bpf helper calls
+总计: 3-4 map operations + 4-7 bpf helper calls
 ```
 
 CT fast-path 已将 LB 首包的全部查表（frontend/affinity/maglev/backend）跳过，直接从 CT entry 读取缓存的 backend 地址完成 DNAT。
@@ -168,8 +168,10 @@ TC egress 每包都做 `SVC_REVNAT_MAP` lookup，即使 CT 已 established。Rev
 
 ## 结论
 
-修复已知 bug 后，L4 LB 数据面的核心架构已接近最优。CT 缓存 LB 决策是最高效的设计——首包 ~15 次 map 操作，fast-path ~8 次。
+修复已知 bug 后，L4 LB 数据面的核心架构已接近最优。CT 缓存 LB 决策是最高效的设计——首包 ~15 次 map 操作，fast-path ~3-4 次。
 
-**唯一有实际意义的近期优化是优化 1（合并 `load_feature_flags_tc` 重复 lookup）。** 它同时优化 LB 和非 LB 路径，改动小、风险低、收益确定。
+**优化 1（合并 `load_feature_flags_tc` 重复 lookup）已于 2026-04-18 完成。** `load_feature_flags_tc` 和 `load_feature_flags_xdp` 现在一次 `TAP_CONFIG_MAP` lookup 读取全部 7 个开关（qos / tcprt / acl / mirror / lb / conntrack / monitoring），结果缓存在 `PipelineCtx.flags` 的 `FLAG_*` 位上。下游所有检查点改为读 flag 位，不再重新查 map。同时 `should_create_ct` 也改为检查 `FLAG_TCPRT_ON` 而不是调用 `tcprt::tcprt_enabled()`。全局 fallback 语义（per-tap miss → global config → 硬编码默认值）保持不变。
+
+Fast-path 从优化前的 ~7-8 次 map 操作降到 ~3-4 次。
 
 其余优化收益极小，不建议近期投入。

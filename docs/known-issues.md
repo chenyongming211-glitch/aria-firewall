@@ -23,3 +23,16 @@
 | BUG-9 | Low | store | 读操作（尤其 `desired_state_for_node_inner` 和 `southbound_status_inner`）与 CUD 并发时可能读到 mixed-time 视图。Phase 0 原型可接受，Phase 1 应结合快照/事务边界统一处理。 | Deferred (Phase 1) |
 | STYLE-1 | Info | store | 5 个 helper 方法（`list_resource` / `get_resource` 等）只是转发到 `ResourceStore` 同名方法，宏可直接调用 `self.$field.xxx()`。约 50 行冗余。 | Won't fix |
 | STYLE-2 | Info | store | southbound 方法采用 `_inner` + trait impl 委托模式，代码量翻倍。是 `async_trait` 的合理 workaround。 | Won't fix |
+
+## v0.10.0 — Phase 3 Platform Migration (2026-04-18)
+
+| ID | Severity | Component | Description | Status |
+|----|----------|-----------|-------------|--------|
+| BUG-20 | High | controller | `std::net::IpNet` 在 `validation.rs` 中被使用，但标准库没有这个类型，仓库也没有 `ipnet` 依赖。Controller 从未在 CI 上编译过。现已替换为手写 `is_valid_cidr` 函数，并把 controller 加入 CI。 | Fixed (2026-04-18) |
+| BUG-21 | High | controller | Controller 有 236 个历史编译错误：`PersistedResourceStore` 的 `Default` derive 要求 `T: Default`、`FileBackedControllerStore` 缺 Service 方法、utoipa `__path_xxx` 路径解析失败、`as_deref()` 用在 `String` 上、`run_mutation` async closure lifetime 问题。现已全部修复。 | Fixed (2026-04-18) |
+| BUG-22 | Medium | controller | `api_routes.rs` 中 `ip-groups` 和 `network-policies` 路由重复注册，Axum 启动时会 panic。现已删除重复路由。 | Fixed (2026-04-18) |
+| BUG-23 | Medium | controller | `DesiredStateEnvelope` 构造中 `ip_groups` 和 `network_policies` 字段重复赋值（Rust 编译错误）。`desired_state_object_counts` 也有 `_ip_groups_dup` / `_network_policies_dup` 冗余参数。现已清理。 | Fixed (2026-04-18) |
+| BUG-24 | Medium | api | `dataplane::service_chain` 和 `platform::service_chain` 导出了同名的 `ServiceChainListResponse` / `CreateServiceChainRequest`，glob re-export 导致 controller 引用到错误的类型。现已将 dataplane 版本重命名为 `DataplaneServiceChainListResponse` / `DataplaneCreateServiceChainRequest`。 | Fixed (2026-04-18) |
+| BUG-25 | High | agent | NodeConfig 的 `qos_enabled: false` 被 QoS materialize 后的 `update_runtime_config(Some(has_any_qos_rule))` 无条件覆盖，导致节点级禁用开关失效。Mirror 和 LB 同理。现已改为 `feature_enabled_when_present(configured, has_objects)` 模式，NodeConfig 显式 false 优先。 | Fixed (2026-04-18) |
+| BUG-26 | Medium | agent | NodeConfig CT timeout 部分更新会用硬编码默认值重置未指定字段。现已改为先读当前 pinned CT_CONFIG 值，缺省字段沿用当前值。同时 `write_ct_config_pinned` 和 `update_runtime_config` 的错误不再被 `let _ =` 吞掉。 | Fixed (2026-04-18) |
+| BUG-27 | Medium | agent/compiler | `compiled_objects` 缺少 `ip_groups` / `network_policies` / `service_chains` / `node_configs` 四个 key，导致 controller 的 pending_object_counts 计算永远认为这些资源未处理。现已补齐。 | Fixed (2026-04-18) |
