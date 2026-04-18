@@ -1,7 +1,7 @@
 use aria_api::{
     BackendSetResource, HealthCheckResource, IpGroupResource, MirrorPolicyResource,
     NetworkPolicyResource, NetworkResource, NodeResource, PortResource, QosPolicyResource,
-    ResourceMetadata, RouteTableResource, SecurityGroupResource, ServiceResource,
+    RouteTableResource, SecurityGroupResource, ServiceResource,
     TenantResource, DesiredStatePublishRecord,
 };
 use serde::{Deserialize, Serialize};

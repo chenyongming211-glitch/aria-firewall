@@ -1,9 +1,9 @@
 use aria_api::{
-    ApplyStatusReport, BackendSetResource, DesiredStateEnvelope, DesiredStatePublishRecord,
+    ApplyStatusReport, BackendSetResource, DesiredStateEnvelope,
     HealthCheckResource, IpGroupResource, MirrorPolicyResource, NetworkPolicyResource,
     NetworkResource, NodeCapability, NodeHealthReport, NodeInfo, NodeRegisterRequest, NodeResource,
     PortResource, QosPolicyResource, ResourceMetadata, RouteTableResource, SecurityGroupResource,
-    ServiceResource, SouthboundNodeStatusResponse, SouthboundSyncStatus, TenantResource,
+    ServiceResource, SouthboundNodeStatusResponse, TenantResource,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

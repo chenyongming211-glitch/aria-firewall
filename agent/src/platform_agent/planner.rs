@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use aria_api::NodeCapability;
-use tracing::info;
 
 use super::helpers::*;
 use super::ir_types::*;
