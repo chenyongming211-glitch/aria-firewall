@@ -146,6 +146,13 @@ ARIA_CONTROLLER_LOG_FILTER=info
 ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
 ```
 
+安装脚本会安装 `aria-controller`、`aria-controller.service`、
+`/etc/aria-controller/controller.env`、`/var/lib/aria-controller`、
+`/var/log/aria-controller` 和 controller logrotate 配置。默认只启动
+`aria-agent`；只有传入 `--start-controller` 时才会 enable/start
+`aria-controller.service`。Agent 本地 API 默认是 `127.0.0.1:8080`，
+Controller API 默认是 `127.0.0.1:8180`，两者不要混用。
+
 ### 2.3 启动与版本确认
 
 ```bash
@@ -157,11 +164,18 @@ ariactl health
 ariactl instances
 ```
 
-OpenAPI 检查：
+Agent OpenAPI 检查：
 
 ```bash
 curl -s http://127.0.0.1:8080/openapi.json | jq '.paths | keys'
 open http://127.0.0.1:8080/docs
+```
+
+Controller OpenAPI 检查：
+
+```bash
+curl -s http://127.0.0.1:8180/openapi.json | jq '.paths | keys'
+open http://127.0.0.1:8180/docs
 ```
 
 `ariactl health` 会显示：
