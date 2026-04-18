@@ -54,7 +54,7 @@ pub struct ServiceChainEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ServiceChainListResponse {
+pub struct DataplaneServiceChainListResponse {
     pub chains: Vec<ServiceChainEntry>,
 }
 
@@ -75,7 +75,7 @@ pub struct ServiceChainListResponse {
         }
     ]
 }))]
-pub struct CreateServiceChainRequest {
+pub struct DataplaneCreateServiceChainRequest {
     /// Stable service chain name.
     #[schema(example = "frontend-to-db")]
     pub name: String,

@@ -13,7 +13,7 @@ pub(crate) async fn handle_action(
                     std::process::exit(1);
                 }
             };
-            let req: aria_api::CreateServiceChainRequest = match serde_json::from_str(&json_str) {
+            let req: aria_api::DataplaneCreateServiceChainRequest = match serde_json::from_str(&json_str) {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("Error: Invalid JSON: {}", e);

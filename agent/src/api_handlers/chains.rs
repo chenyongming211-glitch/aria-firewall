@@ -15,13 +15,13 @@ use crate::control_plane::ControlPlaneError;
     summary = "List service chains",
     operation_id = "listServiceChains",
     responses(
-        (status = 200, description = "Configured service chains", body = aria_api::ServiceChainListResponse),
+        (status = 200, description = "Configured service chains", body = aria_api::DataplaneServiceChainListResponse),
         (status = 500, description = "Internal server error", body = aria_api::ApiError)
     )
 )]
 pub async fn list_chains(State(cp): State<AppState>) -> impl IntoResponse {
     let chains = cp.list_chains().await;
-    Json(aria_api::ServiceChainListResponse {
+    Json(aria_api::DataplaneServiceChainListResponse {
         chains: chains
             .into_iter()
             .map(|c| aria_api::ServiceChainEntry {
@@ -54,7 +54,7 @@ pub async fn list_chains(State(cp): State<AppState>) -> impl IntoResponse {
     tag = "chains",
     summary = "Create a service chain",
     operation_id = "createServiceChain",
-    request_body = aria_api::CreateServiceChainRequest,
+    request_body = aria_api::DataplaneCreateServiceChainRequest,
     responses(
         (status = 201, description = "Service chain created", body = aria_api::MessageResponse),
         (status = 400, description = "Validation error", body = aria_api::ApiError),
@@ -64,7 +64,7 @@ pub async fn list_chains(State(cp): State<AppState>) -> impl IntoResponse {
 )]
 pub async fn create_chain(
     State(cp): State<AppState>,
-    Json(req): Json<aria_api::CreateServiceChainRequest>,
+    Json(req): Json<aria_api::DataplaneCreateServiceChainRequest>,
 ) -> impl IntoResponse {
     use crate::service_chain::{HopType, ServiceChain, ServiceHop, TapBinding, TapRole};
 

@@ -389,7 +389,7 @@ impl ApiClient {
 
     // ── Service Chains ──
 
-    pub async fn list_chains(&self) -> Result<ServiceChainListResponse, String> {
+    pub async fn list_chains(&self) -> Result<DataplaneServiceChainListResponse, String> {
         let resp = self.client.get(self.url("/api/v1/chains"))
             .send().await
             .map_err(|e| self.connection_error(e))?;
@@ -403,7 +403,7 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
-    pub async fn create_chain(&self, req: &CreateServiceChainRequest) -> Result<MessageResponse, String> {
+    pub async fn create_chain(&self, req: &DataplaneCreateServiceChainRequest) -> Result<MessageResponse, String> {
         let resp = self.client.post(self.url("/api/v1/chains"))
             .json(req)
             .send().await
