@@ -191,6 +191,15 @@ journalctl -u aria-agent -f
 tail -f /var/log/aria-agent/aria-agent.log
 ```
 
+`aria-controller` 默认也会同时写入 stdout/journald 和
+`/var/log/aria-controller/aria-controller.log`。可通过环境变量调整：
+
+```bash
+ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
+ARIA_CONTROLLER_LOG_FILTER=info
+ARIA_CONTROLLER_LOG_FORMAT=text
+```
+
 API 文档入口：
 
 ```bash

@@ -114,6 +114,23 @@ EOF
 - `journalctl -u aria-agent`
 - `/var/log/aria-agent/aria-agent.log`
 
+`aria-controller` 默认日志路径：
+
+- `journalctl -u aria-controller`
+- `/var/log/aria-controller/aria-controller.log`
+
+controller 可通过环境变量调整日志：
+
+- `ARIA_CONTROLLER_LOG_FILE_PATH`
+  - 文件日志路径
+  - 留空表示禁用文件日志，仅保留 stdout/journald
+- `ARIA_CONTROLLER_LOG_FILTER`
+  - 默认 `info`
+  - `RUST_LOG` 存在时优先使用 `RUST_LOG`
+- `ARIA_CONTROLLER_LOG_FORMAT`
+  - `text`
+  - `json`
+
 ### 2.3 启动与版本确认
 
 ```bash
