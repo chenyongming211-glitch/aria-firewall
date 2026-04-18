@@ -1,5 +1,5 @@
 Name:           aria-firewall
-Version:        0.1.0
+Version:        0.10.0
 Release:        1%{?dist}
 Summary:        eBPF/XDP Firewall with LPM trie and port-based policy
 

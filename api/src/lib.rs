@@ -37,7 +37,7 @@ impl fmt::Display for ApiError {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "status": "ok",
-    "version": "0.9.0",
+    "version": "0.10.0",
     "instances": 2,
     "wal_replay_failures": 0,
     "kernel_drop_available": true,
@@ -50,7 +50,7 @@ pub struct HealthResponse {
     #[schema(example = "ok")]
     pub status: String,
     /// Running agent version string.
-    #[schema(example = "0.9.0")]
+    #[schema(example = "0.10.0")]
     pub version: String,
     /// Number of managed firewall instances currently active.
     #[schema(example = 2)]

@@ -29,7 +29,7 @@ pub struct NodeSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "phase": "registered",
-    "agent_version": "0.9.0",
+    "agent_version": "0.10.0",
     "kernel_version": "6.8.0-71-generic",
     "capabilities": ["encap", "nat", "qos_shaping", "socket_lb", "tc", "trace_ringbuf", "xdp"],
     "desired_generation": "7",
@@ -65,7 +65,7 @@ pub struct NodeStatus {
     pub phase: String,
     /// Currently observed agent version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(example = "0.9.0")]
+    #[schema(example = "0.10.0")]
     pub agent_version: Option<String>,
     /// Observed kernel version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,7 +127,7 @@ pub struct NodeStatus {
     },
     "status": {
         "phase": "registered",
-        "agent_version": "0.9.0",
+        "agent_version": "0.10.0",
         "kernel_version": "6.8.0-71-generic",
         "capabilities": ["nat", "tc", "xdp"],
         "desired_generation": "7",

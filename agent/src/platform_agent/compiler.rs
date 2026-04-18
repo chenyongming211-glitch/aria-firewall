@@ -35,7 +35,7 @@ pub(crate) fn build_node_capability(config: &PlatformAgentConfig) -> NodeCapabil
         supports_socket_lb: false,
         supports_trace_ringbuf: config.trace_backend == "ringbuf",
         supports_nat: false,
-        supports_lb: false,
+        supports_lb: true,
         supports_encap: false,
         supports_qos_shaping: true,
         limits,

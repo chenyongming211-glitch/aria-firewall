@@ -4,3 +4,7 @@
 # macOS resource forks and metadata
 ._*
 .DS_Store
+
+# Release archives
+*.zip
+.downloads/

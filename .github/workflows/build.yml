@@ -69,6 +69,9 @@ jobs:
       - name: Build controller (static)
         run: cargo +stable build --release -p aria-controller --target x86_64-unknown-linux-musl
 
+      - name: Test controller
+        run: cargo +stable test -p aria-controller --target x86_64-unknown-linux-musl
+
       - name: Verify static binaries
         run: |
           file target/x86_64-unknown-linux-musl/release/ariactl

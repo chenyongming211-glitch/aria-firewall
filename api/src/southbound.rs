@@ -29,7 +29,7 @@ pub struct NodeAddress {
 #[schema(example = json!({
     "node_id": "node-0001",
     "hostname": "node-sh-01",
-    "agent_version": "0.9.0",
+    "agent_version": "0.10.0",
     "kernel_version": "6.8.0-71-generic",
     "addresses": [{"kind": "management", "value": "10.10.0.11"}],
     "labels": {"rack": "r1"}
@@ -42,7 +42,7 @@ pub struct NodeInfo {
     #[schema(example = "node-sh-01")]
     pub hostname: String,
     /// Running agent version.
-    #[schema(example = "0.9.0")]
+    #[schema(example = "0.10.0")]
     pub agent_version: String,
     /// Kernel version observed by the agent.
     #[schema(example = "6.8.0-71-generic")]
@@ -103,7 +103,7 @@ pub struct NodeCapability {
     "info": {
         "node_id": "node-0001",
         "hostname": "node-sh-01",
-        "agent_version": "0.9.0",
+        "agent_version": "0.10.0",
         "kernel_version": "6.8.0-71-generic",
         "addresses": [{"kind": "management", "value": "10.10.0.11"}],
         "labels": {"rack": "r1"}
@@ -497,7 +497,7 @@ pub struct SouthboundSyncStatus {
         "info": {
             "node_id": "node-0001",
             "hostname": "node-sh-01",
-            "agent_version": "0.9.0",
+            "agent_version": "0.10.0",
             "kernel_version": "6.8.0-71-generic",
             "addresses": [{"kind": "management", "value": "10.10.0.11"}],
             "labels": {"rack": "r1"}
