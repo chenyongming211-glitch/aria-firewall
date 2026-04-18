@@ -137,10 +137,13 @@ impl InMemoryControllerStore {
         Ok(deleted)
     }
 
-    pub(crate) async fn run_mutation<T, F, Fut>(&self, op: F) -> Result<T, StoreError>
+    pub(crate) async fn run_mutation<T, F>(&self, op: F) -> Result<T, StoreError>
     where
-        F: FnOnce(&InMemoryControllerStore) -> Fut,
-        Fut: std::future::Future<Output = Result<T, StoreError>>,
+        T: Send + 'static,
+        F: for<'a> FnOnce(
+            &'a InMemoryControllerStore,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, StoreError>> + Send + 'a>>,
     {
         let _guard = self.mutation_lock.lock().await;
         op(self).await
@@ -191,7 +194,7 @@ impl ControllerStore for InMemoryControllerStore {
 
     async fn create_tenant(&self, resource: TenantResource) -> Result<TenantResource, StoreError> {
         self.run_mutation(
-            |inner| async move { inner.create_resource(&inner.tenants, resource).await },
+            |inner| Box::pin(async move { inner.create_resource(&inner.tenants, resource).await }),
         )
         .await
     }
@@ -201,17 +204,17 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: TenantResource,
     ) -> Result<TenantResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.update_resource(&inner.tenants, id, resource).await
-        })
+        }))
         .await
     }
 
     async fn delete_tenant(&self, id: &str) -> Result<TenantResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_tenant_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.tenants, id).await
-        })
+        }))
         .await
     }
 
@@ -227,10 +230,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: NetworkResource,
     ) -> Result<NetworkResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_network_resource_inner(&resource).await?;
             inner.create_resource(&inner.networks, resource).await
-        })
+        }))
         .await
     }
 
@@ -239,7 +242,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: NetworkResource,
     ) -> Result<NetworkResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             let existing = inner
                 .networks
                 .get(id)
@@ -253,15 +256,15 @@ impl ControllerStore for InMemoryControllerStore {
                 inner.ensure_network_tenant_change_allowed_inner(id).await?;
             }
             inner.update_resource(&inner.networks, id, resource).await
-        })
+        }))
         .await
     }
 
     async fn delete_network(&self, id: &str) -> Result<NetworkResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_network_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.networks, id).await
-        })
+        }))
         .await
     }
 
@@ -274,10 +277,10 @@ impl ControllerStore for InMemoryControllerStore {
     }
 
     async fn create_port(&self, resource: PortResource) -> Result<PortResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_port_resource_inner(&resource).await?;
             inner.create_resource(&inner.ports, resource).await
-        })
+        }))
         .await
     }
 
@@ -286,7 +289,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: PortResource,
     ) -> Result<PortResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .ports
                 .get(id)
@@ -297,12 +300,12 @@ impl ControllerStore for InMemoryControllerStore {
                 })?;
             inner.validate_port_resource_inner(&resource).await?;
             inner.update_resource(&inner.ports, id, resource).await
-        })
+        }))
         .await
     }
 
     async fn delete_port(&self, id: &str) -> Result<PortResource, StoreError> {
-        self.run_mutation(|inner| async move { inner.delete_resource(&inner.ports, id).await })
+        self.run_mutation(|inner| Box::pin(async move { inner.delete_resource(&inner.ports, id).await }))
             .await
     }
 
@@ -318,14 +321,14 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: SecurityGroupResource,
     ) -> Result<SecurityGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .validate_security_group_resource_inner(&resource)
                 .await?;
             inner
                 .create_resource(&inner.security_groups, resource)
                 .await
-        })
+        }))
         .await
     }
 
@@ -334,7 +337,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: SecurityGroupResource,
     ) -> Result<SecurityGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             let existing =
                 inner
                     .security_groups
@@ -353,15 +356,15 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.security_groups, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_security_group(&self, id: &str) -> Result<SecurityGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_security_group_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.security_groups, id).await
-        })
+        }))
         .await
     }
 
@@ -377,10 +380,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_route_table_resource_inner(&resource).await?;
             inner.create_resource(&inner.route_tables, resource).await
-        })
+        }))
         .await
     }
 
@@ -389,7 +392,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: RouteTableResource,
     ) -> Result<RouteTableResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .route_tables
                 .get(id)
@@ -402,13 +405,13 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.route_tables, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_route_table(&self, id: &str) -> Result<RouteTableResource, StoreError> {
         self.run_mutation(
-            |inner| async move { inner.delete_resource(&inner.route_tables, id).await },
+            |inner| Box::pin(async move { inner.delete_resource(&inner.route_tables, id).await }),
         )
         .await
     }
@@ -425,10 +428,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: IpGroupResource,
     ) -> Result<IpGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_ip_group_resource_inner(&resource).await?;
             inner.create_resource(&inner.ip_groups, resource).await
-        })
+        }))
         .await
     }
 
@@ -437,7 +440,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: IpGroupResource,
     ) -> Result<IpGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             let existing = inner
                 .ip_groups
                 .get(id)
@@ -453,15 +456,15 @@ impl ControllerStore for InMemoryControllerStore {
                 inner.ensure_ip_group_delete_allowed_inner(id).await?;
             }
             inner.update_resource(&inner.ip_groups, id, resource).await
-        })
+        }))
         .await
     }
 
     async fn delete_ip_group(&self, id: &str) -> Result<IpGroupResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_ip_group_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.ip_groups, id).await
-        })
+        }))
         .await
     }
 
@@ -477,14 +480,14 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: NetworkPolicyResource,
     ) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .validate_network_policy_resource_inner(&resource)
                 .await?;
             inner
                 .create_resource(&inner.network_policies, resource)
                 .await
-        })
+        }))
         .await
     }
 
@@ -493,7 +496,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: NetworkPolicyResource,
     ) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .network_policies
                 .get(id)
@@ -508,14 +511,14 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.network_policies, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_network_policy(&self, id: &str) -> Result<NetworkPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.delete_resource(&inner.network_policies, id).await
-        })
+        }))
         .await
     }
 
@@ -532,10 +535,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: QosPolicyResource,
     ) -> Result<QosPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_qos_policy_resource_inner(&resource).await?;
             inner.create_resource(&inner.qos_policies, resource).await
-        })
+        }))
         .await
     }
 
@@ -544,7 +547,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: QosPolicyResource,
     ) -> Result<QosPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .qos_policies
                 .get(id)
@@ -557,12 +560,12 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.qos_policies, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_qos_policy(&self, id: &str) -> Result<QosPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move { inner.delete_resource(&inner.qos_policies, id).await })
+        self.run_mutation(|inner| Box::pin(async move { inner.delete_resource(&inner.qos_policies, id).await }))
             .await
     }
 
@@ -579,10 +582,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: MirrorPolicyResource,
     ) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_mirror_policy_resource_inner(&resource).await?;
             inner.create_resource(&inner.mirror_policies, resource).await
-        })
+        }))
         .await
     }
 
@@ -591,7 +594,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: MirrorPolicyResource,
     ) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .mirror_policies
                 .get(id)
@@ -604,15 +607,15 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.mirror_policies, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_mirror_policy(&self, id: &str) -> Result<MirrorPolicyResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_mirror_policy_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.mirror_policies, id).await
-        })
+        }))
         .await
     }
 
@@ -628,12 +631,12 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: HealthCheckResource,
     ) -> Result<HealthCheckResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .validate_health_check_resource_inner(&resource)
                 .await?;
             inner.create_resource(&inner.health_checks, resource).await
-        })
+        }))
         .await
     }
 
@@ -642,7 +645,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: HealthCheckResource,
     ) -> Result<HealthCheckResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             let existing =
                 inner
                     .health_checks
@@ -663,15 +666,15 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.health_checks, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_health_check(&self, id: &str) -> Result<HealthCheckResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_health_check_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.health_checks, id).await
-        })
+        }))
         .await
     }
 
@@ -687,10 +690,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: BackendSetResource,
     ) -> Result<BackendSetResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_backend_set_resource_inner(&resource).await?;
             inner.create_resource(&inner.backend_sets, resource).await
-        })
+        }))
         .await
     }
 
@@ -699,7 +702,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: BackendSetResource,
     ) -> Result<BackendSetResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             let existing =
                 inner
                     .backend_sets
@@ -718,15 +721,15 @@ impl ControllerStore for InMemoryControllerStore {
             inner
                 .update_resource(&inner.backend_sets, id, resource)
                 .await
-        })
+        }))
         .await
     }
 
     async fn delete_backend_set(&self, id: &str) -> Result<BackendSetResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_backend_set_delete_allowed_inner(id).await?;
             inner.delete_resource(&inner.backend_sets, id).await
-        })
+        }))
         .await
     }
 
@@ -742,10 +745,10 @@ impl ControllerStore for InMemoryControllerStore {
         &self,
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.validate_service_resource_inner(&resource).await?;
             inner.create_resource(&inner.services, resource).await
-        })
+        }))
         .await
     }
 
@@ -754,7 +757,7 @@ impl ControllerStore for InMemoryControllerStore {
         id: &str,
         resource: ServiceResource,
     ) -> Result<ServiceResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner
                 .services
                 .get(id)
@@ -765,12 +768,12 @@ impl ControllerStore for InMemoryControllerStore {
                 })?;
             inner.validate_service_resource_inner(&resource).await?;
             inner.update_resource(&inner.services, id, resource).await
-        })
+        }))
         .await
     }
 
     async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
-        self.run_mutation(|inner| async move { inner.delete_resource(&inner.services, id).await })
+        self.run_mutation(|inner| Box::pin(async move { inner.delete_resource(&inner.services, id).await }))
             .await
     }
 
@@ -795,14 +798,14 @@ impl ControllerStore for InMemoryControllerStore {
     }
 
     async fn delete_node(&self, id: &str) -> Result<NodeResource, StoreError> {
-        self.run_mutation(|inner| async move {
+        self.run_mutation(|inner| Box::pin(async move {
             inner.ensure_node_delete_allowed_inner(id).await?;
             let deleted = inner.nodes.delete(id).await?;
             inner.clear_southbound_runtime_inner(id).await;
             inner.clear_southbound_publish_inner(id).await;
             inner.bump_generation_inner();
             Ok(deleted)
-        })
+        }))
         .await
     }
 
