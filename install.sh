@@ -28,6 +28,15 @@ ZIP_PATH=""
 FORCE_CONFIG=0
 NO_START=0
 START_CONTROLLER=0
+VERIFY_LAYOUT=0
+
+REQUIRED_RELEASE_FILES=(
+    aria-agent
+    aria-controller
+    ariactl
+    libebpf_firewall.so
+    libebpf_firewall_perf.so
+)
 
 cleanup() {
     if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
@@ -59,6 +68,7 @@ Aria Firewall 一键安装/更新脚本
   sudo ./install.sh --force-config
   sudo ./install.sh --start-controller
   sudo ./install.sh --no-start
+  ./install.sh --verify-layout
 
 说明:
   - 默认会在脚本同目录自动查找 firewall-binaries*.zip
@@ -66,12 +76,14 @@ Aria Firewall 一键安装/更新脚本
   - 默认会安装/更新 aria-agent、aria-controller、ariactl、
     libebpf_firewall.so、libebpf_firewall_perf.so，并重启 aria-agent 服务
   - 默认只安装 aria-controller.service，不启用/启动；需要时传入 --start-controller
+  - --verify-layout 只做安装布局静态检查，不需要 root，不安装文件
 
 选项:
   --zip PATH         指定 release zip 路径
   --force-config     覆盖生成默认 /etc/aria-agent/config.toml
   --start-controller  启用并启动/重启 aria-controller.service
   --no-start         只安装，不启动/重启服务
+  --verify-layout    静态检查 service/env/logrotate/release 文件布局
   -h, --help         显示帮助
 EOF
 }
@@ -98,6 +110,10 @@ parse_args() {
                 ;;
             --no-start)
                 NO_START=1
+                shift
+                ;;
+            --verify-layout)
+                VERIFY_LAYOUT=1
                 shift
                 ;;
             -h|--help)
@@ -210,7 +226,7 @@ unpack_release() {
     unzip -q "$ZIP_PATH" -d "$TMP_DIR"
 
     local file
-    for file in aria-agent aria-controller ariactl libebpf_firewall.so libebpf_firewall_perf.so; do
+    for file in "${REQUIRED_RELEASE_FILES[@]}"; do
         [[ -f "$TMP_DIR/$file" ]] || die "release 包缺少文件: $file"
     done
 }
@@ -253,8 +269,8 @@ backup_existing() {
     done
 }
 
-write_systemd_unit() {
-    cat >"$SYSTEMD_UNIT" <<'EOF'
+emit_systemd_unit() {
+    cat <<'EOF'
 [Unit]
 Description=Aria Firewall Agent (multi-tap XDP firewall daemon)
 After=network.target
@@ -276,8 +292,12 @@ WantedBy=multi-user.target
 EOF
 }
 
-write_controller_systemd_unit() {
-    cat >"$CONTROLLER_SYSTEMD_UNIT" <<'EOF'
+write_systemd_unit() {
+    emit_systemd_unit >"$SYSTEMD_UNIT"
+}
+
+emit_controller_systemd_unit() {
+    cat <<'EOF'
 [Unit]
 Description=Aria Firewall Controller
 After=network.target
@@ -299,8 +319,12 @@ WantedBy=multi-user.target
 EOF
 }
 
-write_logrotate_config() {
-    cat >"$LOGROTATE_FILE" <<EOF
+write_controller_systemd_unit() {
+    emit_controller_systemd_unit >"$CONTROLLER_SYSTEMD_UNIT"
+}
+
+emit_logrotate_config() {
+    cat <<EOF
 $LOG_FILE {
     daily
     rotate 14
@@ -314,8 +338,12 @@ $LOG_FILE {
 EOF
 }
 
-write_controller_logrotate_config() {
-    cat >"$CONTROLLER_LOGROTATE_FILE" <<EOF
+write_logrotate_config() {
+    emit_logrotate_config >"$LOGROTATE_FILE"
+}
+
+emit_controller_logrotate_config() {
+    cat <<EOF
 $CONTROLLER_LOG_FILE {
     daily
     rotate 14
@@ -329,8 +357,12 @@ $CONTROLLER_LOG_FILE {
 EOF
 }
 
-write_default_config() {
-    cat >"$CONFIG_FILE" <<'EOF'
+write_controller_logrotate_config() {
+    emit_controller_logrotate_config >"$CONTROLLER_LOGROTATE_FILE"
+}
+
+emit_default_config() {
+    cat <<'EOF'
 ebpf_path = "/usr/local/lib/libebpf_firewall.so"
 trace_backend = "auto"
 trace_auto_allow_ringbuf = false
@@ -345,14 +377,122 @@ log_file_path = "/var/log/aria-agent/aria-agent.log"
 EOF
 }
 
-write_default_controller_env() {
-    cat >"$CONTROLLER_ENV_FILE" <<EOF
+write_default_config() {
+    emit_default_config >"$CONFIG_FILE"
+}
+
+emit_default_controller_env() {
+    cat <<EOF
 ARIA_CONTROLLER_BIND=127.0.0.1:8180
 ARIA_CONTROLLER_STATE_PATH=$CONTROLLER_STATE_FILE
 ARIA_CONTROLLER_LOG_FORMAT=text
 ARIA_CONTROLLER_LOG_FILTER=info
 ARIA_CONTROLLER_LOG_FILE_PATH=$CONTROLLER_LOG_FILE
 EOF
+}
+
+write_default_controller_env() {
+    emit_default_controller_env >"$CONTROLLER_ENV_FILE"
+}
+
+verify_contains() {
+    local content="$1"
+    local pattern="$2"
+    local description="$3"
+
+    if [[ "$content" != *"$pattern"* ]]; then
+        printf '[FAIL] %s\n' "$description" >&2
+        printf '       missing pattern: %s\n' "$pattern" >&2
+        failures=$((failures + 1))
+    else
+        printf '[OK] %s\n' "$description"
+    fi
+}
+
+verify_required_release_file() {
+    local required="$1"
+    local found=0
+    local file
+
+    for file in "${REQUIRED_RELEASE_FILES[@]}"; do
+        if [[ "$file" == "$required" ]]; then
+            found=1
+            break
+        fi
+    done
+
+    if [[ "$found" -eq 0 ]]; then
+        printf '[FAIL] release package requires %s\n' "$required" >&2
+        failures=$((failures + 1))
+    else
+        printf '[OK] release package requires %s\n' "$required"
+    fi
+}
+
+verify_install_layout() {
+    local failures=0
+    local agent_unit controller_unit agent_logrotate controller_logrotate agent_config controller_env
+    local install_files_body restart_service_body
+
+    agent_unit="$(emit_systemd_unit)"
+    controller_unit="$(emit_controller_systemd_unit)"
+    agent_logrotate="$(emit_logrotate_config)"
+    controller_logrotate="$(emit_controller_logrotate_config)"
+    agent_config="$(emit_default_config)"
+    controller_env="$(emit_default_controller_env)"
+    install_files_body="$(declare -f install_files)"
+    restart_service_body="$(declare -f restart_service)"
+
+    verify_required_release_file aria-agent
+    verify_required_release_file aria-controller
+    verify_required_release_file ariactl
+    verify_required_release_file libebpf_firewall.so
+    verify_required_release_file libebpf_firewall_perf.so
+
+    verify_contains "$agent_unit" "ExecStart=/usr/local/bin/aria-agent --config /etc/aria-agent/config.toml" \
+        "agent systemd unit starts aria-agent with config"
+    verify_contains "$agent_unit" "ReadWritePaths=/sys/fs/bpf /var/lib/aria-agent /var/log/aria-agent" \
+        "agent systemd unit can write bpffs, state, and logs"
+
+    verify_contains "$controller_unit" "EnvironmentFile=-/etc/aria-controller/controller.env" \
+        "controller systemd unit loads controller env file"
+    verify_contains "$controller_unit" "ExecStart=/usr/local/bin/aria-controller" \
+        "controller systemd unit starts aria-controller"
+    verify_contains "$controller_unit" "ReadWritePaths=/var/lib/aria-controller /var/log/aria-controller" \
+        "controller systemd unit can write state and logs"
+
+    verify_contains "$agent_logrotate" "/var/log/aria-agent/aria-agent.log" \
+        "agent logrotate targets agent file log"
+    verify_contains "$controller_logrotate" "/var/log/aria-controller/aria-controller.log" \
+        "controller logrotate targets controller file log"
+
+    verify_contains "$agent_config" 'listen_addr = "127.0.0.1:8080"' \
+        "agent default API bind uses port 8080"
+    verify_contains "$agent_config" 'log_file_path = "/var/log/aria-agent/aria-agent.log"' \
+        "agent default config points to file log"
+
+    verify_contains "$controller_env" "ARIA_CONTROLLER_BIND=127.0.0.1:8180" \
+        "controller default API bind uses port 8180"
+    verify_contains "$controller_env" "ARIA_CONTROLLER_STATE_PATH=/var/lib/aria-controller/controller-state.json" \
+        "controller default env points to state file"
+    verify_contains "$controller_env" "ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log" \
+        "controller default env points to file log"
+
+    verify_contains "$install_files_body" "write_controller_systemd_unit" \
+        "install flow writes controller systemd unit"
+    verify_contains "$install_files_body" "write_controller_logrotate_config" \
+        "install flow writes controller logrotate config"
+    verify_contains "$install_files_body" "write_default_controller_env" \
+        "install flow writes default controller env"
+    verify_contains "$restart_service_body" 'if [[ "$START_CONTROLLER" -eq 1 ]]; then' \
+        "controller service startup is gated by --start-controller"
+
+    if (( failures > 0 )); then
+        printf '\n%d install layout check(s) failed.\n' "$failures" >&2
+        exit 1
+    fi
+
+    printf '\nInstall layout checks passed.\n'
 }
 
 install_files() {
@@ -474,6 +614,11 @@ restart_service() {
 
 main() {
     parse_args "$@"
+    if [[ "$VERIFY_LAYOUT" -eq 1 ]]; then
+        verify_install_layout
+        exit 0
+    fi
+
     check_root
     find_zip
     check_environment

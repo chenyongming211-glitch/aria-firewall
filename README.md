@@ -249,6 +249,12 @@ ARIA_CONTROLLER_STATE_PATH=/var/lib/aria-controller/controller-state.json
 ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
 ```
 
+可以在不需要 root、也不安装文件的情况下验证安装脚本内置布局：
+
+```bash
+./install.sh --verify-layout
+```
+
 需要对外提供 southbound/northbound API 时，把
 `ARIA_CONTROLLER_BIND` 改成管理网地址，例如 `10.0.0.10:8180`，
 然后重启 `aria-controller.service`。Agent 的本地 API 默认仍是
@@ -352,6 +358,54 @@ curl http://<controller>:8180/api/v1/node-configs
 ```
 
 当前 Controller 管理的平台对象：Tenant、Node、Network、Port、SecurityGroup、RouteTable、IpGroup、NetworkPolicy、QosPolicy、MirrorPolicy、ServiceChain、NodeConfig、HealthCheck、BackendSet、Service。
+
+### Controller 最小 Smoke 流程
+
+下面的流程只验证 controller northbound/southbound API 和状态面链路，不会加载
+eBPF，也不会改动 agent 本地 datapath。先把 controller 地址写成变量：
+
+```bash
+CTRL=http://127.0.0.1:8180
+NODE_ID=node-smoke-1
+NOW="$(date +%s)"
+```
+
+创建一个最小 tenant、node、network：
+
+```bash
+curl -fsS -X POST "$CTRL/api/v1/tenants" \
+  -H 'content-type: application/json' \
+  -d '{"metadata":{"id":"tenant-smoke"},"spec":{"name":"tenant-smoke","description":"smoke test","quotas":{}}}'
+
+curl -fsS -X POST "$CTRL/api/v1/nodes" \
+  -H 'content-type: application/json' \
+  -d '{"metadata":{"id":"node-smoke-1","labels":{"role":"smoke"}},"spec":{"name":"node-smoke-1","mgmt_address":"127.0.0.1","az":"local"}}'
+
+curl -fsS -X POST "$CTRL/api/v1/networks" \
+  -H 'content-type: application/json' \
+  -d '{"metadata":{"id":"network-smoke"},"spec":{"tenant_id":"tenant-smoke","name":"network-smoke","network_type":"l3","ipv4_enabled":true,"ipv6_enabled":false,"route_mode":"native"}}'
+```
+
+模拟 agent southbound 注册、拉取 desired state、上报 apply status 和 heartbeat：
+
+```bash
+curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/register" \
+  -H 'content-type: application/json' \
+  -d '{"info":{"node_id":"node-smoke-1","hostname":"node-smoke-1","agent_version":"0.10.0","kernel_version":"smoke","addresses":[{"kind":"management","value":"127.0.0.1"}],"labels":{"role":"smoke"}},"capability":{"supported_hooks":["xdp","tc"],"supports_xdp":true,"supports_tc":true,"supports_socket_lb":false,"supports_trace_ringbuf":true,"supports_nat":true,"supports_lb":true,"supports_encap":false,"supports_qos_shaping":true,"limits":{},"observability_profile":"smoke"}}'
+
+GEN="$(curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/desired-state" | jq -r .generation)"
+
+curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/apply-status" \
+  -H 'content-type: application/json' \
+  -d '{"generation":"'"$GEN"'","status":"applied","applied_at":"'"$NOW"'","compiled_objects":{},"domain_statuses":[],"failed_objects":[],"warnings":[],"degraded_reasons":[]}'
+
+curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/heartbeat" \
+  -H 'content-type: application/json' \
+  -d '{"agent_uptime":1,"datapath_ready":true,"attached_ports":0,"event_queue_depth":0,"wal_health":"ok","last_reconcile_at":"'"$NOW"'","last_error":null}'
+
+curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/status" | jq .
+curl -fsS "$CTRL/api/v1/nodes?sync_state=in_sync" | jq .
+```
 
 ## 使用指南（按场景）
 
