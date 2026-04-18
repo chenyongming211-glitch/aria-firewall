@@ -6,7 +6,6 @@ use aria_api::{
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 
-use super::resource_store::ResourceStore;
 use super::{InMemoryControllerStore, StoreError};
 
 fn is_valid_cidr(cidr: &str) -> bool {
@@ -30,14 +29,14 @@ impl InMemoryControllerStore {
         &self,
         tenant_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<TenantResource, StoreError> {
         self.tenants
             .get(tenant_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: tenant_id.to_string(),
                 referenced_resource: "tenant",
             })
@@ -47,14 +46,14 @@ impl InMemoryControllerStore {
         &self,
         network_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<NetworkResource, StoreError> {
         self.networks
             .get(network_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: network_id.to_string(),
                 referenced_resource: "network",
             })
@@ -64,14 +63,14 @@ impl InMemoryControllerStore {
         &self,
         node_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<NodeResource, StoreError> {
         self.nodes
             .get(node_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: node_id.to_string(),
                 referenced_resource: "node",
             })
@@ -81,14 +80,14 @@ impl InMemoryControllerStore {
         &self,
         security_group_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<SecurityGroupResource, StoreError> {
         self.security_groups
             .get(security_group_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: security_group_id.to_string(),
                 referenced_resource: "security_group",
             })
@@ -98,14 +97,14 @@ impl InMemoryControllerStore {
         &self,
         health_check_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<HealthCheckResource, StoreError> {
         self.health_checks
             .get(health_check_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: health_check_id.to_string(),
                 referenced_resource: "health_check",
             })
@@ -115,14 +114,14 @@ impl InMemoryControllerStore {
         &self,
         backend_set_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<BackendSetResource, StoreError> {
         self.backend_sets
             .get(backend_set_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: backend_set_id.to_string(),
                 referenced_resource: "backend_set",
             })
@@ -132,14 +131,14 @@ impl InMemoryControllerStore {
         &self,
         port_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<PortResource, StoreError> {
         self.ports
             .get(port_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: port_id.to_string(),
                 referenced_resource: "port",
             })
@@ -149,14 +148,14 @@ impl InMemoryControllerStore {
         &self,
         ip_group_id: &str,
         resource: &'static str,
-        field: &'static str,
+        field: &str,
     ) -> Result<IpGroupResource, StoreError> {
         self.ip_groups
             .get(ip_group_id)
             .await
             .ok_or(StoreError::InvalidReference {
                 resource,
-                field,
+                field: field.to_string(),
                 value: ip_group_id.to_string(),
                 referenced_resource: "ip_group",
             })
@@ -215,7 +214,7 @@ impl InMemoryControllerStore {
         if network.spec.tenant_id != resource.spec.tenant_id {
             return Err(StoreError::InvalidReference {
                 resource: "ip_group",
-                field: "network_id",
+                field: "network_id".to_string(),
                 value: resource.spec.network_id.clone(),
                 referenced_resource: "network",
             });
@@ -265,16 +264,14 @@ impl InMemoryControllerStore {
         if network.spec.tenant_id != resource.spec.tenant_id {
             return Err(StoreError::InvalidReference {
                 resource: "network_policy",
-                field: "network_id",
+                field: "network_id".to_string(),
                 value: resource.spec.network_id.clone(),
                 referenced_resource: "network",
             });
         }
         // Collect IpGroup IDs in the same network for cross-reference.
-        let ip_group_ids_in_network: BTreeSet<&str> = self
-            .ip_groups
-            .list()
-            .await
+        let all_ip_groups = self.ip_groups.list().await;
+        let ip_group_ids_in_network: BTreeSet<&str> = all_ip_groups
             .iter()
             .filter(|ig| ig.spec.network_id == resource.spec.network_id)
             .map(|ig| ig.metadata.id.as_str())
@@ -329,7 +326,8 @@ impl InMemoryControllerStore {
                     ),
                 });
             }
-        }        Ok(())
+        }
+        Ok(())
     }
 
     pub(crate) async fn validate_qos_policy_resource_inner(
@@ -349,16 +347,14 @@ impl InMemoryControllerStore {
         if network.spec.tenant_id != resource.spec.tenant_id {
             return Err(StoreError::InvalidReference {
                 resource: "qos_policy",
-                field: "network_id",
+                field: "network_id".to_string(),
                 value: resource.spec.network_id.clone(),
                 referenced_resource: "network",
             });
         }
         // Collect IpGroup IDs in the same network for cross-reference.
-        let ip_group_ids_in_network: BTreeSet<&str> = self
-            .ip_groups
-            .list()
-            .await
+        let all_ip_groups = self.ip_groups.list().await;
+        let ip_group_ids_in_network: BTreeSet<&str> = all_ip_groups
             .iter()
             .filter(|ig| ig.spec.network_id == resource.spec.network_id)
             .map(|ig| ig.metadata.id.as_str())
@@ -593,16 +589,14 @@ impl InMemoryControllerStore {
         if network.spec.tenant_id != resource.spec.tenant_id {
             return Err(StoreError::InvalidReference {
                 resource: "mirror_policy",
-                field: "network_id",
+                field: "network_id".to_string(),
                 value: resource.spec.network_id.clone(),
                 referenced_resource: "network",
             });
         }
         // Collect IpGroup IDs in the same network for cross-reference.
-        let ip_group_ids_in_network: BTreeSet<&str> = self
-            .ip_groups
-            .list()
-            .await
+        let all_ip_groups = self.ip_groups.list().await;
+        let ip_group_ids_in_network: BTreeSet<&str> = all_ip_groups
             .iter()
             .filter(|ig| ig.spec.network_id == resource.spec.network_id)
             .map(|ig| ig.metadata.id.as_str())

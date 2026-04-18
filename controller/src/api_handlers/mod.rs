@@ -10,21 +10,21 @@ use crate::{
     store::{SharedStore, StoreError},
 };
 
-mod backend_set;
-mod health;
-mod health_check;
+pub(crate) mod backend_set;
+pub(crate) mod health;
+pub(crate) mod health_check;
 pub(crate) mod helpers;
-mod ip_group;
-mod network;
-mod network_policy;
-mod node;
-mod port;
-mod qos_policy;
-mod mirror_policy;
-mod route_table;
-mod security_group;
-mod service;
-mod tenant;
+pub(crate) mod ip_group;
+pub(crate) mod network;
+pub(crate) mod network_policy;
+pub(crate) mod node;
+pub(crate) mod port;
+pub(crate) mod qos_policy;
+pub(crate) mod mirror_policy;
+pub(crate) mod route_table;
+pub(crate) mod security_group;
+pub(crate) mod service;
+pub(crate) mod tenant;
 
 use self::helpers::{dependency_conflict_details, error_details, invalid_reference_details};
 
@@ -84,7 +84,7 @@ pub(crate) enum ControllerError {
     Internal(String),
     InvalidReference {
         resource: &'static str,
-        field: &'static str,
+        field: String,
         value: String,
         referenced_resource: &'static str,
     },
@@ -179,7 +179,7 @@ impl IntoResponse for ControllerError {
                 ),
                 Some(invalid_reference_details(
                     resource,
-                    field,
+                    &field,
                     &value,
                     referenced_resource,
                 )),

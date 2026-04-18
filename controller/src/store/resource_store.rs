@@ -16,13 +16,22 @@ use super::{StoredResource, StoreError};
 
 // ---- Persisted types ----
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PersistedResourceStore<T> {
     pub(crate) counter: u64,
     pub(crate) items: BTreeMap<String, T>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl<T> Default for PersistedResourceStore<T> {
+    fn default() -> Self {
+        Self {
+            counter: 0,
+            items: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PersistedControllerState {
     pub(crate) tenants: PersistedResourceStore<TenantResource>,
     pub(crate) nodes: PersistedResourceStore<NodeResource>,
@@ -44,6 +53,28 @@ pub(crate) struct PersistedControllerState {
     pub(crate) generation: u64,
     #[serde(default)]
     pub(crate) southbound_publishes: BTreeMap<String, DesiredStatePublishRecord>,
+}
+
+impl Default for PersistedControllerState {
+    fn default() -> Self {
+        Self {
+            tenants: PersistedResourceStore::default(),
+            nodes: PersistedResourceStore::default(),
+            networks: PersistedResourceStore::default(),
+            ports: PersistedResourceStore::default(),
+            security_groups: PersistedResourceStore::default(),
+            route_tables: PersistedResourceStore::default(),
+            ip_groups: PersistedResourceStore::default(),
+            network_policies: PersistedResourceStore::default(),
+            qos_policies: PersistedResourceStore::default(),
+            mirror_policies: PersistedResourceStore::default(),
+            health_checks: PersistedResourceStore::default(),
+            backend_sets: PersistedResourceStore::default(),
+            services: PersistedResourceStore::default(),
+            generation: 0,
+            southbound_publishes: BTreeMap::new(),
+        }
+    }
 }
 
 // ---- ResourceStore ----

@@ -258,7 +258,7 @@ impl InMemoryControllerStore {
             .list()
             .await
             .into_iter()
-            .find(|ip_group| ip_group.spec.network_id.as_deref() == Some(network_id))
+            .find(|ip_group| ip_group.spec.network_id == network_id)
         {
             return Err(StoreError::DependencyConflict {
                 resource: "network",
@@ -273,7 +273,7 @@ impl InMemoryControllerStore {
             .list()
             .await
             .into_iter()
-            .find(|network_policy| network_policy.spec.network_id.as_deref() == Some(network_id))
+            .find(|network_policy| network_policy.spec.network_id == network_id)
         {
             return Err(StoreError::DependencyConflict {
                 resource: "network",
@@ -385,7 +385,7 @@ impl InMemoryControllerStore {
             .list()
             .await
             .into_iter()
-            .find(|ip_group| ip_group.spec.network_id.as_deref() == Some(network_id))
+            .find(|ip_group| ip_group.spec.network_id == network_id)
         {
             return Err(StoreError::DependencyConflict {
                 resource: "network",
@@ -400,7 +400,7 @@ impl InMemoryControllerStore {
             .list()
             .await
             .into_iter()
-            .find(|network_policy| network_policy.spec.network_id.as_deref() == Some(network_id))
+            .find(|network_policy| network_policy.spec.network_id == network_id)
         {
             return Err(StoreError::DependencyConflict {
                 resource: "network",

@@ -18,7 +18,7 @@ pub(super) fn error_details(resource: &'static str, id: &str) -> BTreeMap<String
 
 pub(super) fn invalid_reference_details(
     resource: &'static str,
-    field: &'static str,
+    field: &str,
     value: &str,
     referenced_resource: &'static str,
 ) -> BTreeMap<String, String> {

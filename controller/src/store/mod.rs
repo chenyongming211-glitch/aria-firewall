@@ -73,7 +73,7 @@ pub enum StoreError {
     },
     InvalidReference {
         resource: &'static str,
-        field: &'static str,
+        field: String,
         value: String,
         referenced_resource: &'static str,
     },

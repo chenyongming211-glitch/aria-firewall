@@ -440,6 +440,36 @@ impl ControllerStore for FileBackedControllerStore {
             .await
     }
 
+    // --- Service ---
+    async fn list_services(&self) -> Vec<ServiceResource> {
+        self.inner.list_services().await
+    }
+
+    async fn get_service(&self, id: &str) -> Option<ServiceResource> {
+        self.inner.get_service(id).await
+    }
+
+    async fn create_service(
+        &self,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.create_service(resource))
+            .await
+    }
+
+    async fn update_service(
+        &self,
+        id: &str,
+        resource: ServiceResource,
+    ) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.update_service(id, resource))
+            .await
+    }
+
+    async fn delete_service(&self, id: &str) -> Result<ServiceResource, StoreError> {
+        self.run_persisted(|inner| inner.delete_service(id)).await
+    }
+
     // --- QosPolicy (Phase 3.6) ---
     async fn list_qos_policies(&self) -> Vec<QosPolicyResource> {
         self.inner.list_qos_policies().await
