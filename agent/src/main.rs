@@ -2,6 +2,7 @@ use clap::Parser;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, warn};
 
