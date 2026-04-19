@@ -193,6 +193,10 @@ Controller smoke 检查可以只跑 API 和状态面，不加载 eBPF。默认�
 scripts/controller-smoke.sh
 # 或指定 controller 地址
 scripts/controller-smoke.sh --controller-url http://10.0.0.10:8180
+# smoke 后自动删除创建的 network/node/tenant
+scripts/controller-smoke.sh --cleanup
+# 只校验脚本生成的 JSON payload，不发 HTTP 请求
+scripts/controller-smoke.sh --dry-run
 ```
 
 `ariactl health` 会显示：

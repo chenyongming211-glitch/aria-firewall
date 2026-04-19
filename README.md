@@ -371,6 +371,10 @@ eBPF，也不会改动 agent 本地 datapath。默认连接 `http://127.0.0.1:81
 scripts/controller-smoke.sh
 # 或指定 controller 地址
 scripts/controller-smoke.sh --controller-url http://10.0.0.10:8180
+# smoke 成功或失败后尽力删除创建的 network/node/tenant
+scripts/controller-smoke.sh --cleanup
+# 只校验脚本生成的 JSON payload，不发 HTTP 请求
+scripts/controller-smoke.sh --dry-run
 ```
 
 ## 使用指南（按场景）
