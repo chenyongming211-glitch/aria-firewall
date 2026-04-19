@@ -377,6 +377,10 @@ scripts/controller-smoke.sh --cleanup
 scripts/controller-smoke.sh --dry-run
 ```
 
+GitHub Actions 的普通 push/PR 只执行 `--dry-run` payload 校验；手动触发
+`Build` workflow 时会额外启动 release artifact 里的 `aria-controller`，并执行
+`scripts/controller-smoke.sh --cleanup` 做真实 API smoke。
+
 ## 使用指南（按场景）
 
 - [快速开始](#快速开始)
