@@ -157,6 +157,8 @@ Controller API 默认是 `127.0.0.1:8180`，两者不要混用。
 
 ```bash
 ./install.sh --verify-layout
+# 如需同时检查 release 目录中的实际产物
+./install.sh --verify-layout --release-dir release
 ```
 
 ### 2.3 启动与版本确认
@@ -184,36 +186,13 @@ curl -s http://127.0.0.1:8180/openapi.json | jq '.paths | keys'
 open http://127.0.0.1:8180/docs
 ```
 
-Controller smoke 检查可以只跑 API 和状态面，不加载 eBPF：
+Controller smoke 检查可以只跑 API 和状态面，不加载 eBPF。默认连接
+`http://127.0.0.1:8180`，并使用带时间戳的资源 ID：
 
 ```bash
-CTRL=http://127.0.0.1:8180
-NODE_ID=node-smoke-1
-NOW="$(date +%s)"
-
-curl -fsS -X POST "$CTRL/api/v1/tenants" \
-  -H 'content-type: application/json' \
-  -d '{"metadata":{"id":"tenant-smoke"},"spec":{"name":"tenant-smoke","description":"smoke test","quotas":{}}}'
-
-curl -fsS -X POST "$CTRL/api/v1/nodes" \
-  -H 'content-type: application/json' \
-  -d '{"metadata":{"id":"node-smoke-1","labels":{"role":"smoke"}},"spec":{"name":"node-smoke-1","mgmt_address":"127.0.0.1","az":"local"}}'
-
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/register" \
-  -H 'content-type: application/json' \
-  -d '{"info":{"node_id":"node-smoke-1","hostname":"node-smoke-1","agent_version":"0.10.0","kernel_version":"smoke","addresses":[{"kind":"management","value":"127.0.0.1"}],"labels":{"role":"smoke"}},"capability":{"supported_hooks":["xdp","tc"],"supports_xdp":true,"supports_tc":true,"supports_socket_lb":false,"supports_trace_ringbuf":true,"supports_nat":true,"supports_lb":true,"supports_encap":false,"supports_qos_shaping":true,"limits":{},"observability_profile":"smoke"}}'
-
-GEN="$(curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/desired-state" | jq -r .generation)"
-
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/apply-status" \
-  -H 'content-type: application/json' \
-  -d '{"generation":"'"$GEN"'","status":"applied","applied_at":"'"$NOW"'","compiled_objects":{},"domain_statuses":[],"failed_objects":[],"warnings":[],"degraded_reasons":[]}'
-
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/heartbeat" \
-  -H 'content-type: application/json' \
-  -d '{"agent_uptime":1,"datapath_ready":true,"attached_ports":0,"event_queue_depth":0,"wal_health":"ok","last_reconcile_at":"'"$NOW"'","last_error":null}'
-
-curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/status" | jq .
+scripts/controller-smoke.sh
+# 或指定 controller 地址
+scripts/controller-smoke.sh --controller-url http://10.0.0.10:8180
 ```
 
 `ariactl health` 会显示：

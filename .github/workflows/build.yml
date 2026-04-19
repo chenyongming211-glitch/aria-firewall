@@ -82,7 +82,9 @@ jobs:
           ldd target/x86_64-unknown-linux-musl/release/aria-controller 2>&1 || true
 
       - name: Verify install layout
-        run: bash install.sh --verify-layout
+        run: |
+          bash -n install.sh scripts/controller-smoke.sh
+          bash install.sh --verify-layout
 
       - name: Prepare release files
         run: |
@@ -101,9 +103,9 @@ jobs:
           fi
           echo "=== release contents ==="
           ls -la release/
-          for file in aria-agent aria-controller ariactl libebpf_firewall.so libebpf_firewall_perf.so; do
-            test -f "release/$file"
-          done
+
+      - name: Verify release layout
+        run: bash install.sh --verify-layout --release-dir release
 
       - name: Create release archive
         if: startsWith(github.ref, 'refs/tags/v')

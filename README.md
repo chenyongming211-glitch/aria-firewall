@@ -253,6 +253,8 @@ ARIA_CONTROLLER_LOG_FILE_PATH=/var/log/aria-controller/aria-controller.log
 
 ```bash
 ./install.sh --verify-layout
+# 如需同时检查 release 目录中的实际产物
+./install.sh --verify-layout --release-dir release
 ```
 
 需要对外提供 southbound/northbound API 时，把
@@ -361,50 +363,14 @@ curl http://<controller>:8180/api/v1/node-configs
 
 ### Controller 最小 Smoke 流程
 
-下面的流程只验证 controller northbound/southbound API 和状态面链路，不会加载
-eBPF，也不会改动 agent 本地 datapath。先把 controller 地址写成变量：
+下面的脚本只验证 controller northbound/southbound API 和状态面链路，不会加载
+eBPF，也不会改动 agent 本地 datapath。默认连接 `http://127.0.0.1:8180`，
+并使用带时间戳的资源 ID，避免重复执行时撞上已有资源。
 
 ```bash
-CTRL=http://127.0.0.1:8180
-NODE_ID=node-smoke-1
-NOW="$(date +%s)"
-```
-
-创建一个最小 tenant、node、network：
-
-```bash
-curl -fsS -X POST "$CTRL/api/v1/tenants" \
-  -H 'content-type: application/json' \
-  -d '{"metadata":{"id":"tenant-smoke"},"spec":{"name":"tenant-smoke","description":"smoke test","quotas":{}}}'
-
-curl -fsS -X POST "$CTRL/api/v1/nodes" \
-  -H 'content-type: application/json' \
-  -d '{"metadata":{"id":"node-smoke-1","labels":{"role":"smoke"}},"spec":{"name":"node-smoke-1","mgmt_address":"127.0.0.1","az":"local"}}'
-
-curl -fsS -X POST "$CTRL/api/v1/networks" \
-  -H 'content-type: application/json' \
-  -d '{"metadata":{"id":"network-smoke"},"spec":{"tenant_id":"tenant-smoke","name":"network-smoke","network_type":"l3","ipv4_enabled":true,"ipv6_enabled":false,"route_mode":"native"}}'
-```
-
-模拟 agent southbound 注册、拉取 desired state、上报 apply status 和 heartbeat：
-
-```bash
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/register" \
-  -H 'content-type: application/json' \
-  -d '{"info":{"node_id":"node-smoke-1","hostname":"node-smoke-1","agent_version":"0.10.0","kernel_version":"smoke","addresses":[{"kind":"management","value":"127.0.0.1"}],"labels":{"role":"smoke"}},"capability":{"supported_hooks":["xdp","tc"],"supports_xdp":true,"supports_tc":true,"supports_socket_lb":false,"supports_trace_ringbuf":true,"supports_nat":true,"supports_lb":true,"supports_encap":false,"supports_qos_shaping":true,"limits":{},"observability_profile":"smoke"}}'
-
-GEN="$(curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/desired-state" | jq -r .generation)"
-
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/apply-status" \
-  -H 'content-type: application/json' \
-  -d '{"generation":"'"$GEN"'","status":"applied","applied_at":"'"$NOW"'","compiled_objects":{},"domain_statuses":[],"failed_objects":[],"warnings":[],"degraded_reasons":[]}'
-
-curl -fsS -X POST "$CTRL/api/v1/southbound/nodes/$NODE_ID/heartbeat" \
-  -H 'content-type: application/json' \
-  -d '{"agent_uptime":1,"datapath_ready":true,"attached_ports":0,"event_queue_depth":0,"wal_health":"ok","last_reconcile_at":"'"$NOW"'","last_error":null}'
-
-curl -fsS "$CTRL/api/v1/southbound/nodes/$NODE_ID/status" | jq .
-curl -fsS "$CTRL/api/v1/nodes?sync_state=in_sync" | jq .
+scripts/controller-smoke.sh
+# 或指定 controller 地址
+scripts/controller-smoke.sh --controller-url http://10.0.0.10:8180
 ```
 
 ## 使用指南（按场景）

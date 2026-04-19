@@ -25,6 +25,7 @@ SYSTEMD_UNIT="/etc/systemd/system/aria-agent.service"
 CONTROLLER_SYSTEMD_UNIT="/etc/systemd/system/aria-controller.service"
 
 ZIP_PATH=""
+RELEASE_DIR=""
 FORCE_CONFIG=0
 NO_START=0
 START_CONTROLLER=0
@@ -69,6 +70,7 @@ Aria Firewall 一键安装/更新脚本
   sudo ./install.sh --start-controller
   sudo ./install.sh --no-start
   ./install.sh --verify-layout
+  ./install.sh --verify-layout --release-dir release
 
 说明:
   - 默认会在脚本同目录自动查找 firewall-binaries*.zip
@@ -84,6 +86,7 @@ Aria Firewall 一键安装/更新脚本
   --start-controller  启用并启动/重启 aria-controller.service
   --no-start         只安装，不启动/重启服务
   --verify-layout    静态检查 service/env/logrotate/release 文件布局
+  --release-dir DIR   配合 --verify-layout 检查 release 目录中的实际产物
   -h, --help         显示帮助
 EOF
 }
@@ -98,6 +101,11 @@ parse_args() {
             --zip)
                 [[ $# -ge 2 ]] || die "--zip 需要一个路径参数"
                 ZIP_PATH="$2"
+                shift 2
+                ;;
+            --release-dir)
+                [[ $# -ge 2 ]] || die "--release-dir 需要一个路径参数"
+                RELEASE_DIR="$2"
                 shift 2
                 ;;
             --force-config)
@@ -429,6 +437,30 @@ verify_required_release_file() {
     fi
 }
 
+verify_release_dir() {
+    local release_dir="$1"
+    local file
+
+    if [[ ! -d "$release_dir" ]]; then
+        printf '[FAIL] release directory exists\n' >&2
+        printf '       missing directory: %s\n' "$release_dir" >&2
+        failures=$((failures + 1))
+        return
+    fi
+
+    printf '[OK] release directory exists: %s\n' "$release_dir"
+
+    for file in "${REQUIRED_RELEASE_FILES[@]}"; do
+        if [[ -f "$release_dir/$file" ]]; then
+            printf '[OK] release directory contains %s\n' "$file"
+        else
+            printf '[FAIL] release directory contains %s\n' "$file" >&2
+            printf '       missing file: %s/%s\n' "$release_dir" "$file" >&2
+            failures=$((failures + 1))
+        fi
+    done
+}
+
 verify_install_layout() {
     local failures=0
     local agent_unit controller_unit agent_logrotate controller_logrotate agent_config controller_env
@@ -486,6 +518,10 @@ verify_install_layout() {
         "install flow writes default controller env"
     verify_contains "$restart_service_body" 'if [[ "$START_CONTROLLER" -eq 1 ]]; then' \
         "controller service startup is gated by --start-controller"
+
+    if [[ -n "$RELEASE_DIR" ]]; then
+        verify_release_dir "$RELEASE_DIR"
+    fi
 
     if (( failures > 0 )); then
         printf '\n%d install layout check(s) failed.\n' "$failures" >&2
@@ -614,6 +650,10 @@ restart_service() {
 
 main() {
     parse_args "$@"
+    if [[ -n "$RELEASE_DIR" && "$VERIFY_LAYOUT" -ne 1 ]]; then
+        die "--release-dir 只能配合 --verify-layout 使用"
+    fi
+
     if [[ "$VERIFY_LAYOUT" -eq 1 ]]; then
         verify_install_layout
         exit 0
