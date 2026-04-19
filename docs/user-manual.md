@@ -200,7 +200,7 @@ scripts/controller-smoke.sh --dry-run
 ```
 
 CI 中普通 push/PR 只跑 `--dry-run` payload 校验；手动触发 GitHub Actions 的
-`Build` workflow 时，会启动构建产物中的 `aria-controller` 并执行
+`Build` workflow 时，会额外构建并启动 `aria-controller`，然后执行
 `scripts/controller-smoke.sh --cleanup`。
 
 `ariactl health` 会显示：

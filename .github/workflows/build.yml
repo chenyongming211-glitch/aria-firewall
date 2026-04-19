@@ -139,25 +139,27 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download release artifact
-        uses: actions/download-artifact@v7
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
         with:
-          name: firewall-binaries-x86_64
-          path: release
+          targets: x86_64-unknown-linux-musl
 
       - name: Install smoke dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl jq
+          sudo apt-get install -y curl jq musl-tools
+
+      - name: Build controller
+        run: cargo +stable build --release -p aria-controller --target x86_64-unknown-linux-musl
 
       - name: Start controller
         run: |
           mkdir -p "$RUNNER_TEMP/aria-controller"
-          chmod +x release/aria-controller scripts/controller-smoke.sh
+          chmod +x scripts/controller-smoke.sh
           ARIA_CONTROLLER_BIND=127.0.0.1:8180 \
           ARIA_CONTROLLER_STATE_PATH="$RUNNER_TEMP/aria-controller/controller-state.json" \
           ARIA_CONTROLLER_LOG_FILE_PATH="$RUNNER_TEMP/aria-controller/aria-controller.log" \
-          ./release/aria-controller >"$RUNNER_TEMP/aria-controller/stdout.log" 2>&1 &
+          ./target/x86_64-unknown-linux-musl/release/aria-controller >"$RUNNER_TEMP/aria-controller/stdout.log" 2>&1 &
           echo "$!" >"$RUNNER_TEMP/aria-controller/pid"
 
           for _ in $(seq 1 30); do
