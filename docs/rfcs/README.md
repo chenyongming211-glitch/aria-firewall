@@ -34,4 +34,4 @@
 
 ## 当前状态
 
-当前规划内的主 RFC 已全部落地。`RFC-005A` 作为 Phase 3 的补充设计，用于冻结单节点 IaaS map schema 与 Mode B NAT 设计预留。
+当前规划内的主 RFC 已基本完成文档冻结，但代码实现并未全部落地。当前 Phase 1-3 主体已大体完成，Phase 6 部分落地，Phase 4 / 5 / 7 / 8 仍以方案和前置骨架为主。`RFC-005A` 作为 Phase 3 的补充设计，用于冻结单节点 IaaS map schema 与 Mode B NAT 设计预留。

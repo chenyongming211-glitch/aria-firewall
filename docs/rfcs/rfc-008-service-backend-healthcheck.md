@@ -547,7 +547,7 @@ Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler�
 
 ## 19. Aria 当前实现状态
 
-截至 `2026-04-09`，仓库已经完成 `RFC-008` 的第一阶段对象层落地：
+截至 `2026-04-21`，仓库已经完成 `RFC-008` 的对象层与第一阶段 runtime 落地：
 
 - `aria-controller` 已新增实验性的 `Service / BackendSet / HealthCheck` northbound API 骨架
 - 当前覆盖 CRUD、OpenAPI、基础分页/过滤、引用完整性校验和删除依赖保护
@@ -556,17 +556,19 @@ Aria 的 L4 LB 建议按下面顺序实现，避免一次性同时改 compiler�
 - `routing / NAT / Floating IP` 的预留位不会阻塞该对象层推进
 - `southbound desired-state` 现已开始按节点相关网络投影 `Service / BackendSet / HealthCheck`
 - `aria-agent` 现已开始在 `services` shadow 域中编译 `Service / BackendSet / HealthCheck`，并把结果写入 `compiled state / reconcile plan / runtime inventory / runtime intent`
-- `aria-agent` 当前还会把 `Service / BackendSet / HealthCheck` 进一步收敛成第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow skeleton，用于表达 frontend listener、backend member 以及节点内/跨节点转发方向，但仍然不会进入真实 L4 LB datapath
+- `aria-agent` 当前还会把 `Service / BackendSet / HealthCheck` 进一步收敛成第一版 `ServiceIR / BackendSetIR / HealthCheckIR` 结构，用于表达 frontend listener、backend member 以及节点内/跨节点转发方向
 - `services` shadow 域当前还会把 runtime map 规划进一步细化为 `service_frontend_catalog / service_frontend_map / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / backend_member_map / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，作为后续节点内与跨节点转发统一 service datapath 的前置边界
-- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation；其中 reservation 计数已按 frontend listener 粒度统计，但仍然不会进入真实 L4 LB datapath
+- `services` 域当前已能把第一阶段 `frontend / backend / revnat / maglev` 结果 materialize 到真实 service maps，并在 materialize 前按 backend 健康状态过滤不可用后端
+- `services` shadow 域的本地 `RuntimeIntent / RuntimeExecutionSummary` 当前也已开始单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，以及 revnat / affinity / maglev 的 shadow reservation；其中 reservation 计数已按 frontend listener 粒度统计，但 socket / packet / cross-node 路径仍未进入真实 L4 LB datapath
 - `services` shadow 域当前还会额外生成 `socket-selection-plan`，按 internal service listener 产出第一版 node-local socket LB shadow selection 计划，表达 `lb_policy / session_affinity / local backend / remote backend / handoff_required`，并把策略规范化为 `random / maglev / deferred_hash / unsupported` 与 `none / client_ip / deferred_5tuple / unsupported`，用于后续 socket path 的 backend 选择与 handoff 投影，但仍然不会进入真实 L4 LB datapath
 - 若节点 `supports_encap = false` 却收到 overlay cross-node forwarding，当前 agent 会显式追加 `overlay_encap_unsupported` degraded reason，而不是把该场景伪装成普通 overlay shadow 计划
 
 当前仍未实现：
 
-- 健康检查执行器
 - session affinity 状态
-- 节点内转发与跨节点转发的 L4 LB datapath
+- socket LB datapath 与 packet LB datapath
+- 节点内转发与跨节点转发的完整 L4 LB datapath
+- `ServiceChain` 与 service datapath 的 agent 侧消费闭环
 
 当前也不打算做的事情包括：
 

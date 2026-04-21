@@ -60,10 +60,10 @@ Phase 0 的下游正式设计文档统一放在 [RFC Index](rfcs/README.md)。
 - file-backed controller 已把 `registration / apply-status / heartbeat / health` 明确为内存态运行状态，不再在每次心跳时重写整份 controller 快照
 - `aria-agent` 已新增实验性的可选 southbound client；当 `southbound_controller_url` 与 `southbound_node_id` 被配置后，agent 会执行 `register / desired-state / apply-status / heartbeat` 循环
 - agent 侧已开始持久化 `${state_path}/platform-agent/desired-state-cache.json`、`${state_path}/platform-agent/compiled-node-state.json`、`${state_path}/platform-agent/reconcile-plan.json`、`${state_path}/platform-agent/runtime-plan.json`、`${state_path}/platform-agent/runtime-inventory.json`、`${state_path}/platform-agent/runtime-inventory-diff.json`、`${state_path}/platform-agent/runtime-intent.json`、`${state_path}/platform-agent/runtime-execution-summary.json` 与 `${state_path}/platform-agent/socket-selection-plan.json`，作为 `desired state / compiled state / reconcile plan / runtime plan / runtime inventory / runtime inventory diff / runtime intent / runtime execution summary / socket selection plan` 的第一阶段本地恢复骨架
-- agent 当前只实现 `shadow compile only`：会把 `Tenant / Network / Port / SecurityGroup / RouteTable` 编译成节点局部 `compiled state`，生成第一版本地 `reconcile plan`、`runtime plan (AttachPlan / MapPlan)`、`runtime inventory`、`runtime inventory diff` 与 `runtime intent` 并回报 `partial / failed` 结果；`CompiledNodeState` 已开始按 `identity / ports / security / routes / nat` 输出本地 domain summary，其中 `routes` 域对应 routing 预留位，`nat` 域对应 `SNAT / DNAT / Floating IP` 的 shadow reserved 预留位，但尚未把这些结果 materialize 到 datapath
+- agent 当前已进入“部分 materialize + 部分 shadow”阶段：会把 `Tenant / Network / Port / SecurityGroup / RouteTable / IpGroup / NetworkPolicy / QosPolicy / MirrorPolicy / Service / BackendSet / HealthCheck / NodeConfig` 编译成节点局部 `compiled state`，并生成第一版 `reconcile plan`、`runtime plan`、`runtime inventory`、`runtime inventory diff` 与 `runtime intent`；其中 `Port / SecurityGroup / RouteTable / IpGroup / NetworkPolicy / QosPolicy / MirrorPolicy / NodeConfig` 已可 materialize 到 datapath 或 runtime config，`nat` 域仍对应 `SNAT / DNAT / Floating IP` 的 shadow reserved 预留位
 - agent 当前回报给 controller 的 `apply-status` 也已开始携带按 `identity / ports / security / routes / services / nat` 划分的 `domain_statuses`，为后续 rollout / datapath 域化状态面提供统一语义
-- southbound `desired-state` 现已开始向节点投影 `Service / BackendSet / HealthCheck` 对象；agent 的 shadow compiler 也已开始把这些对象编译为 `services` 域的本地摘要、运行计划、inventory、intent 与 execution summary，但仍然不会进入真实 L4 LB datapath
-- `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` shadow 骨架，为后续节点内转发与跨节点转发的 L4 service datapath 提供稳定局部输入，但当前仍只保留在本地 shadow state 中
+- southbound `desired-state` 现已开始向节点投影 `Service / BackendSet / HealthCheck` 对象；agent 也已开始把这些对象编译为 `services` 域的本地摘要、运行计划、inventory、intent 与 execution summary，并完成 `frontend / backend / revnat / maglev` service maps 的第一阶段 materialize
+- `CompiledNodeState` 现已开始额外产出第一版 `ServiceIR / BackendSetIR / HealthCheckIR` 结构，为后续节点内转发与跨节点转发的 L4 service datapath 提供稳定局部输入；当前 socket / packet / cross-node 路径仍只保留在本地 shadow state 中
 - `services` 域的 `RuntimePlan / RuntimeInventory` 现已开始把 runtime map family 细化为 `service_frontend_catalog / service_frontend_map / service_socket_lb_projection / service_packet_lb_projection / backend_member_catalog / backend_member_map / service_forwarding_projection / service_revnat_map / service_affinity_map / service_maglev_map`，为后续节点内转发与跨节点转发的 L4 runtime materialization 预留更稳定的规划边界
 - agent 本地的 `RuntimeIntent / RuntimeExecutionSummary` 现已开始为 `services` 域单独保留 listener / frontend runtime entry / socket-lb listener / packet-lb listener / backend member / backend runtime entry / forwarding projection 的细化摘要，并显式区分 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 等方向，作为后续 rollout、diagnose 与 runtime apply 的前置视图
 - agent 本地现已开始为 internal service listener 生成 `socket-selection-plan`，把 `lb_policy / session_affinity / forwarding_mode / local-backend-count / remote-backend-count` 收敛成第一版 node-local socket LB shadow selection 计划，并把 `lb_policy / session_affinity` 进一步规范化为稳定的 shadow 选择策略，区分可支持、延后实现与不支持语义，作为后续 socket datapath 的前置输入
@@ -525,7 +525,7 @@ Southbound API 面向：
   - Phase 3.7：Mirror → Controller `MirrorPolicy` 下发，复用现有 `MIRROR_POLICY`
   - Phase 3.8：Service Chain → Controller `ServiceChain` 下发（TCP-RT/Trace/Diagnose 链路级观测前置）
   - Phase 3.9：NodeConfig → Controller 统一管理功能开关和 SSL 开关
-- 当前实现状态（2026-04-18）：
+- 当前实现状态（2026-04-21）：
   - 已进入 Mode A 真实 map materialize 阶段，当前节点侧已新增 `PORT_IDENTITY_MAP / ANTI_SPOOF_MAP / ROUTE_TABLE_V4 / ROUTE_TABLE_V6 / SG_RULE_MAP`
   - `ebpf/src/port.rs`、`ebpf/src/route.rs`、`ebpf/src/sg.rs` 已开始接入现有 TC ingress 流水线，与 LB/CT 共享 `PipelineCtx`
   - Agent 已开始把 `Port / RouteTable / SecurityGroup` 编译成真实 map 条目，并为 `identity / ports / security / routes` 域回报真实 `applied / failed`
@@ -533,8 +533,8 @@ Southbound API 面向：
   - Phase 3.5a/3.5b（IpGroup + NetworkPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
   - Phase 3.6（QosPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
   - Phase 3.7（MirrorPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
-  - Phase 3.8（ServiceChain）controller 对象层已完成，agent 侧通过 DesiredStateEnvelope 接收（无独立 eBPF map）
-  - Phase 3.9（NodeConfig）controller 对象层已完成，agent 侧 materialize 到 `FIREWALL_CONFIG / TAP_CONFIG_MAP / CT_CONFIG` 待实现
+  - Phase 3.8（ServiceChain）controller 对象层、northbound CRUD 和 southbound 投影已完成；agent 侧已接收 `DesiredStateEnvelope` 中的 `service_chains`，但尚未形成稳定的链路拓扑编译/消费闭环
+  - Phase 3.9（NodeConfig）controller 对象层已完成；agent 侧已开始把功能开关和超时参数写入 `TAP_CONFIG_MAP / CT_CONFIG / FIREWALL_CONFIG`，但 `SSL_GLOBAL_CONFIG` 联动和平台化收口仍未完成
   - LB 数据面性能优化：`load_feature_flags_tc/xdp` 已合并 `monitoring_enabled / conntrack_enabled` 到单次 `TAP_CONFIG_MAP` lookup，消除 fast-path 5-7 次冗余 hash map 查表
   - Controller 已加入 CI（之前从未编译过），修复了 236 个历史编译错误，`run_mutation` 重构为裸 Future 模式
   - 全 crate 零 warning
@@ -547,6 +547,7 @@ Southbound API 面向：
 - 产出：服务端 Diagnose API、统一事件 schema、实时流查询接口
 - 参考： [RFC-002 统一事件模型 v1](rfcs/rfc-002-event-model.md) 和 [RFC-006 Diagnose 服务端化与 Relay v1](rfcs/rfc-006-diagnose-relay.md)
 - 验收：任意连接可在平台侧得到统一诊断结果
+- 当前状态（2026-04-21）：`EventEnvelope`、`DiagnoseRequest/Response`、`/api/v1/diagnose`、`/api/v1/observe/events` 和 controller diagnose proxy 仍未落地；当前 diagnose 仍主要停留在 CLI 侧拼接
 
 ### Phase 5：观测聚合层
 
@@ -554,6 +555,7 @@ Southbound API 面向：
 - 产出：多节点事件流聚合、租户维度查询、基础拓扑视图
 - 参考： [RFC-006 Diagnose 服务端化与 Relay v1](rfcs/rfc-006-diagnose-relay.md)、[RFC-013 Controller Deployment Topology v1](rfcs/rfc-013-controller-topology.md) 和 [RFC-015 UI / Topology / Workflow Model v1](rfcs/rfc-015-ui-topology-workflow.md)
 - 验收：跨节点流量可统一检索和聚合
+- 当前状态（2026-04-21）：尚未实现 Relay、query service、多节点 observe 聚合和 topology 查询；当前仍以节点本地观测能力和 controller southbound 状态摘要为主
 
 ### Phase 6：L4 负载均衡与服务链
 
@@ -562,6 +564,7 @@ Southbound API 面向：
 - 关键约束：L4 负载均衡必须同时覆盖节点内转发和跨节点转发；service chain 不得因为 `routing / NAT / Floating IP` 预留位推进而延后主路径闭环
 - 参考： [RFC-008 Service / Backend / HealthCheck 模型 v1](rfcs/rfc-008-service-backend-healthcheck.md)
 - 验收：VIP、后端调度、节点内转发、跨节点转发、链路引流和事件追踪完整闭环
+- 当前状态（2026-04-21）：`Service / BackendSet / HealthCheck` 对象层、southbound 投影、health executor，以及 `frontend / backend / revnat / maglev` service map materialize 已完成；socket LB、packet LB、session affinity、cross-node handoff 和 `ServiceChain` agent 消费闭环仍未完成
 
 ### Phase 7：多节点织网
 
@@ -569,6 +572,7 @@ Southbound API 面向：
 - 产出：VXLAN / Geneve 或 native routing、跨节点路由、下一跳模型、BGP 对接
 - 参考： [RFC-009 Multi-node Overlay / Native Routing v1](rfcs/rfc-009-multi-node-networking.md)
 - 验收：多节点互通、路由生效、观测和策略一致
+- 当前状态（2026-04-21）：已具备 `node_local / cross_node_native / cross_node_overlay / cross_node_hybrid` 编译/摘要骨架，以及 capability / degraded 标记；但 native / overlay / hybrid handoff datapath 尚未 materialize，多节点互通仍未闭环
 
 ### Phase 8：平台化完善
 
@@ -576,6 +580,7 @@ Southbound API 面向：
 - 产出：RBAC、审计、配额、灰度发布、回滚、历史查询、UI
 - 参考： [RFC-007 权限、租户与审计模型 v1](rfcs/rfc-007-tenant-authz-audit.md)、[RFC-012 Rollout / Audit / Shadow Mode v1](rfcs/rfc-012-rollout-audit-shadow.md)、[RFC-014 Persistence and Storage Model v1](rfcs/rfc-014-persistence-storage-model.md)、[RFC-015 UI / Topology / Workflow Model v1](rfcs/rfc-015-ui-topology-workflow.md) 和 [RFC-018 Upgrade and Migration Model v1](rfcs/rfc-018-upgrade-migration.md)
 - 验收：具备企业级运维与治理能力
+- 当前状态（2026-04-21）：仅有少量字段和状态面前置（如 `tenant.quotas`、`security_group.audit_mode`、`Node.status` 摘要以及 Swagger/OpenAPI 文档界面）；RBAC、审计、配额执行、rollout / rollback 状态机、历史查询和平台 UI 仍未落地
 
 ### Post-Phase 扩展
 
@@ -601,36 +606,30 @@ Southbound API 面向：
 
 从平台化角度看，当前最需要补的不是单点 datapath feature，而是以下四类缺口：
 
-- 缺少正式的 IaaS 资源模型
-- 缺少 Controller 和 southbound 协议
-- 缺少统一事件模型与聚合层
-- 单节点 `Port / Anti-Spoof / Route / SecurityGroup` 已进入实现阶段，但仍缺 `Mode B NAT / Floating IP`、多节点 forwarding 和后续平台化迁移闭环
+- 缺少统一事件 `EventEnvelope`、服务端 Diagnose 和 observe API
+- 缺少 Relay / Query / topology 聚合层
+- `Service / BackendSet / HealthCheck` 已有对象层和部分 service map materialize，但仍缺 socket / packet LB、session affinity、cross-node handoff 和 `ServiceChain` 消费闭环
+- 缺少多节点 forwarding 与 Phase 8 的治理能力（RBAC / 审计 / 配额 / rollout / 历史查询 / UI）
 
 ## 14. 近期行动项
 
 ### 14.1 第一优先级
 
-- 编写 [资源模型 RFC](rfcs/rfc-001-resource-model.md)
-- 编写 [事件模型 RFC](rfcs/rfc-002-event-model.md)
-- 设计 [Controller <-> Agent southbound 协议 RFC](rfcs/rfc-003-southbound-protocol.md)
-- 设计 [Northbound API RFC](rfcs/rfc-010-northbound-api.md)
-- 确定 [能力探测与降级矩阵 RFC](rfcs/rfc-011-datapath-capability-matrix.md)
-- 设计 [Persistence and Storage Model RFC](rfcs/rfc-014-persistence-storage-model.md)
+- 完成 Phase 4.1：`EventEnvelope` + Agent Diagnose API
+- 完成 Phase 4.2：`/api/v1/observe/events` 查询接口
+- 完成 Phase 4.3：controller diagnose proxy
 
 ### 14.2 第二优先级
 
-- 设计 `Port / Attachment` 对象
-- 设计 `RouteTable / Route / NextHop` 对象
-- 设计 `SecurityGroup / Rule` 对象
-- 设计 `FloatingIP / NAT` 对象
-- 设计 [Rollout / Audit / Shadow RFC](rfcs/rfc-012-rollout-audit-shadow.md)
-- 设计 [Controller Deployment Topology RFC](rfcs/rfc-013-controller-topology.md)
+- 补齐 Phase 6：socket LB / packet LB / revnat / affinity runtime family
+- 打通 `ServiceChain` 的 agent 侧消费闭环
+- 完成 Phase 7：native / overlay / hybrid cross-node handoff materialize
+- 继续补 `Mode B NAT / Floating IP`
 
 ### 14.3 第三优先级
 
-- 把当前 `diagnose` 提升为正式服务端 API
-- 规划 `Aria Relay`
-- 统一 trace / drop / tcprt / ssl / http 的事件 schema
+- 实现 Phase 5：Relay / Query / topology 聚合
+- 补齐 Phase 8：RBAC / audit / quota / rollout / history / UI
 
 ## 15. 明确暂不作为短期目标的事项
 
@@ -713,11 +712,11 @@ Phase 3 新增的 SecurityGroup / Route / Port 走的是 Controller 下发路径
    - 从 NetworkPolicy 提取规则 → 写入 `POLICY_TABLE` + `PORT_BITMAP_POOL`
 5. 新增 `materialize_policy_maps` 函数，与现有 `materialize_service_maps` 并列
 
-当前状态（2026-04-18）：
+当前状态（2026-04-21）：
 
 - 已完成 `IpGroup / NetworkPolicy` 的共享 schema、controller store、northbound CRUD、OpenAPI 和 southbound `desired-state` 对象投影
 - 已完成 tenant/network/IP Group 引用校验，以及 `IpGroup -> NetworkPolicy` 删除保护
-- 尚未完成 agent 侧 `compile_policy_state / materialize_policy_maps`，当前仍以“controller 对象层 + 下发骨架”作为第一刀
+- 已完成 agent 侧 `IpGroup / NetworkPolicy` 编译与真实 map materialize：`IpGroup` 进入 `SRC/DST_IPV4/V6_TRIE`，`NetworkPolicy` 进入 `POLICY_TABLE / PORT_BITMAP_POOL`
 
 **Phase 3.6 — QoS 平台化（QosPolicy）**
 
@@ -762,14 +761,14 @@ Phase 3.5a ：Groups → Controller IpGroup 下发（复用 LPM Trie，ACL 前�
 Phase 3.5b ：ACL → Controller NetworkPolicy 下发（复用 POLICY_TABLE）                ✅ 已完成
 Phase 3.6  ：QoS → Controller QosPolicy 下发（复用 QOS_CONFIG）                      ✅ 已完成
 Phase 3.7  ：Mirror → Controller MirrorPolicy 下发（复用 MIRROR_POLICY）              ✅ 已完成（2026-04-18）
-Phase 3.8  ：Service Chain → Controller ServiceChain 下发                             ✅ 已完成（2026-04-18）
-Phase 3.9  ：NodeConfig → Controller 统一管理功能开关和 SSL 开关                       ✅ 已完成（2026-04-18）
+Phase 3.8  ：Service Chain → Controller ServiceChain 下发                             ◐ 部分完成（对象层 + southbound 已落地，agent 消费闭环未完成）
+Phase 3.9  ：NodeConfig → Controller 统一管理功能开关和 SSL 开关                       ◐ 部分完成（`TAP_CONFIG_MAP / CT_CONFIG / FIREWALL_CONFIG` 已落地，`SSL_GLOBAL_CONFIG` 与运维收口未完成）
 Phase 3.9 完成后：本地 CLI 写入路径降级为 debug-only，所有策略和配置通过 Controller 下发
 ```
 
 ### 18.6 本地 CLI 降级策略
 
-Phase 3.9 完成后：
+待 Phase 3.9 完成后：
 
 - `ariactl policy / qos / mirror / chain / config / ssl` 的写入操作标记为 deprecated，仅保留用于紧急运维和调试
 - 所有写入操作的主路径统一走 Controller northbound API
