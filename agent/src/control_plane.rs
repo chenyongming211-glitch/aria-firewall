@@ -16,6 +16,7 @@ use aria_core::state::{FirewallState, GroupInfo, MirrorRuleInfo, QosRuleInfo, Ru
 use aria_core::wal::{WalClient, WalEntry};
 
 mod group_ops;
+mod diagnose;
 mod mirror_ops;
 mod observability;
 mod policy_ops;

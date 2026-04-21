@@ -110,6 +110,10 @@ pub fn build_router(control_plane: Arc<ControlPlane>) -> Router {
             get(api_handlers::get_config).put(api_handlers::update_config),
         )
         .route(
+            "/api/v1/{instance}/diagnose",
+            post(api_handlers::diagnose),
+        )
+        .route(
             "/api/v1/{instance}/stats",
             get(api_handlers::stats_overview),
         )

@@ -530,6 +530,7 @@ Southbound API 面向：
   - `ebpf/src/port.rs`、`ebpf/src/route.rs`、`ebpf/src/sg.rs` 已开始接入现有 TC ingress 流水线，与 LB/CT 共享 `PipelineCtx`
   - Agent 已开始把 `Port / RouteTable / SecurityGroup` 编译成真实 map 条目，并为 `identity / ports / security / routes` 域回报真实 `applied / failed`
   - `Mode B` 的 `SNAT / DNAT / Floating IP / NAT Gateway` 仍为文档预留，冻结在 `RFC-005A`
+  - 当前优先级记录：近期不开发 `Mode B NAT / SNAT / DNAT / Floating IP / NAT Gateway`，待后续平台主路径闭环后再进入实现
   - Phase 3.5a/3.5b（IpGroup + NetworkPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
   - Phase 3.6（QosPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
   - Phase 3.7（MirrorPolicy）controller 对象层 + agent 编译 + materialize 已全部完成
@@ -624,7 +625,6 @@ Southbound API 面向：
 - 补齐 Phase 6：socket LB / packet LB / revnat / affinity runtime family
 - 打通 `ServiceChain` 的 agent 侧消费闭环
 - 完成 Phase 7：native / overlay / hybrid cross-node handoff materialize
-- 继续补 `Mode B NAT / Floating IP`
 
 ### 14.3 第三优先级
 
@@ -640,6 +640,7 @@ Southbound API 面向：
 - 自研完整 L7 代理生态
 - 在第一阶段追求完整 Kubernetes 风格 identity 策略系统
 - 把所有现有模块都塞回 XDP
+- `Mode B NAT / SNAT / DNAT / Floating IP / NAT Gateway`
 
 ## 16. 文档使用方式
 

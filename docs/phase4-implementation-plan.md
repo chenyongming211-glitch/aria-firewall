@@ -112,7 +112,117 @@ pub struct DiagnoseEvidence {
 - 组装 evidence，计算 verdict，返回 `DiagnoseResponse`
 - 逻辑从 `user/src/commands/diagnose.rs` 搬过来，但输出结构化 JSON 而不是 println
 
-### 2.5 实施步骤
+### 2.5 当前代码映射
+
+Phase 4.1 不需要重写数据源，当前仓库里已经有可复用入口：
+
+| 能力 | 当前实现入口 | Phase 4.1 用法 |
+|------|-------------|---------------|
+| TCP-RT 聚合 | `ControlPlane::filter_tcprt` | 直接生成 TCP 维度 evidence |
+| SSL 连接 | `ControlPlane::list_ssl` | 生成 TLS 握手 evidence |
+| HTTP 事件 | `ControlPlane::list_ssl_http` | 生成 HTTP 维度 evidence |
+| Kernel drops | `ControlPlane::get_kernel_drop_stats` | 生成 drops evidence |
+| Diagnose 现有判定逻辑 | `user/src/commands/diagnose.rs` | 抽出为服务端 verdict/evidence 逻辑 |
+
+这意味着第一批实现只需要做“共享 schema + 服务端聚合 + 路由/OpenAPI”，不需要改 eBPF map，也不需要新增 southbound 协议。
+
+### 2.6 可执行拆解
+
+#### Milestone A：共享 schema
+
+目标：先冻结 API 面，确保后续 Agent / Controller / CLI 都复用同一组类型。
+
+文件：
+- `api/src/platform/event.rs`
+- `api/src/platform/diagnose.rs`
+- `api/src/platform/mod.rs`
+
+落地项：
+- 新增 `EventEnvelope`
+- 新增 `DiagnoseRequest`
+- 新增 `DiagnoseResponse`
+- 新增 `DiagnoseEvidence`
+- 统一 verdict 字符串：`healthy / degraded / unhealthy / unknown`
+- 统一 evidence_type 字符串：`tcprt / ssl / http / kernel_drop / request`
+
+验收：
+- schema 可被 `aria_api::*` 直接复用
+- Agent OpenAPI 可以注册这些类型
+- 不引入新的 datapath 依赖
+
+#### Milestone B：Agent Diagnose 核心逻辑
+
+目标：先把当前 CLI 的 diagnose 能力搬到服务端，做成单节点可用 API。
+
+文件：
+- `agent/src/control_plane/diagnose.rs`
+- `agent/src/control_plane.rs`
+- `agent/src/api_handlers/diagnose.rs`
+- `agent/src/api_handlers/mod.rs`
+- `agent/src/api_routes.rs`
+- `agent/src/openapi.rs`
+
+落地项：
+- 新增 `ControlPlane::diagnose_instance`
+- 复用 `filter_tcprt / list_ssl / list_ssl_http / get_kernel_drop_stats`
+- 生成结构化 `evidence`
+- 复用现有 CLI 阈值，输出 `verdict / summary / candidate_causes / suggested_actions`
+- 注册 `POST /api/v1/{instance}/diagnose`
+- 把新接口加入 OpenAPI
+
+验收：
+- 给定 `dst_ip + dst_port` 可以返回结构化 JSON
+- 当某类数据源不可用时，API 仍返回其他 evidence，不因为单源失败整体报错
+- 无需新增 eBPF map、无须修改现有观测采集路径
+
+#### Milestone C：服务端实现与 CLI 逻辑解耦
+
+目标：避免后续 CLI 和 API 再次分叉。
+
+文件：
+- `user/src/commands/diagnose.rs`
+- `user/src/api_client.rs`
+
+落地项：
+- CLI 改为调用 `POST /api/v1/{instance}/diagnose`
+- 终端输出从 `DiagnoseResponse` 渲染，而不是再次自行读取 `tcprt / ssl / http / drops`
+- 保留当前人类可读输出，但不再复制判定逻辑
+
+验收：
+- CLI 与服务端 verdict 一致
+- CLI 不再持有独立判定阈值
+
+#### Milestone D：为 Phase 4.2 预留扩展位
+
+目标：让 Phase 4.2 可以直接在当前 schema 上继续推进，而不是重做。
+
+文件：
+- `api/src/platform/event.rs`
+- `api/src/platform/diagnose.rs`
+
+落地项：
+- `DiagnoseEvidence` 允许携带结构化 `metrics`
+- `EventEnvelope` 保留 `tenant_id / network_id / port_id / instance_id / service_id / trace_id`
+- `DiagnoseRequest` 预留 `chain / time_window_seconds`
+
+验收：
+- 不需要修改 Phase 4.1 API 即可继续接 observe API
+
+### 2.7 当前推荐实施切片
+
+按风险和收益排序，先做下面这一刀：
+
+1. `Milestone A`
+2. `Milestone B`
+3. 只做到 Agent Diagnose API 可用
+4. 暂不切 CLI
+
+原因：
+- 这是最小可交付闭环
+- 可以先把服务端 contract 冻结住
+- 可以避免在未验证 API 之前同时改 CLI，降低回滚成本
+
+### 2.8 实施步骤
 
 | 步骤 | 文件 | 说明 |
 |------|------|------|
@@ -124,11 +234,41 @@ pub struct DiagnoseEvidence {
 | 6 | `agent/src/openapi.rs` | OpenAPI 注册 |
 | 7 | `user/src/commands/diagnose.rs` | CLI 改为调用 Agent API，展示结构化结果 |
 
-### 2.6 提交策略
+### 2.9 提交顺序
 
-2 个 commit：
-- Commit A：schema（event.rs + diagnose.rs）
-- Commit B：agent handler + CLI 改造
+建议至少拆成 3 个 commit：
+
+1. `phase4.1a` schema
+   - `api/src/platform/event.rs`
+   - `api/src/platform/diagnose.rs`
+   - `api/src/platform/mod.rs`
+
+2. `phase4.1b` Agent Diagnose API
+   - `agent/src/control_plane/diagnose.rs`
+   - `agent/src/api_handlers/diagnose.rs`
+   - `agent/src/api_routes.rs`
+   - `agent/src/openapi.rs`
+
+3. `phase4.1c` CLI 切换
+   - `user/src/api_client.rs`
+   - `user/src/commands/diagnose.rs`
+
+### 2.10 当前实施状态
+
+- `[~]` Milestone A：已开始（schema 文件已落地，等待 CI 验证）
+- `[~]` Milestone B：已开始（Agent Diagnose API 已落第一版 handler / route / OpenAPI）
+- `[~]` Milestone C：已开始（CLI 已改为调用 Diagnose API，等待 CI 验证）
+- `[~]` Milestone D：已在 schema 中预留 `chain / time_window_seconds` 与事件关联字段
+
+本轮实现目标：
+- `[x]` 先把实施清单记录到 docs
+- `[x]` 开始落 `Milestone A`
+- `[x]` 继续落 `Milestone B`
+- `[x]` 开始落 `Milestone C`
+
+### 2.11 提交策略
+
+Phase 4.1 不再建议一次性做成 2 个 commit；推荐按 `schema -> Agent API -> CLI` 三段推进，每段各自过 CI。
 
 ## 3. Phase 4.2：统一事件查询接口（observe API）
 

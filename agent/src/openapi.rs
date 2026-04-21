@@ -15,6 +15,7 @@ use utoipa::OpenApi;
         crate::api_handlers::config::update_config,
         crate::api_handlers::conntrack::list_conntrack,
         crate::api_handlers::conntrack::flush_conntrack,
+        crate::api_handlers::diagnose::diagnose,
         crate::api_handlers::drops::list_drops,
         crate::api_handlers::drops::flush_drops,
         crate::api_handlers::drops::list_kernel_drops,
@@ -92,6 +93,10 @@ use utoipa::OpenApi;
             aria_api::ConntrackFlushResponse,
             aria_api::ConfigResponse,
             aria_api::UpdateConfigRequest,
+            aria_api::EventEnvelope,
+            aria_api::DiagnoseRequest,
+            aria_api::DiagnoseEvidence,
+            aria_api::DiagnoseResponse,
             aria_api::QosEntry,
             aria_api::QosListResponse,
             aria_api::AddQosRequest,
@@ -164,6 +169,7 @@ use utoipa::OpenApi;
         (name = "chains", description = "Service chain management"),
         (name = "config", description = "Per-instance feature configuration"),
         (name = "conntrack", description = "Conntrack observability"),
+        (name = "diagnose", description = "Structured diagnose endpoints"),
         (name = "drops", description = "Drop observability endpoints"),
         (name = "groups", description = "CIDR group management"),
         (name = "mirror", description = "Traffic mirroring rules and statistics"),
@@ -202,11 +208,15 @@ mod tests {
         assert!(doc.pointer("/paths/~1api~1v1~1tcprt~1query").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1ssl").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1ssl~1config").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1{instance}~1diagnose").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1{instance}~1trace").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1stats~1kernel_drops").is_some());
 
         assert!(doc.pointer("/components/schemas/ApiError").is_some());
         assert!(doc.pointer("/components/schemas/HealthResponse").is_some());
+        assert!(doc.pointer("/components/schemas/DiagnoseRequest").is_some());
+        assert!(doc.pointer("/components/schemas/DiagnoseResponse").is_some());
+        assert!(doc.pointer("/components/schemas/EventEnvelope").is_some());
         assert!(doc.pointer("/components/schemas/BatchAddPoliciesRequest").is_some());
         assert!(doc.pointer("/components/schemas/AddQosRequest").is_some());
         assert!(doc.pointer("/components/schemas/AddMirrorRequest").is_some());

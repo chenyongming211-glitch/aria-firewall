@@ -321,6 +321,21 @@ impl ApiClient {
         self.parse_response(resp).await
     }
 
+    pub async fn diagnose_instance(
+        &self,
+        instance: &str,
+        req: &DiagnoseRequest,
+    ) -> Result<DiagnoseResponse, String> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/api/v1/{}/diagnose", instance)))
+            .json(req)
+            .send()
+            .await
+            .map_err(|e| self.connection_error(e))?;
+        self.parse_response(resp).await
+    }
+
     // ── SSL ──
 
     pub async fn list_ssl(&self, _instance: &str, top: usize) -> Result<SslListResponse, String> {
