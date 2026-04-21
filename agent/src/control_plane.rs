@@ -18,6 +18,7 @@ use aria_core::wal::{WalClient, WalEntry};
 mod group_ops;
 mod diagnose;
 mod mirror_ops;
+mod observe;
 mod observability;
 mod policy_ops;
 mod qos_ops;

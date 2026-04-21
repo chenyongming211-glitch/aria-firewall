@@ -51,6 +51,10 @@ pub fn build_router(control_plane: Arc<ControlPlane>) -> Router {
             get(api_handlers::list_ssl_errors).delete(api_handlers::flush_ssl_errors),
         )
         .route(
+            "/api/v1/observe/events",
+            get(api_handlers::list_observe_events),
+        )
+        .route(
             "/api/v1/stats/kernel_drops",
             get(api_handlers::list_kernel_drops).delete(api_handlers::flush_kernel_drops),
         )

@@ -20,6 +20,7 @@ use utoipa::OpenApi;
         crate::api_handlers::drops::flush_drops,
         crate::api_handlers::drops::list_kernel_drops,
         crate::api_handlers::drops::flush_kernel_drops,
+        crate::api_handlers::observe::list_observe_events,
         crate::api_handlers::groups::list_groups,
         crate::api_handlers::groups::add_group,
         crate::api_handlers::groups::delete_group,
@@ -97,6 +98,8 @@ use utoipa::OpenApi;
             aria_api::DiagnoseRequest,
             aria_api::DiagnoseEvidence,
             aria_api::DiagnoseResponse,
+            aria_api::ObserveQuery,
+            aria_api::ObserveResponse,
             aria_api::QosEntry,
             aria_api::QosListResponse,
             aria_api::AddQosRequest,
@@ -173,6 +176,7 @@ use utoipa::OpenApi;
         (name = "drops", description = "Drop observability endpoints"),
         (name = "groups", description = "CIDR group management"),
         (name = "mirror", description = "Traffic mirroring rules and statistics"),
+        (name = "observe", description = "Normalized observability event queries"),
         (name = "policies", description = "ACL policy management"),
         (name = "qos", description = "QoS rule management"),
         (name = "ssl", description = "SSL and HTTPS observability"),
@@ -209,6 +213,7 @@ mod tests {
         assert!(doc.pointer("/paths/~1api~1v1~1ssl").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1ssl~1config").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1{instance}~1diagnose").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1observe~1events").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1{instance}~1trace").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1stats~1kernel_drops").is_some());
 
@@ -217,6 +222,8 @@ mod tests {
         assert!(doc.pointer("/components/schemas/DiagnoseRequest").is_some());
         assert!(doc.pointer("/components/schemas/DiagnoseResponse").is_some());
         assert!(doc.pointer("/components/schemas/EventEnvelope").is_some());
+        assert!(doc.pointer("/components/schemas/ObserveQuery").is_some());
+        assert!(doc.pointer("/components/schemas/ObserveResponse").is_some());
         assert!(doc.pointer("/components/schemas/BatchAddPoliciesRequest").is_some());
         assert!(doc.pointer("/components/schemas/AddQosRequest").is_some());
         assert!(doc.pointer("/components/schemas/AddMirrorRequest").is_some());

@@ -8,6 +8,7 @@ pub(crate) mod groups;
 pub(crate) mod health;
 mod metrics;
 pub(crate) mod mirror;
+pub(crate) mod observe;
 pub(crate) mod policies;
 pub(crate) mod qos;
 pub(crate) mod ssl;
@@ -29,6 +30,7 @@ pub use self::metrics::metrics;
 pub use self::mirror::{
     add_mirror, delete_mirror, list_mirror, list_mirror_with_stats, stats_mirror,
 };
+pub use self::observe::list_observe_events;
 pub use self::policies::{
     add_policy, batch_add_policies, delete_policy, list_policies, list_policies_with_stats,
 };

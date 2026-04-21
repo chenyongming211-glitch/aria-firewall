@@ -23,6 +23,7 @@ pub mod service_chain;
 pub mod node_config;
 pub mod event;
 pub mod diagnose;
+pub mod observe;
 
 pub use metadata::*;
 pub use query_types::*;
@@ -43,6 +44,7 @@ pub use service_chain::*;
 pub use node_config::*;
 pub use event::*;
 pub use diagnose::*;
+pub use observe::*;
 
 // ── Platform-level Error & Health ──
 

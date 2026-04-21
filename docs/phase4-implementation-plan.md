@@ -275,9 +275,10 @@ Phase 4.1 不再建议一次性做成 2 个 commit；推荐按 `schema -> Agent 
 ### 3.1 目标
 
 - Agent 提供 `GET /api/v1/observe/events` 接口
-- 支持按 event_type / src_ip / dst_ip / dst_port / time_range 过滤
+- 第一版支持按 `event_type / src_ip / dst_ip / dst_port / limit` 过滤
 - 返回 `Vec<EventEnvelope>`
 - 把现有 tcprt / ssl / http / drops / flow_stats / lb_stats 统一转换为 EventEnvelope 格式
+- `time_range` 暂不在本轮实现，后续按需要补充
 
 ### 3.2 实现方式
 
@@ -310,13 +311,29 @@ pub struct ObserveQuery {
 | 步骤 | 文件 | 说明 |
 |------|------|------|
 | 1 | `api/src/platform/observe.rs` | ObserveQuery + ObserveResponse 类型 |
-| 2 | `agent/src/api_handlers/observe.rs` | observe handler，读各 map 转换为 EventEnvelope |
-| 3 | `agent/src/api_routes.rs` | 注册 GET observe 路由 |
-| 4 | `agent/src/openapi.rs` | OpenAPI 注册 |
+| 2 | `agent/src/control_plane/observe.rs` | 聚合 tcprt / flow / drop / lb / ssl / http / kernel_drop 并转换为 EventEnvelope |
+| 3 | `agent/src/api_handlers/observe.rs` | observe handler，调用 ControlPlane 聚合接口 |
+| 4 | `agent/src/api_routes.rs` | 注册 GET observe 路由 |
+| 5 | `agent/src/openapi.rs` | OpenAPI 注册 |
 
 ### 3.5 提交策略
 
 1 个 commit。
+
+### 3.6 当前实施状态
+
+- `[~]` `api/src/platform/observe.rs` 已落地，冻结第一版 `ObserveQuery / ObserveResponse`
+- `[~]` `agent/src/control_plane/observe.rs` 已落第一版聚合逻辑，当前覆盖：
+  - `tcprt`
+  - `flow`
+  - `drop`
+  - `kernel_drop`
+  - `lb`
+  - `ssl`
+  - `http`
+- `[~]` `agent/src/api_handlers/observe.rs`、`agent/src/api_routes.rs`、`agent/src/openapi.rs` 已接线，等待 CI 验证
+- `[ ]` CLI 侧暂未消费 observe API，本轮只交付 Agent API
+- `[ ]` `time_range` 过滤暂未实现，留到后续补充
 
 ## 4. Phase 4.3：Controller 侧 Diagnose 代理
 
