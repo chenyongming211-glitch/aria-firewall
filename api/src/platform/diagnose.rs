@@ -26,9 +26,9 @@ pub struct DiagnoseRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
     "evidence_type": "http",
-    "severity": "warning",
+    "severity": "critical",
     "title": "HTTP 5xx ratio elevated",
-    "summary": "HTTP 5xx ratio is 12.5% for the requested destination",
+    "summary": "HTTP 5xx ratio is 12.5% across 80 requests, above the unhealthy threshold of 10%",
     "metrics": {
         "requests": 80,
         "count_5xx": 10,
@@ -51,21 +51,22 @@ pub struct DiagnoseEvidence {
 #[schema(example = json!({
     "diagnose_id": "diag-20260421-0001",
     "verdict": "degraded",
-    "summary": "Observed elevated HTTP failures and degraded transport quality for 10.0.10.20:443",
+    "summary": "Observed degraded signals for 10.0.10.20:443: transport nqa=72.0 across 12 flows",
     "evidence": [
         {
             "evidence_type": "tcprt",
             "severity": "warning",
             "title": "Transport quality degraded",
-            "summary": "Average NQA score is below the healthy threshold",
+            "summary": "Average NQA score is 72.0 across 12 flows, below the healthy threshold of 80",
             "metrics": {
                 "instances": 1,
+                "flow_count": 12,
                 "avg_nqa_score": 72.0
             }
         }
     ],
     "candidate_causes": [
-        "NQA=72 (<80)"
+        "transport_nqa=72.0"
     ],
     "suggested_actions": [
         "Inspect TCP retransmissions and RTT trends for the destination"
