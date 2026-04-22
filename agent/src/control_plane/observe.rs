@@ -192,9 +192,9 @@ impl ControlPlane {
                         events.push(aria_api::EventEnvelope {
                             event_id: format!("drop-{}-{}", instance, idx),
                             event_type: "drop".to_string(),
-                            timestamp: "0".to_string(),
+                            timestamp: observe_timestamp_or_zero(entry.last_seen),
                             node_id: "local".to_string(),
-                            direction: aria_api::direction_to_string(entry.key.direction),
+                            direction: aria_api::direction_to_string(entry.direction),
                             verdict: "drop".to_string(),
                             hook: "tc".to_string(),
                             tenant_id: None,
@@ -208,7 +208,7 @@ impl ControlPlane {
                             dst_ip: None,
                             src_port: None,
                             dst_port: None,
-                            protocol: Some(aria_api::proto_to_string(entry.key.proto)),
+                            protocol: Some(aria_api::proto_to_string(entry.proto)),
                             payload: json!({
                                 "reason": aria_core::trace_ops::drop_reason_name(entry.reason),
                                 "src_group": find_name(entry.src_id),
@@ -216,7 +216,8 @@ impl ControlPlane {
                                 "dst_group": find_name(entry.dst_id),
                                 "dst_id": entry.dst_id,
                                 "packets": entry.packets,
-                                "bytes": entry.bytes
+                                "bytes": entry.bytes,
+                                "last_seen": entry.last_seen
                             }),
                         });
                     }
