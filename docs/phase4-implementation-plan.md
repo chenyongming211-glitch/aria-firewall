@@ -333,7 +333,7 @@ pub struct ObserveQuery {
   - `http`
 - `[x]` `agent/src/api_handlers/observe.rs`、`agent/src/api_routes.rs`、`agent/src/openapi.rs` 已接线并通过 CI
 - `[ ]` CLI 侧暂未消费 observe API，本轮只交付 Agent API
-- `[ ]` `time_range` 过滤暂未实现，留到后续补充
+- `[x]` `time_range` 过滤已实现，当前按“最近 N 秒”的 monotonic 时间窗口过滤；无时间戳的事件在设置 `time_range` 时会被排除
 
 ## 4. Phase 4.3：Controller 侧 Diagnose 代理
 

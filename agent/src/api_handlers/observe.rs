@@ -17,6 +17,7 @@ use super::common::{err_response, AppState};
         ("src_ip" = Option<String>, Query, description = "Filter by source IP"),
         ("dst_ip" = Option<String>, Query, description = "Filter by destination IP"),
         ("dst_port" = Option<u16>, Query, description = "Filter by destination port"),
+        ("time_range" = Option<u64>, Query, description = "Filter to events observed within the last N seconds"),
         ("limit" = Option<usize>, Query, description = "Maximum number of events to return")
     ),
     responses(

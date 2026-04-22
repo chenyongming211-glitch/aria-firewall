@@ -1,8 +1,10 @@
 use super::*;
 use serde_json::json;
+use std::fs;
 
 const OBSERVE_DEFAULT_LIMIT: usize = 200;
 const OBSERVE_MAX_LIMIT: usize = 5000;
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 fn observe_timestamp_or_zero(timestamp: u64) -> String {
     if timestamp == 0 {
@@ -52,6 +54,75 @@ fn event_timestamp_key(event: &aria_api::EventEnvelope) -> u64 {
     event.timestamp.parse::<u64>().unwrap_or(0)
 }
 
+fn parse_uptime_ns(value: &str) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("empty uptime value".to_string());
+    }
+
+    let (seconds_raw, nanos_raw) = match trimmed.split_once('.') {
+        Some((seconds, fraction)) => (seconds, fraction),
+        None => (trimmed, ""),
+    };
+
+    let seconds = seconds_raw
+        .parse::<u64>()
+        .map_err(|error| format!("invalid uptime seconds '{seconds_raw}': {error}"))?;
+    let fraction = nanos_raw
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .take(9)
+        .collect::<String>();
+    let padded_fraction = format!("{fraction:0<9}");
+    let nanos = if padded_fraction.is_empty() {
+        0
+    } else {
+        padded_fraction
+            .parse::<u64>()
+            .map_err(|error| format!("invalid uptime fraction '{nanos_raw}': {error}"))?
+    };
+
+    Ok(seconds.saturating_mul(NANOS_PER_SECOND).saturating_add(nanos))
+}
+
+fn monotonic_now_ns() -> Result<u64, ControlPlaneError> {
+    let raw = fs::read_to_string("/proc/uptime")
+        .map_err(|error| ControlPlaneError::KernelError(format!(
+            "failed to read /proc/uptime for observe time_range: {error}"
+        )))?;
+    let uptime = raw
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| {
+            ControlPlaneError::KernelError(
+                "failed to parse /proc/uptime for observe time_range".to_string(),
+            )
+        })?;
+
+    parse_uptime_ns(uptime).map_err(|error| {
+        ControlPlaneError::KernelError(format!(
+            "failed to parse /proc/uptime value '{uptime}' for observe time_range: {error}"
+        ))
+    })
+}
+
+fn min_observe_timestamp_ns(
+    query: &aria_api::ObserveQuery,
+) -> Result<Option<u64>, ControlPlaneError> {
+    let Some(time_range) = query.time_range else {
+        return Ok(None);
+    };
+    if time_range == 0 {
+        return Err(ControlPlaneError::ValidationError(
+            "time_range must be greater than 0 seconds".to_string(),
+        ));
+    }
+
+    let now_ns = monotonic_now_ns()?;
+    let window_ns = time_range.saturating_mul(NANOS_PER_SECOND);
+    Ok(Some(now_ns.saturating_sub(window_ns)))
+}
+
 impl ControlPlane {
     pub async fn observe_events(
         &self,
@@ -61,6 +132,7 @@ impl ControlPlane {
             .limit
             .unwrap_or(OBSERVE_DEFAULT_LIMIT)
             .min(OBSERVE_MAX_LIMIT);
+        let min_timestamp_ns = min_observe_timestamp_ns(query)?;
 
         let mut events = Vec::new();
         let instances = self.list_instances().await;
@@ -378,7 +450,15 @@ impl ControlPlane {
             }
         }
 
-        events.retain(|event| matches_observe_query(event, query));
+        events.retain(|event| {
+            matches_observe_query(event, query)
+                && min_timestamp_ns
+                    .map(|min_timestamp| {
+                        let timestamp = event_timestamp_key(event);
+                        timestamp > 0 && timestamp >= min_timestamp
+                    })
+                    .unwrap_or(true)
+        });
         events.sort_by(|a, b| event_timestamp_key(b).cmp(&event_timestamp_key(a)));
         events.truncate(limit);
 

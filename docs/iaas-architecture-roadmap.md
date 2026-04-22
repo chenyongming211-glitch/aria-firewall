@@ -616,7 +616,7 @@ Southbound API 面向：
 
 ### 14.1 第一优先级
 
-- 补齐 Phase 4.2：`/api/v1/observe/events` 的 `time_range`、更稳定排序和 CLI 消费
+- 补齐 Phase 4.2：`/api/v1/observe/events` 的更稳定排序和 CLI 消费
 - 打磨 Phase 4.3：在单节点 proxy 之上补自动节点选择与后续多节点聚合预留
 - 收口 Phase 4 文档与 OpenAPI 示例，确保平台侧入口描述与现状一致
 

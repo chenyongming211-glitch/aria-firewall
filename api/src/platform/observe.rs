@@ -10,6 +10,7 @@ use utoipa::ToSchema;
     "src_ip": "10.0.1.10",
     "dst_ip": "10.0.10.20",
     "dst_port": 443,
+    "time_range": 300,
     "limit": 100
 }))]
 pub struct ObserveQuery {
@@ -29,6 +30,10 @@ pub struct ObserveQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = 443)]
     pub dst_port: Option<u16>,
+    /// Optional relative lookback window in seconds. Events without a timestamp are excluded when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 300)]
+    pub time_range: Option<u64>,
     /// Maximum number of events to return after filtering and sorting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = 100)]
