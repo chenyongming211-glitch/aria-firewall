@@ -25,6 +25,32 @@ pub struct DiagnoseRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[schema(example = json!({
+    "node_id": "node-0001",
+    "instance": "tap-a",
+    "dst_ip": "10.0.10.20",
+    "dst_port": 443,
+    "chain": "svc-web-chain",
+    "time_window_seconds": 300
+}))]
+pub struct PlatformDiagnoseRequest {
+    #[schema(example = "node-0001")]
+    pub node_id: String,
+    #[schema(example = "tap-a")]
+    pub instance: String,
+    #[schema(example = "10.0.10.20")]
+    pub dst_ip: String,
+    #[schema(example = 443)]
+    pub dst_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "svc-web-chain")]
+    pub chain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = 300)]
+    pub time_window_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
     "evidence_type": "http",
     "severity": "critical",
     "title": "HTTP 5xx ratio elevated",

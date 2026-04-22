@@ -9,6 +9,7 @@ authors.workspace = true
 async-trait = "0.1"
 aria-api.workspace = true
 aria-logging.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

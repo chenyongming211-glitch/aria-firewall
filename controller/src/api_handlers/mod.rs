@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub(crate) mod backend_set;
+pub(crate) mod diagnose;
 pub(crate) mod health;
 pub(crate) mod health_check;
 pub(crate) mod helpers;
@@ -35,6 +36,7 @@ pub use self::{
         create_backend_set, delete_backend_set, get_backend_set, list_backend_sets,
         update_backend_set,
     },
+    diagnose::diagnose,
     health::health,
     health_check::{
         create_health_check, delete_health_check, get_health_check, list_health_checks,
@@ -102,6 +104,7 @@ pub(crate) enum ControllerError {
         resource: &'static str,
         id: String,
     },
+    UpstreamUnavailable(String),
 }
 
 impl From<StoreError> for ControllerError {
@@ -199,6 +202,12 @@ impl IntoResponse for ControllerError {
                 "resource_not_found".to_string(),
                 format!("{resource} '{id}' was not found"),
                 Some(error_details(resource, &id)),
+            ),
+            Self::UpstreamUnavailable(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "upstream_unavailable".to_string(),
+                message,
+                None,
             ),
         };
 

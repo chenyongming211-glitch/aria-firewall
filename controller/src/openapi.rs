@@ -4,6 +4,7 @@ use utoipa::OpenApi;
 #[openapi(
     paths(
         crate::api_handlers::health::health,
+        crate::api_handlers::diagnose::diagnose,
         crate::api_handlers::tenant::list_tenants,
         crate::api_handlers::tenant::create_tenant,
         crate::api_handlers::tenant::get_tenant,
@@ -89,6 +90,8 @@ use utoipa::OpenApi;
         schemas(
             aria_api::PlatformApiError,
             aria_api::ControllerHealthResponse,
+            aria_api::PlatformDiagnoseRequest,
+            aria_api::DiagnoseResponse,
             aria_api::ResourceMetadata,
             aria_api::ResourceCreateMetadata,
             aria_api::ResourceUpdateMetadata,
@@ -226,6 +229,7 @@ use utoipa::OpenApi;
     ),
     tags(
         (name = "platform", description = "Controller health and platform-level status"),
+        (name = "diagnose", description = "Structured diagnose entrypoints"),
         (name = "tenants", description = "Tenant resources"),
         (name = "nodes", description = "Node registrations and status"),
         (name = "networks", description = "Logical network resources"),
@@ -256,6 +260,7 @@ mod tests {
         let doc = serde_json::to_value(ApiDoc::openapi()).expect("openapi should serialize");
 
         assert!(doc.pointer("/paths/~1api~1v1~1health").is_some());
+        assert!(doc.pointer("/paths/~1api~1v1~1diagnose").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1tenants").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1nodes").is_some());
         assert!(doc.pointer("/paths/~1api~1v1~1networks").is_some());
@@ -281,6 +286,10 @@ mod tests {
         assert!(doc
             .pointer("/components/schemas/PlatformApiError")
             .is_some());
+        assert!(doc
+            .pointer("/components/schemas/PlatformDiagnoseRequest")
+            .is_some());
+        assert!(doc.pointer("/components/schemas/DiagnoseResponse").is_some());
         assert!(doc.pointer("/components/schemas/TenantResource").is_some());
         assert!(doc.pointer("/components/schemas/NodeResource").is_some());
         assert!(doc
@@ -357,6 +366,11 @@ mod tests {
             .pointer("/components/schemas/NodeHealthReport")
             .is_some());
 
+        assert_eq!(
+            doc.pointer("/paths/~1api~1v1~1diagnose/post/operationId")
+                .and_then(|value| value.as_str()),
+            Some("diagnosePlatform")
+        );
         assert_eq!(
             doc.pointer("/paths/~1api~1v1~1tenants/get/operationId")
                 .and_then(|value| value.as_str()),

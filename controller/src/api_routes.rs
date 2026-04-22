@@ -12,6 +12,7 @@ pub fn build_router(store: SharedStore) -> Router {
     Router::new()
         .merge(SwaggerUi::new("/docs").url("/openapi.json", crate::openapi::ApiDoc::openapi()))
         .route("/api/v1/health", get(api_handlers::health))
+        .route("/api/v1/diagnose", post(api_handlers::diagnose))
         .route(
             "/api/v1/tenants",
             get(api_handlers::list_tenants).post(api_handlers::create_tenant),

@@ -255,9 +255,9 @@ Phase 4.1 不需要重写数据源，当前仓库里已经有可复用入口：
 
 ### 2.10 当前实施状态
 
-- `[~]` Milestone A：已开始（schema 文件已落地，等待 CI 验证）
-- `[~]` Milestone B：已开始（Agent Diagnose API 已落第一版 handler / route / OpenAPI）
-- `[~]` Milestone C：已开始（CLI 已改为调用 Diagnose API，等待 CI 验证）
+- `[x]` Milestone A：已完成（schema 文件已落地并通过 CI）
+- `[x]` Milestone B：已完成（Agent Diagnose API 已落地并通过 CI）
+- `[x]` Milestone C：已完成（CLI 已改为调用 Diagnose API 并通过 CI）
 - `[~]` Milestone D：已在 schema 中预留 `chain / time_window_seconds` 与事件关联字段
 
 本轮实现目标：
@@ -322,8 +322,8 @@ pub struct ObserveQuery {
 
 ### 3.6 当前实施状态
 
-- `[~]` `api/src/platform/observe.rs` 已落地，冻结第一版 `ObserveQuery / ObserveResponse`
-- `[~]` `agent/src/control_plane/observe.rs` 已落第一版聚合逻辑，当前覆盖：
+- `[x]` `api/src/platform/observe.rs` 已落地，冻结第一版 `ObserveQuery / ObserveResponse`
+- `[x]` `agent/src/control_plane/observe.rs` 已落第一版聚合逻辑，当前覆盖：
   - `tcprt`
   - `flow`
   - `drop`
@@ -331,7 +331,7 @@ pub struct ObserveQuery {
   - `lb`
   - `ssl`
   - `http`
-- `[~]` `agent/src/api_handlers/observe.rs`、`agent/src/api_routes.rs`、`agent/src/openapi.rs` 已接线，等待 CI 验证
+- `[x]` `agent/src/api_handlers/observe.rs`、`agent/src/api_routes.rs`、`agent/src/openapi.rs` 已接线并通过 CI
 - `[ ]` CLI 侧暂未消费 observe API，本轮只交付 Agent API
 - `[ ]` `time_range` 过滤暂未实现，留到后续补充
 
@@ -346,20 +346,40 @@ pub struct ObserveQuery {
 
 ### 4.2 实现方式
 
+第一版 Controller diagnose proxy 先做显式单节点代理，不提前实现 Phase 5 的跨节点聚合逻辑。
+
 Controller 通过 southbound 已知每个 node 的地址。收到 diagnose 请求后：
-1. 根据目标 IP 确定相关节点（或广播所有节点）
-2. 向目标节点的 Agent API 发起 `POST /api/v1/{instance}/diagnose`
-3. 聚合结果返回
+1. 请求体显式提供 `node_id + instance + dst_ip + dst_port`
+2. Controller 优先从 southbound registration 的 `management` 地址取 Agent 管理地址
+3. 如果 registration 里没有管理地址，则回退到 `Node.spec.mgmt_address`
+4. Controller 向目标节点的 Agent API 发起 `POST /api/v1/{instance}/diagnose`
+5. 单节点场景下直接透传 `DiagnoseResponse`
+
+地址约定：
+- 如果地址没有 schema，则默认补 `http://`
+- 如果地址没有端口，则默认使用 Agent API 端口 `8080`
+- 当前不做“根据目标 IP 自动推断 node”或“广播所有节点聚合”
 
 ### 4.3 实施步骤
 
 | 步骤 | 文件 | 说明 |
 |------|------|------|
 | 1 | `controller/src/api_handlers/diagnose.rs` | Controller diagnose 代理 handler |
-| 2 | `controller/src/api_routes.rs` | 注册路由 |
-| 3 | `controller/src/openapi.rs` | OpenAPI 注册 |
+| 2 | `controller/src/api_handlers/mod.rs` | 错误映射与 handler 导出 |
+| 3 | `controller/src/api_routes.rs` | 注册 `POST /api/v1/diagnose` |
+| 4 | `controller/src/openapi.rs` | OpenAPI 注册 |
+| 5 | `controller/Cargo.toml` | 引入 `reqwest` 作为上游代理客户端 |
 
-### 4.4 提交策略
+### 4.4 当前落地状态
+
+- `[x]` 共享 schema 已提供 `PlatformDiagnoseRequest`
+- `[x]` Controller 已提供 `POST /api/v1/diagnose`
+- `[x]` Controller 会代理到 Agent `POST /api/v1/{instance}/diagnose`
+- `[x]` OpenAPI 已注册 controller diagnose path
+- `[ ]` 自动按 `dst_ip` 推断节点
+- `[ ]` 多节点 diagnose 聚合
+
+### 4.5 提交策略
 
 1 个 commit。
 
