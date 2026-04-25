@@ -334,6 +334,7 @@ pub struct ObserveQuery {
 - `[x]` `agent/src/api_handlers/observe.rs`、`agent/src/api_routes.rs`、`agent/src/openapi.rs` 已接线并通过 CI
 - `[ ]` CLI 侧暂未消费 observe API，本轮只交付 Agent API
 - `[x]` `time_range` 过滤已实现，当前按“最近 N 秒”的 monotonic 时间窗口过滤；无时间戳的事件在设置 `time_range` 时会被排除
+- `[x]` 事件排序已稳定：当前按 `timestamp desc -> event_type -> instance_id -> service_id -> event_id` 排序，避免同时间戳结果抖动
 
 ## 4. Phase 4.3：Controller 侧 Diagnose 代理
 

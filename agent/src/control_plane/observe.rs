@@ -54,6 +54,28 @@ fn event_timestamp_key(event: &aria_api::EventEnvelope) -> u64 {
     event.timestamp.parse::<u64>().unwrap_or(0)
 }
 
+fn compare_observe_events(
+    left: &aria_api::EventEnvelope,
+    right: &aria_api::EventEnvelope,
+) -> std::cmp::Ordering {
+    event_timestamp_key(right)
+        .cmp(&event_timestamp_key(left))
+        .then_with(|| left.event_type.cmp(&right.event_type))
+        .then_with(|| {
+            left.instance_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.instance_id.as_deref().unwrap_or(""))
+        })
+        .then_with(|| {
+            left.service_id
+                .as_deref()
+                .unwrap_or("")
+                .cmp(right.service_id.as_deref().unwrap_or(""))
+        })
+        .then_with(|| left.event_id.cmp(&right.event_id))
+}
+
 fn parse_uptime_ns(value: &str) -> Result<u64, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -459,7 +481,7 @@ impl ControlPlane {
                     })
                     .unwrap_or(true)
         });
-        events.sort_by(|a, b| event_timestamp_key(b).cmp(&event_timestamp_key(a)));
+        events.sort_by(compare_observe_events);
         events.truncate(limit);
 
         Ok(aria_api::ObserveResponse { events })
