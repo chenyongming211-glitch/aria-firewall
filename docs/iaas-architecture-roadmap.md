@@ -548,7 +548,7 @@ Southbound API 面向：
 - 产出：服务端 Diagnose API、统一事件 schema、实时流查询接口
 - 参考： [RFC-002 统一事件模型 v1](rfcs/rfc-002-event-model.md) 和 [RFC-006 Diagnose 服务端化与 Relay v1](rfcs/rfc-006-diagnose-relay.md)
 - 验收：任意连接可在平台侧得到统一诊断结果
-- 当前状态（2026-04-22）：`EventEnvelope`、`DiagnoseRequest/Response`、Agent `POST /api/v1/{instance}/diagnose`、CLI 侧服务端 diagnose 调用、Agent `GET /api/v1/observe/events` 和 controller `POST /api/v1/diagnose` 第一版均已落地；其中 controller diagnose proxy 当前采用显式 `node_id + instance` 的单节点代理方式，自动节点选择与多节点聚合仍留待后续 Phase 5
+- 当前状态（2026-04-25）：`EventEnvelope`、`DiagnoseRequest/Response`、Agent `POST /api/v1/{instance}/diagnose`、CLI 侧服务端 diagnose 调用、Agent `GET /api/v1/observe/events` 和 controller `POST /api/v1/diagnose` 第一版均已落地；`observe/events` 当前已支持 `event_type / instance_id / service_id / src_ip / dst_ip / dst_port / protocol / time_range / limit` 过滤，以及稳定排序；其中 controller diagnose proxy 当前采用显式 `node_id + instance` 的单节点代理方式，自动节点选择与多节点聚合仍留待后续 Phase 5
 
 ### Phase 5：观测聚合层
 
@@ -616,7 +616,7 @@ Southbound API 面向：
 
 ### 14.1 第一优先级
 
-- 补齐 Phase 4.2：`/api/v1/observe/events` 的 CLI 消费与更丰富过滤条件
+- 补齐 Phase 4.2：`/api/v1/observe/events` 的 CLI 消费
 - 打磨 Phase 4.3：在单节点 proxy 之上补自动节点选择与后续多节点聚合预留
 - 收口 Phase 4 文档与 OpenAPI 示例，确保平台侧入口描述与现状一致
 

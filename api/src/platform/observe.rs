@@ -7,9 +7,12 @@ use utoipa::ToSchema;
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ToSchema)]
 #[schema(example = json!({
     "event_type": "http",
+    "instance_id": "tap-a",
+    "service_id": "svc-web",
     "src_ip": "10.0.1.10",
     "dst_ip": "10.0.10.20",
     "dst_port": 443,
+    "protocol": "tcp",
     "time_range": 300,
     "limit": 100
 }))]
@@ -18,6 +21,14 @@ pub struct ObserveQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "http")]
     pub event_type: Option<String>,
+    /// Optional instance ID filter for events tied to a managed tap instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "tap-a")]
+    pub instance_id: Option<String>,
+    /// Optional service ID filter for service/LB related events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "svc-web")]
+    pub service_id: Option<String>,
     /// Optional source IP filter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = "10.0.1.10")]
@@ -30,6 +41,10 @@ pub struct ObserveQuery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = 443)]
     pub dst_port: Option<u16>,
+    /// Optional L4 protocol filter such as `tcp`, `udp`, or `icmp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(example = "tcp")]
+    pub protocol: Option<String>,
     /// Optional relative lookback window in seconds. Events without a timestamp are excluded when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(example = 300)]

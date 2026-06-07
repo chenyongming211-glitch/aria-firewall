@@ -32,6 +32,16 @@ fn matches_observe_query(
             return false;
         }
     }
+    if let Some(instance_id) = query.instance_id.as_deref() {
+        if event.instance_id.as_deref() != Some(instance_id) {
+            return false;
+        }
+    }
+    if let Some(service_id) = query.service_id.as_deref() {
+        if event.service_id.as_deref() != Some(service_id) {
+            return false;
+        }
+    }
     if let Some(src_ip) = query.src_ip.as_deref() {
         if event.src_ip.as_deref() != Some(src_ip) {
             return false;
@@ -44,6 +54,11 @@ fn matches_observe_query(
     }
     if let Some(dst_port) = query.dst_port {
         if event.dst_port != Some(dst_port) {
+            return false;
+        }
+    }
+    if let Some(protocol) = query.protocol.as_deref() {
+        if event.protocol.as_deref() != Some(protocol) {
             return false;
         }
     }
@@ -485,5 +500,83 @@ impl ControlPlane {
         events.truncate(limit);
 
         Ok(aria_api::ObserveResponse { events })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_event() -> aria_api::EventEnvelope {
+        aria_api::EventEnvelope {
+            event_id: "evt-1".to_string(),
+            event_type: "lb".to_string(),
+            timestamp: "42".to_string(),
+            node_id: "local".to_string(),
+            direction: "unknown".to_string(),
+            verdict: "lb".to_string(),
+            hook: "tc".to_string(),
+            tenant_id: None,
+            network_id: None,
+            port_id: None,
+            instance_id: Some("tap-a".to_string()),
+            flow_id: None,
+            service_id: Some("svc-web".to_string()),
+            trace_id: None,
+            src_ip: Some("10.0.1.10".to_string()),
+            dst_ip: Some("10.0.10.20".to_string()),
+            src_port: Some(12345),
+            dst_port: Some(443),
+            protocol: Some("tcp".to_string()),
+            payload: json!({}),
+        }
+    }
+
+    #[test]
+    fn matches_observe_query_filters_instance_id() {
+        let event = sample_event();
+        let query = aria_api::ObserveQuery {
+            instance_id: Some("tap-a".to_string()),
+            ..Default::default()
+        };
+        assert!(matches_observe_query(&event, &query));
+
+        let query = aria_api::ObserveQuery {
+            instance_id: Some("tap-b".to_string()),
+            ..Default::default()
+        };
+        assert!(!matches_observe_query(&event, &query));
+    }
+
+    #[test]
+    fn matches_observe_query_filters_service_id() {
+        let event = sample_event();
+        let query = aria_api::ObserveQuery {
+            service_id: Some("svc-web".to_string()),
+            ..Default::default()
+        };
+        assert!(matches_observe_query(&event, &query));
+
+        let query = aria_api::ObserveQuery {
+            service_id: Some("svc-db".to_string()),
+            ..Default::default()
+        };
+        assert!(!matches_observe_query(&event, &query));
+    }
+
+    #[test]
+    fn matches_observe_query_filters_protocol() {
+        let event = sample_event();
+        let query = aria_api::ObserveQuery {
+            protocol: Some("tcp".to_string()),
+            ..Default::default()
+        };
+        assert!(matches_observe_query(&event, &query));
+
+        let query = aria_api::ObserveQuery {
+            protocol: Some("udp".to_string()),
+            ..Default::default()
+        };
+        assert!(!matches_observe_query(&event, &query));
     }
 }

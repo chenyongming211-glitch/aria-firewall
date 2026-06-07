@@ -14,9 +14,12 @@ use super::common::{err_response, AppState};
     operation_id = "listObserveEvents",
     params(
         ("event_type" = Option<String>, Query, description = "Filter by event type"),
+        ("instance_id" = Option<String>, Query, description = "Filter by managed tap instance ID"),
+        ("service_id" = Option<String>, Query, description = "Filter by service ID"),
         ("src_ip" = Option<String>, Query, description = "Filter by source IP"),
         ("dst_ip" = Option<String>, Query, description = "Filter by destination IP"),
         ("dst_port" = Option<u16>, Query, description = "Filter by destination port"),
+        ("protocol" = Option<String>, Query, description = "Filter by L4 protocol such as tcp or udp"),
         ("time_range" = Option<u64>, Query, description = "Filter to events observed within the last N seconds"),
         ("limit" = Option<usize>, Query, description = "Maximum number of events to return")
     ),

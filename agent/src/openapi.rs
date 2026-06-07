@@ -251,6 +251,21 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("updateGlobalSslConfig")
         );
+        assert_eq!(
+            doc.pointer("/components/schemas/ObserveQuery/properties/instance_id/description")
+                .and_then(|value| value.as_str()),
+            Some("Optional instance ID filter for events tied to a managed tap instance.")
+        );
+        assert_eq!(
+            doc.pointer("/components/schemas/ObserveQuery/properties/service_id/description")
+                .and_then(|value| value.as_str()),
+            Some("Optional service ID filter for service/LB related events.")
+        );
+        assert_eq!(
+            doc.pointer("/components/schemas/ObserveQuery/properties/protocol/description")
+                .and_then(|value| value.as_str()),
+            Some("Optional L4 protocol filter such as `tcp`, `udp`, or `icmp`.")
+        );
 
         assert_eq!(
             doc.pointer("/components/schemas/SystemStartRequest/example/iface")

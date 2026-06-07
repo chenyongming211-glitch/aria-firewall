@@ -275,10 +275,10 @@ Phase 4.1 不再建议一次性做成 2 个 commit；推荐按 `schema -> Agent 
 ### 3.1 目标
 
 - Agent 提供 `GET /api/v1/observe/events` 接口
-- 第一版支持按 `event_type / src_ip / dst_ip / dst_port / limit` 过滤
+- 第一版支持按 `event_type / instance_id / service_id / src_ip / dst_ip / dst_port / protocol / time_range / limit` 过滤
 - 返回 `Vec<EventEnvelope>`
 - 把现有 tcprt / ssl / http / drops / flow_stats / lb_stats 统一转换为 EventEnvelope 格式
-- `time_range` 暂不在本轮实现，后续按需要补充
+- `time_range` 按“最近 N 秒”的 monotonic 时间窗口过滤；无时间戳的事件在设置 `time_range` 时会被排除
 
 ### 3.2 实现方式
 
@@ -299,9 +299,13 @@ SVC_LB_STATS read                  → Vec<EventEnvelope> (event_type = "lb")
 ```rust
 pub struct ObserveQuery {
     pub event_type: Option<String>,
+    pub instance_id: Option<String>,
+    pub service_id: Option<String>,
     pub src_ip: Option<String>,
     pub dst_ip: Option<String>,
     pub dst_port: Option<u16>,
+    pub protocol: Option<String>,
+    pub time_range: Option<u64>,
     pub limit: Option<usize>,
 }
 ```
@@ -335,6 +339,7 @@ pub struct ObserveQuery {
 - `[ ]` CLI 侧暂未消费 observe API，本轮只交付 Agent API
 - `[x]` `time_range` 过滤已实现，当前按“最近 N 秒”的 monotonic 时间窗口过滤；无时间戳的事件在设置 `time_range` 时会被排除
 - `[x]` 事件排序已稳定：当前按 `timestamp desc -> event_type -> instance_id -> service_id -> event_id` 排序，避免同时间戳结果抖动
+- `[x]` richer filters 已补齐第一批：当前额外支持 `instance_id / service_id / protocol` 过滤，直接复用 `EventEnvelope` 顶层字段，便于后续 CLI observe 子命令消费
 
 ## 4. Phase 4.3：Controller 侧 Diagnose 代理
 
